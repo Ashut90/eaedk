@@ -1,0 +1,27 @@
+soc:
+  name: STM32H743
+  vendor: STMicroelectronics
+  arch: arm-cortex-m7
+  notes: "Cortex-M7 @ 480 MHz with double-precision FPU"
+board:
+  name: STM32H743
+  flash_base: 0x08000000
+  flash_bytes: 2097152        # 2 MiB dual-bank Flash
+  ram_base: 0x20000000        # DTCM base; total SRAM ~1 MiB across domains
+  ram_bytes: 1048576          # ~1 MiB on-chip SRAM (AXI + D2 + D3 + TCM)
+  primary_storage: internal_flash
+  boot_modes: [flash, system_memory, sram]
+  confidence: HIGH
+source:
+  type: seed
+  title: "STM32H742/743 datasheet (DS12110) + RM0433"
+  uri: "https://www.st.com/resource/en/datasheet/stm32h743vi.pdf"
+  section: "Memory map / embedded Flash and SRAM"
+  snippet: "2 MB Flash at 0x0800_0000; ~1 MB SRAM across D1/D2/D3 domains incl. TCM."
+capabilities:
+  - capability: uart
+  - capability: usb
+  - capability: ethernet
+  - capability: spi
+  - capability: i2c
+  - capability: sdmmc

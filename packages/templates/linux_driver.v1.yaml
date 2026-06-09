@@ -1,0 +1,55 @@
+key: linux_driver
+name: Device Driver (Linux)
+version: 1
+goal_type: driver
+items:
+  - key: peripheral_confirmed
+    text: "Peripheral confirmed in hardware schematic or datasheet"
+    category: hardware
+    required_inputs: []
+    validation_rules: []
+  - key: dtb_node
+    text: "DTB node written with correct compatible string"
+    category: dtb
+    required_inputs: [dtb_compatible]
+    validation_rules: [DRIVER_COMPATIBLE_STRING]
+  - key: pin_mux
+    text: "Pin mux assignments free of conflicts (no pin double-claimed)"
+    category: hardware
+    required_inputs: [pin_assignments]
+    validation_rules: [PINMUX_CONFLICT]
+  - key: driver_type
+    text: "Driver type identified (char / platform / I2C / SPI / misc)"
+    category: design
+    required_inputs: []
+    validation_rules: []
+  - key: register_map
+    text: "Register map extracted from datasheet"
+    category: hardware
+    required_inputs: [register_facts]
+    validation_rules: [REGISTER_MAP_PRESENT]
+  - key: interrupt_handling
+    text: "Interrupt handling strategy defined"
+    category: design
+    required_inputs: []
+    validation_rules: []
+  - key: dma_evaluated
+    text: "DMA usage evaluated"
+    category: design
+    required_inputs: []
+    validation_rules: []
+  - key: power_mgmt_hooks
+    text: "Power management hooks required? (suspend/resume)"
+    category: design
+    required_inputs: []
+    validation_rules: []
+  - key: driver_test_strategy
+    text: "Driver test strategy defined"
+    category: test
+    required_inputs: []
+    validation_rules: []
+  - key: upstream_driver_check
+    text: "Known kernel driver exists upstream? (check kernel.org)"
+    category: research
+    required_inputs: []
+    validation_rules: []

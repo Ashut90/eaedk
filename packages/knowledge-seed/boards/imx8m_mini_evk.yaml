@@ -1,0 +1,28 @@
+soc:
+  name: i.MX8M-Mini
+  vendor: NXP
+  arch: arm-cortex-a53
+  notes: "Quad Cortex-A53 @ 1.8 GHz + Cortex-M4 coprocessor"
+board:
+  name: i.MX8M-Mini-EVK
+  flash_base: null
+  flash_bytes: null
+  ram_base: 0x40000000
+  ram_bytes: 2147483648       # 2 GB LPDDR4
+  ddr_type: LPDDR4
+  ddr_bytes: 2147483648
+  primary_storage: emmc
+  boot_modes: [emmc, sd, usb_sdp, spi_nor]
+  confidence: HIGH
+source:
+  type: seed
+  title: "i.MX 8M Mini Applications Processor Reference Manual (IMX8MMRM)"
+  uri: "https://www.nxp.com/webapp/Download?colCode=IMX8MMRM"
+  section: "System memory map"
+  snippet: "DRAM region begins at 0x4000_0000; ROM boot from eMMC/SD/USB-SDP/SPI-NOR."
+capabilities:
+  - capability: ethernet
+  - capability: usb
+  - capability: uart
+  - capability: emmc
+  - capability: pcie

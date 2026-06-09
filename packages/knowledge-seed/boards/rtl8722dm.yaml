@@ -1,0 +1,36 @@
+# NOTE: architecture, boot modes, and capabilities are seeded with confidence; the exact
+# on-chip memory map (flash/SRAM base + size) is left NULL on purpose. Realtek RTL8722DM
+# (Ameba-D) memory sizes vary by module and the precise XIP base is not verified here.
+# Per EAEDK's truth hierarchy, a NULL is preferable to a guessed value — rules needing these
+# will correctly report UNKNOWN. Fill from the module datasheet to raise confidence to HIGH.
+soc:
+  name: RTL8722DM
+  vendor: Realtek
+  arch: arm-cortex-m33
+  notes: "Ameba-D dual-core: KM4 Cortex-M33 (HP) + KM0 Cortex-M23 (LP); Wi-Fi + BLE 5.0"
+board:
+  name: RTL8722DM
+  flash_base: null            # external/embedded flash; XIP base not verified here
+  flash_bytes: null           # varies by module (commonly 2-4 MiB) — verify per datasheet
+  ram_base: null
+  ram_bytes: null             # on-chip SRAM size not verified here
+  ddr_type: null
+  ddr_bytes: null
+  primary_storage: nor
+  boot_modes: [spi_flash, uart_download]
+  confidence: MEDIUM
+source:
+  type: seed
+  title: "Realtek RTL8722DM (Ameba-D) — public product brief"
+  uri: "https://www.amebaiot.com/en/amebad/"
+  section: "Overview (architecture / radios)"
+  snippet: "Dual-core KM4 (Cortex-M33) + KM0 (Cortex-M23); 2.4/5 GHz Wi-Fi and BLE 5.0. On-chip memory sizes module-dependent."
+capabilities:
+  - capability: wifi
+    details_json: '{"bands": ["2.4GHz", "5GHz"]}'
+  - capability: bluetooth
+    details_json: '{"version": "BLE 5.0"}'
+  - capability: uart
+  - capability: spi
+  - capability: i2c
+  - capability: usb

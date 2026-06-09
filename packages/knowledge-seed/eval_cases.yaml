@@ -1,0 +1,176 @@
+# Golden eval cases (spec §5). Deterministic; no LLM. Each runs `inputs` through the
+# engines and asserts the (subset) `expected`. Supported expected keys:
+#   feasibility, validations{key:status}, risks_contains[], risks_absent[], unknowns_contains[]
+
+- name: stm32f411_bootloader_fits
+  goal_type: bootloader
+  inputs:
+    board: "Nucleo-F411RE"
+    estimated_image_size: 32768
+    vector_table_addr: 0x08000000
+    bl_region: {base: 0x08000000, size: 0x4000}
+    app_region: {base: 0x08004000, size: 0x7C000}
+    stack_size: 8192
+    heap_size: 16384
+    static_size: 16384
+  expected:
+    feasibility: feasible
+    validations:
+      FLASH_CAPACITY: PASS
+      VECTOR_TABLE_PLACEMENT: PASS
+      BOOTLOADER_APP_NO_OVERLAP: PASS
+      RAM_BUDGET: PASS
+    risks_absent: [FLASH_TIGHT]
+
+- name: stm32f411_image_overflow
+  goal_type: bootloader
+  inputs:
+    board: "Nucleo-F411RE"
+    estimated_image_size: 600000
+    vector_table_addr: 0x08000000
+  expected:
+    feasibility: not_feasible
+    validations:
+      FLASH_CAPACITY: FAIL
+    risks_contains: [FLASH_TIGHT]
+
+- name: uboot_ddr_unverified_is_unknown
+  goal_type: uboot
+  inputs:
+    board: "STM32MP157"
+    console_uart: "UART4"
+    kernel_load_addr: 0xC2000000
+    dtb_load_addr: 0xC4000000
+    ddr_base: 0xC0000000
+    ddr_bytes: 0x20000000
+  expected:
+    feasibility: blocked
+    validations:
+      DDR_TIMING_VERIFIED: UNKNOWN
+      LOAD_ADDR_CONFLICT: PASS
+      CONSOLE_UART_DEFINED: PASS
+    risks_contains: [DDR_GUESSED]
+    unknowns_contains: ["DDR timing"]
+
+- name: ota_ab_asymmetry_fails
+  goal_type: ota
+  inputs:
+    board: "BeagleBone-Black"
+    primary_storage_bytes: 4294967296
+    partitions:
+      - {name: "slot_a", role: "slot_a", base: 0x0,        size: 0x10000000}
+      - {name: "slot_b", role: "slot_b", base: 0x10000000, size: 0x08000000}
+  expected:
+    feasibility: not_feasible
+    validations:
+      PARTITION_LAYOUT_FITS: PASS
+      PARTITION_NO_OVERLAP: PASS
+      PARTITION_AB_SYMMETRY: FAIL
+      RECOVERY_PRESENT: PASS
+
+- name: linux_kernel_load_in_ddr_init_region_fails
+  goal_type: linux
+  inputs:
+    board: "i.MX8M-Mini-EVK"
+    console_uart: "UART2"
+    stdout_path: "serial0"
+    ddr_base: 0x40000000
+    ddr_bytes: 0x80000000
+    ddr_init_region: {base: 0x40000000, size: 0x00100000}
+    kernel_load_addr: 0x40080000
+    dtb_load_addr: 0x43000000
+  expected:
+    feasibility: not_feasible
+    validations:
+      LOAD_ADDR_CONFLICT: FAIL
+      CONSOLE_UART_DEFINED: PASS
+
+- name: rp2040_w5500_xip_bootloader_fits
+  goal_type: bootloader
+  inputs:
+    board: "WIZnet-W5500-EVB-Pico"
+    estimated_image_size: 262144
+    vector_table_addr: 0x10000100
+    bl_region: {base: 0x10000000, size: 0x1000}
+    app_region: {base: 0x10001000, size: 0x1FF000}
+    stack_size: 8192
+    heap_size: 16384
+    static_size: 32768
+  expected:
+    feasibility: feasible
+    validations:
+      FLASH_CAPACITY: PASS
+      VECTOR_TABLE_PLACEMENT: PASS
+      BOOTLOADER_APP_NO_OVERLAP: PASS
+      RAM_BUDGET: PASS
+    risks_absent: [FLASH_TIGHT]
+
+- name: stm32h743_bootloader_fits
+  goal_type: bootloader
+  inputs:
+    board: "STM32H743"          # 2 MiB flash, M7 -> 512-byte VTOR alignment
+    estimated_image_size: 524288
+    vector_table_addr: 0x08000000
+    bl_region: {base: 0x08000000, size: 0x20000}
+    app_region: {base: 0x08020000, size: 0x1E0000}
+    stack_size: 16384
+    heap_size: 65536
+    static_size: 131072
+  expected:
+    feasibility: feasible
+    validations:
+      FLASH_CAPACITY: PASS
+      VECTOR_TABLE_PLACEMENT: PASS
+      BOOTLOADER_APP_NO_OVERLAP: PASS
+      RAM_BUDGET: PASS
+
+- name: pinmux_conflict_detected
+  goal_type: driver
+  inputs:
+    board: "STM32H743"
+    pin_assignments:
+      - {pin: "PA9", signal: "USART1_TX"}
+      - {pin: "PA9", signal: "TIM1_CH2"}    # same pin, second signal -> conflict
+      - {pin: "PA10", signal: "USART1_RX"}
+  expected:
+    feasibility: not_feasible
+    validations:
+      PINMUX_CONFLICT: FAIL
+
+- name: pinmux_clean_passes
+  goal_type: driver
+  inputs:
+    board: "STM32H743"
+    pin_assignments:
+      - {pin: "PA9", signal: "USART1_TX"}
+      - {pin: "PA10", signal: "USART1_RX"}
+      - {pin: "PB6", signal: "I2C1_SCL"}
+  expected:
+    feasibility: feasible
+    validations:
+      PINMUX_CONFLICT: PASS
+
+- name: power_sequence_out_of_order_fails
+  goal_type: bootloader
+  inputs:
+    board: "STM32H743"
+    power_rails:
+      - {name: "VDD_IO",   order: 1, depends_on: "VDD_CORE"}   # IO before core -> illegal
+      - {name: "VDD_CORE", order: 2}
+  expected:
+    feasibility: not_feasible
+    validations:
+      POWER_SEQUENCE: FAIL
+
+- name: power_sequence_valid_passes
+  goal_type: bootloader
+  inputs:
+    board: "STM32H743"
+    power_rails:
+      - {name: "VDD_CORE", order: 1}
+      - {name: "VDD_IO",   order: 2, depends_on: "VDD_CORE"}
+      - {name: "VDD_ANA",  order: 3, depends_on: "VDD_IO"}
+  expected:
+    feasibility: feasible
+    validations:
+      POWER_SEQUENCE: PASS

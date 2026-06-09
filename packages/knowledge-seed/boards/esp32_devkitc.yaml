@@ -1,0 +1,28 @@
+soc:
+  name: ESP32
+  vendor: Espressif
+  arch: xtensa-lx6
+  notes: "Dual-core Xtensa LX6 @ 240 MHz; XIP from external SPI flash"
+board:
+  name: ESP32-DevKitC
+  flash_base: null            # XIP via flash cache; no fixed CPU flash base
+  flash_bytes: 4194304        # 4 MiB external SPI NOR (common variant)
+  ram_base: 0x3FFB0000
+  ram_bytes: 532480           # ~520 KiB on-chip SRAM
+  ddr_type: null
+  ddr_bytes: null
+  primary_storage: nor
+  boot_modes: [spi_flash, uart_download]
+  confidence: HIGH
+source:
+  type: seed
+  title: "ESP32 Technical Reference Manual"
+  uri: "https://www.espressif.com/sites/default/files/documentation/esp32_technical_reference_manual_en.pdf"
+  section: "System and Memory"
+  snippet: "520 KiB on-chip SRAM; program executed from external SPI flash via cache."
+capabilities:
+  - capability: uart
+  - capability: wifi
+  - capability: bluetooth
+  - capability: spi
+  - capability: i2c

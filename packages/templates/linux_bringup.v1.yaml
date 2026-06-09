@@ -1,0 +1,50 @@
+key: linux_bringup
+name: Linux Bring-Up
+version: 1
+goal_type: linux
+items:
+  - key: kernel_xcompile
+    text: "Kernel version selected and cross-compile environment verified"
+    category: toolchain
+    required_inputs: [toolchain_arch]
+    validation_rules: [TOOLCHAIN_ARCH_MATCH]
+  - key: device_tree
+    text: "Device Tree (DTB) created or ported from reference board"
+    category: dtb
+    required_inputs: []
+    validation_rules: []
+  - key: console_in_dtb
+    text: "Console confirmed in DTB (correct UART node, stdout-path)"
+    category: bringup
+    required_inputs: [console_uart, stdout_path]
+    validation_rules: [CONSOLE_UART_DEFINED]
+  - key: rootfs_type
+    text: "RootFS type decided (initramfs / NFS / eMMC / SD)"
+    category: storage
+    required_inputs: []
+    validation_rules: []
+  - key: critical_drivers
+    text: "Critical drivers identified (storage, network, display if applicable)"
+    category: drivers
+    required_inputs: []
+    validation_rules: []
+  - key: kernel_config
+    text: "Kernel config reviewed for target hardware"
+    category: config
+    required_inputs: []
+    validation_rules: []
+  - key: boot_flow_documented
+    text: "Boot flow documented: bootloader -> kernel -> init"
+    category: boot
+    required_inputs: [kernel_load_addr, dtb_load_addr, ddr_base, ddr_bytes]
+    validation_rules: [BOOT_FLOW_CONSISTENCY, LOAD_ADDR_CONFLICT]
+  - key: first_boot_milestone
+    text: "First boot milestone defined (shell access)"
+    category: boot
+    required_inputs: []
+    validation_rules: []
+  - key: logging_strategy
+    text: "Logging strategy (dmesg capture plan)"
+    category: observability
+    required_inputs: []
+    validation_rules: []

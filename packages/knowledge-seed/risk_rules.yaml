@@ -1,0 +1,28 @@
+# Data-driven risk rules (spec §2.4). Conditions use the sandboxed mini-DSL.
+- key: FLASH_TIGHT
+  goal_type: null
+  condition_dsl: "estimated_image_size > board.flash_bytes * 0.9"
+  severity: HIGH
+  explanation_tmpl: "Estimated image ({estimated_image_size} B) exceeds 90% of flash ({board.flash_bytes} B)."
+  mitigation_tmpl: "Reduce image size, enable LTO/-Os, or move assets to external storage."
+
+- key: RAM_TIGHT
+  goal_type: null
+  condition_dsl: "stack_size + heap_size > board.ram_bytes * 0.8"
+  severity: MEDIUM
+  explanation_tmpl: "Stack+heap ({stack_size}+{heap_size} B) exceeds 80% of RAM ({board.ram_bytes} B)."
+  mitigation_tmpl: "Shrink stack/heap, or audit static allocation."
+
+- key: WATCHDOG_UNCONFIRMED
+  goal_type: bootloader
+  condition_dsl: "watchdog_enabled == 0"
+  severity: MEDIUM
+  explanation_tmpl: "Watchdog not confirmed enabled from first instruction."
+  mitigation_tmpl: "Enable IWDG/WWDG before main application handoff."
+
+- key: DDR_GUESSED
+  goal_type: uboot
+  condition_dsl: "ddr_timing_verified == 0"
+  severity: HIGH
+  explanation_tmpl: "DDR timing not verified from datasheet."
+  mitigation_tmpl: "Confirm CL/tRCD/tRP from the TRM before first boot."

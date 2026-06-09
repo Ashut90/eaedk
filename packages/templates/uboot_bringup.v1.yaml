@@ -1,0 +1,55 @@
+key: uboot_bringup
+name: U-Boot Bring-Up
+version: 1
+goal_type: uboot
+items:
+  - key: ddr_init
+    text: "DDR initialization (timing parameters from datasheet confirmed?)"
+    category: bringup
+    required_inputs: [ddr_timing_verified]
+    validation_rules: [DDR_TIMING_VERIFIED]
+  - key: clock_tree
+    text: "Clock tree configured"
+    category: bringup
+    required_inputs: []
+    validation_rules: []
+  - key: console_uart
+    text: "Console UART confirmed and tested"
+    category: bringup
+    required_inputs: [console_uart]
+    validation_rules: [CONSOLE_UART_DEFINED]
+  - key: storage_interface
+    text: "Storage interface confirmed (eMMC / NAND / NOR)"
+    category: storage
+    required_inputs: []
+    validation_rules: []
+  - key: env_storage
+    text: "Environment storage location defined"
+    category: storage
+    required_inputs: []
+    validation_rules: []
+  - key: bootargs_reviewed
+    text: "Boot arguments (bootargs) reviewed"
+    category: boot
+    required_inputs: []
+    validation_rules: []
+  - key: dtb_loading
+    text: "DTB loading strategy confirmed"
+    category: boot
+    required_inputs: []
+    validation_rules: []
+  - key: kernel_load_addr
+    text: "Kernel load address confirmed (no overlap with DDR init region)"
+    category: memory_layout
+    required_inputs: [kernel_load_addr, dtb_load_addr, ddr_base, ddr_bytes]
+    validation_rules: [LOAD_ADDR_CONFLICT, BOOT_FLOW_CONSISTENCY]
+  - key: netboot_fallback
+    text: "Network boot fallback (if applicable)"
+    category: boot
+    required_inputs: []
+    validation_rules: []
+  - key: uboot_errata
+    text: "U-Boot version and known errata checked"
+    category: errata
+    required_inputs: []
+    validation_rules: []

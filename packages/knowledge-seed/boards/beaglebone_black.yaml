@@ -1,0 +1,27 @@
+soc:
+  name: AM335x
+  vendor: Texas Instruments
+  arch: arm-cortex-a8
+  notes: "Sitara AM3358 Cortex-A8 @ 1 GHz"
+board:
+  name: BeagleBone-Black
+  flash_base: null
+  flash_bytes: null
+  ram_base: 0x80000000
+  ram_bytes: 536870912        # 512 MiB DDR3
+  ddr_type: DDR3
+  ddr_bytes: 536870912
+  primary_storage: emmc       # 4 GB on-board eMMC
+  boot_modes: [emmc, sd, uart, usb]
+  confidence: HIGH
+source:
+  type: seed
+  title: "AM335x Technical Reference Manual (SPRUH73)"
+  uri: "https://www.ti.com/lit/ug/spruh73q/spruh73q.pdf"
+  section: "Memory map / EMIF"
+  snippet: "DDR memory mapped at 0x8000_0000; ROM boot supports eMMC/SD/UART/USB."
+capabilities:
+  - capability: ethernet
+  - capability: usb
+  - capability: uart
+  - capability: emmc

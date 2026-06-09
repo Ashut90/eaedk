@@ -1,0 +1,25 @@
+soc:
+  name: STM32F411RE
+  vendor: STMicroelectronics
+  arch: arm-cortex-m4
+  notes: "Cortex-M4F @ 100 MHz"
+board:
+  name: Nucleo-F411RE
+  flash_base: 0x08000000
+  flash_bytes: 524288        # 512 KiB
+  ram_base: 0x20000000
+  ram_bytes: 131072          # 128 KiB SRAM
+  primary_storage: internal_flash
+  boot_modes: [flash, system_memory, sram]
+  confidence: HIGH
+source:
+  type: seed
+  title: "STM32F411xC/xE datasheet (DS10115)"
+  uri: "https://www.st.com/resource/en/datasheet/stm32f411re.pdf"
+  section: "Memory map / Flash & SRAM organization"
+  snippet: "512 KB Flash at 0x0800_0000; 128 KB SRAM at 0x2000_0000."
+capabilities:
+  - capability: uart
+  - capability: usb
+  - capability: spi
+  - capability: i2c

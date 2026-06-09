@@ -1,0 +1,60 @@
+key: bare_metal_bootloader
+name: Bare-Metal Bootloader
+version: 1
+goal_type: bootloader
+items:
+  - key: vector_table_placement
+    text: "Vector table placement confirmed"
+    category: memory_layout
+    required_inputs: [vector_table_addr]
+    validation_rules: [VECTOR_TABLE_PLACEMENT]
+  - key: flash_layout_defined
+    text: "Flash layout defined (bootloader / application / config regions)"
+    category: memory_layout
+    required_inputs: [bl_region, app_region, estimated_image_size]
+    validation_rules: [BOOTLOADER_APP_NO_OVERLAP, FLASH_CAPACITY]
+  - key: ram_layout_defined
+    text: "RAM layout defined (stack size / heap size)"
+    category: memory_layout
+    required_inputs: [stack_size, heap_size, static_size]
+    validation_rules: [RAM_BUDGET]
+  - key: power_sequencing
+    text: "Power rail sequencing documented (power-on order from datasheet)"
+    category: hardware
+    required_inputs: [power_rails]
+    validation_rules: [POWER_SEQUENCE]
+  - key: clock_init_sequence
+    text: "Clock initialization sequence"
+    category: bringup
+    required_inputs: []
+    validation_rules: []
+  - key: watchdog_strategy
+    text: "Watchdog strategy (enabled from first instruction?)"
+    category: safety
+    required_inputs: [watchdog_enabled]
+    validation_rules: []
+  - key: integrity_verification
+    text: "Integrity verification method (CRC / SHA)"
+    category: integrity
+    required_inputs: []
+    validation_rules: []
+  - key: fallback_rollback
+    text: "Fallback / rollback strategy"
+    category: recovery
+    required_inputs: []
+    validation_rules: []
+  - key: recovery_entry_condition
+    text: "Recovery mode entry condition"
+    category: recovery
+    required_inputs: []
+    validation_rules: []
+  - key: update_interface
+    text: "Communication interface for update (UART / USB / SPI / I2C / Ethernet)"
+    category: update
+    required_inputs: []
+    validation_rules: []
+  - key: flash_write_protection
+    text: "Flash write protection strategy"
+    category: safety
+    required_inputs: []
+    validation_rules: []

@@ -1,0 +1,55 @@
+key: failsafe_ota
+name: Fail-Safe OTA Update System
+version: 1
+goal_type: ota
+items:
+  - key: partition_layout
+    text: "Partition layout defined (A/B or A/B/recovery)"
+    category: memory_layout
+    required_inputs: [partitions, primary_storage_bytes]
+    validation_rules: [PARTITION_LAYOUT_FITS, PARTITION_NO_OVERLAP, PARTITION_AB_SYMMETRY]
+  - key: update_state_machine
+    text: "Update state machine designed (idle/downloading/validating/applying/confirming)"
+    category: design
+    required_inputs: []
+    validation_rules: []
+  - key: rollback_trigger
+    text: "Rollback trigger condition defined"
+    category: recovery
+    required_inputs: []
+    validation_rules: []
+  - key: watchdog_integration
+    text: "Watchdog integration with update flow"
+    category: safety
+    required_inputs: []
+    validation_rules: []
+  - key: signature_verification
+    text: "Signature verification method (RSA / ECDSA / HMAC)"
+    category: security
+    required_inputs: []
+    validation_rules: []
+  - key: update_source
+    text: "Update source confirmed (network / local storage / UART)"
+    category: update
+    required_inputs: []
+    validation_rules: []
+  - key: power_failure_recovery
+    text: "Power failure recovery strategy"
+    category: recovery
+    required_inputs: []
+    validation_rules: []
+  - key: progress_persistence
+    text: "Update progress persistence (survives reboot mid-update?)"
+    category: recovery
+    required_inputs: []
+    validation_rules: []
+  - key: downgrade_protection
+    text: "Version rollback prevention (downgrade attack protection)"
+    category: security
+    required_inputs: []
+    validation_rules: []
+  - key: factory_recovery_path
+    text: "Factory reset / recovery path defined"
+    category: recovery
+    required_inputs: [partitions]
+    validation_rules: [RECOVERY_PRESENT]

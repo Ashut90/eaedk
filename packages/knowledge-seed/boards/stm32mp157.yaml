@@ -1,0 +1,28 @@
+soc:
+  name: STM32MP157
+  vendor: STMicroelectronics
+  arch: arm-cortex-a7
+  notes: "Dual Cortex-A7 @ 800 MHz + Cortex-M4; DDR/U-Boot bring-up exemplar"
+board:
+  name: STM32MP157
+  flash_base: null
+  flash_bytes: null
+  ram_base: 0xC0000000
+  ram_bytes: 536870912        # 512 MiB DDR3 (typical EV1 config)
+  ddr_type: DDR3
+  ddr_bytes: 536870912
+  primary_storage: sd
+  boot_modes: [sd, emmc, nor, uart, usb_dfu]
+  confidence: HIGH
+source:
+  type: seed
+  title: "STM32MP157 Reference Manual (RM0436)"
+  uri: "https://www.st.com/resource/en/reference_manual/rm0436.pdf"
+  section: "Memory organization / DDR controller"
+  snippet: "DDR mapped at 0xC000_0000; boot ROM supports SD/eMMC/NOR/UART/USB-DFU."
+capabilities:
+  - capability: ethernet
+  - capability: usb
+  - capability: uart
+  - capability: display
+  - capability: sd

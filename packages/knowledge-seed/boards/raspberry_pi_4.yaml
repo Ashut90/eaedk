@@ -1,0 +1,28 @@
+soc:
+  name: BCM2711
+  vendor: Broadcom
+  arch: arm-cortex-a72
+  notes: "Quad Cortex-A72 @ 1.5 GHz"
+board:
+  name: Raspberry-Pi-4
+  flash_base: null            # no on-board program NOR; boots SD/USB via SoC ROM + EEPROM
+  flash_bytes: null
+  ram_base: 0x00000000
+  ram_bytes: 4294967296       # 4 GB variant
+  ddr_type: LPDDR4
+  ddr_bytes: 4294967296
+  primary_storage: sd
+  boot_modes: [sd, usb, network, eeprom]
+  confidence: HIGH
+source:
+  type: seed
+  title: "BCM2711 ARM Peripherals / Raspberry Pi 4 documentation"
+  uri: "https://datasheets.raspberrypi.com/bcm2711/bcm2711-peripherals.pdf"
+  section: "Memory map"
+  snippet: "LPDDR4 main memory; boot from SD/USB orchestrated by SoC boot ROM + SPI EEPROM."
+capabilities:
+  - capability: ethernet
+  - capability: usb
+  - capability: uart
+  - capability: hdmi
+  - capability: wifi
