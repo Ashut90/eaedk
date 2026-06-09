@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eaedk"
+version = "0.1.0"
+description = "Embedded AI Engineering Development Kit — local-first structured engineering reasoning for embedded bring-up"
+requires-python = ">=3.11"
+dependencies = [
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+eaedk = "eaedk.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "core"}
+
+[tool.setuptools.packages.find]
+where = ["core"]
+
+[tool.pytest.ini_options]
+pythonpath = ["core"]
+testpaths = ["core/tests"]
