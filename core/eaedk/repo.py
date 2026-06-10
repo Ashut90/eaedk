@@ -67,6 +67,40 @@ def record_fact(conn: sqlite3.Connection, *, board_id: int, domain: str, fact_ke
 
 # --- boards ----------------------------------------------------------------
 
+def create_manual_source(conn: sqlite3.Connection, title: str, uri: str | None = None) -> int:
+    """Create a 'manual' provenance source (e.g. for an interactively onboarded board)."""
+    return conn.execute(
+        "INSERT INTO sources(type,title,uri,hash,created_at) VALUES ('manual',?,?,NULL,?)",
+        (title, uri, _now())).lastrowid
+
+
+def get_or_create_soc(conn: sqlite3.Connection, name: str, vendor: str | None,
+                      arch: str, notes: str | None = None) -> int:
+    """Reuse an existing SoC by name (socs.name is UNIQUE) or create it."""
+    row = conn.execute("SELECT id FROM socs WHERE name=?", (name,)).fetchone()
+    if row is not None:
+        return row["id"]
+    return conn.execute(
+        "INSERT INTO socs(name,vendor,arch,notes) VALUES (?,?,?,?)",
+        (name, vendor, arch, notes)).lastrowid
+
+
+def create_board(conn: sqlite3.Connection, *, soc_id: int, name: str,
+                 flash_base: int | None, flash_bytes: int | None,
+                 ram_base: int | None, ram_bytes: int | None,
+                 source_id: int, confidence: str,
+                 ddr_type: str | None = None, ddr_bytes: int | None = None,
+                 primary_storage: str = "internal_flash",
+                 boot_modes: list[str] | None = None) -> int:
+    """Insert a typed board identity row. Board identity stays typed (not EAV)."""
+    return conn.execute(
+        "INSERT INTO boards(soc_id,name,flash_base,flash_bytes,ram_base,ram_bytes,"
+        "ddr_type,ddr_bytes,primary_storage,boot_modes_json,source_id,confidence) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (soc_id, name, flash_base, flash_bytes, ram_base, ram_bytes, ddr_type, ddr_bytes,
+         primary_storage, json.dumps(boot_modes or []), source_id, confidence)).lastrowid
+
+
 def load_board(conn: sqlite3.Connection, name: str
                ) -> tuple[dict[str, Any], dict[str, Any]] | tuple[None, None]:
     row = conn.execute(

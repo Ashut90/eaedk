@@ -36,11 +36,13 @@ def test_successful_terminal_onboard_pass(tmp_path):
         "0x08000000",      # flash base
         "1MB",             # ram size    -> 1048576
         "0x20000000",      # ram base
+        "",                # confidence -> default HIGH
         # partitions: bootloader + A/B/C, offsets within 2 MiB, aligned, non-overlapping
         "0x0", "0x20000",       # Bootloader  off 0,        size 128 KiB
         "0x20000", "0x80000",   # Slot A      off 0x20000,  size 512 KiB
         "0xA0000", "0x80000",   # Slot B      off 0xA0000,  size 512 KiB
         "0x120000", "0x80000",  # Slot C      off 0x120000, size 512 KiB
+        "n",               # no initial facts
     ]
     name, out = _drive(conn, answers)
 
@@ -71,7 +73,9 @@ def test_blank_field_drops_to_medium_and_writes_null(tmp_path):
     answers = [
         "PartialBoard", "ST", "SOC", "3",
         "", "0x08000000", "512KB", "0x20000000",   # flash size left blank -> UNKNOWN
+        "",                                        # confidence -> default MEDIUM (capped)
         "", "", "", "", "", "", "", "",            # no partitions
+        "n",                                       # no initial facts
     ]
     name, out = _drive(conn, answers)
     assert name == "PartialBoard"
@@ -85,11 +89,68 @@ def test_two_boards_can_share_a_soc(tmp_path):
     conn = connect(str(tmp_path / "t.db"))
     migrate(conn)
     base = ["{n}", "ST", "SharedSoC", "4", "2MB", "0x08000000", "1MB", "0x20000000",
-            "", "", "", "", "", "", "", ""]
+            "",                            # confidence
+            "", "", "", "", "", "", "", "",  # no partitions
+            "n"]                           # no initial facts
     for n in ("BoardOne", "BoardTwo"):
         _drive(conn, [a.replace("{n}", n) for a in base])
     assert conn.execute("SELECT COUNT(*) FROM socs WHERE name='SharedSoC'").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM boards").fetchone()[0] == 2
+
+
+def test_explicit_confidence_low_is_respected(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    migrate(conn)
+    # all core fields known -> ceiling HIGH, but engineer chooses LOW
+    answers = ["LowBoard", "ST", "SOC", "4", "2MB", "0x08000000", "1MB", "0x20000000",
+               "LOW", "", "", "", "", "", "", "", "", "n"]
+    name, out = _drive(conn, answers)
+    board, _ = repo.load_board(conn, "LowBoard")
+    assert board["confidence"] == "LOW"
+
+
+def test_confidence_high_capped_to_medium_when_unknown(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    migrate(conn)
+    # flash size blank -> ceiling MEDIUM; choosing HIGH must be capped
+    answers = ["CapBoard", "ST", "SOC", "4", "", "0x08000000", "1MB", "0x20000000",
+               "HIGH", "", "", "", "", "", "", "", "", "n"]
+    name, out = _drive(conn, answers)
+    board, _ = repo.load_board(conn, "CapBoard")
+    assert board["confidence"] == "MEDIUM"
+    assert "capping at MEDIUM" in "\n".join(out)
+
+
+def test_initial_facts_written_with_citation(tmp_path):
+    conn = connect(str(tmp_path / "t.db"))
+    migrate(conn)
+    answers = [
+        "FactBoard", "ST", "STM32MP1", "1", "2MB", "0x10000000", "256KB", "0x20000000",
+        "",                                   # confidence default
+        "", "", "", "", "", "", "", "",       # no partitions
+        "y",                                  # add facts
+        "ddr_cas_latency",                    # fact key
+        "TIMING",                             # domain
+        "7",                                  # value
+        "DATASHEET",                          # source type
+        "Table 8, DDR AC timing",             # citation section
+        "112",                                # citation page
+        "HIGH",                               # fact confidence
+        "",                                   # blank key -> stop facts
+    ]
+    name, out = _drive(conn, answers)
+    assert name == "FactBoard"
+    row = conn.execute(
+        "SELECT ef.domain, ef.source_type, ef.fact_value, ef.citation_detail, "
+        "ef.citation_page, ef.confidence AS confidence "
+        "FROM engineering_facts ef JOIN boards b ON b.id=ef.board_id "
+        "WHERE b.name='FactBoard' AND ef.fact_key='ddr_cas_latency'").fetchone()
+    assert row["domain"] == "TIMING"
+    assert row["source_type"] == "DATASHEET"
+    assert row["fact_value"] == "7"
+    assert row["citation_detail"] == "Table 8, DDR AC timing"
+    assert row["citation_page"] == 112
+    assert row["confidence"] == "HIGH"
 
 
 def test_overlap_is_caught_and_reprompted(tmp_path):
@@ -99,6 +160,7 @@ def test_overlap_is_caught_and_reprompted(tmp_path):
     answers = [
         "OverlapBoard", "ST", "SOC", "4",
         "2MB", "0x08000000", "1MB", "0x20000000",
+        "",                     # confidence -> default HIGH
         # First attempt: Slot B overlaps Slot C (B ends at 0x120000, C starts at 0x100000)
         "0x0", "0x20000",       # Bootloader
         "0x20000", "0x80000",   # Slot A
@@ -109,6 +171,7 @@ def test_overlap_is_caught_and_reprompted(tmp_path):
         "", "",                 # Slot A unchanged
         "", "",                 # Slot B unchanged
         "0x120000", "",         # Slot C base fixed; size kept
+        "n",                    # no initial facts
     ]
     name, out = _drive(conn, answers)
     blob = "\n".join(out)

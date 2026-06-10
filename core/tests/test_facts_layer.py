@@ -54,8 +54,8 @@ def test_onboarding_partitions_land_in_engineering_facts(tmp_path):
     conn = _seeded(tmp_path)
     from eaedk.onboard import run_wizard
     answers = [
-        "F407", "ST", "STM32F407", "3", "1MB", "0x08000000", "192KB", "0x20000000",
-        "0x0", "64KB", "0x10000", "320KB", "0x60000", "320KB", "0xB0000", "320KB",
+        "F407", "ST", "STM32F407", "3", "1MB", "0x08000000", "192KB", "0x20000000", "",
+        "0x0", "64KB", "0x10000", "320KB", "0x60000", "320KB", "0xB0000", "320KB", "n",
     ]
     it = iter(answers)
     run_wizard(conn, lambda p: next(it), lambda s: None)
@@ -72,8 +72,8 @@ def test_postfilter_allowlist_reads_through_view(tmp_path):
     conn = _seeded(tmp_path)
     from eaedk.onboard import run_wizard
     answers = [
-        "F407b", "ST", "STM32F407b", "3", "1MB", "0x08000000", "192KB", "0x20000000",
-        "0x0", "64KB", "0x10000", "320KB", "0x60000", "320KB", "0xB0000", "320KB",
+        "F407b", "ST", "STM32F407b", "3", "1MB", "0x08000000", "192KB", "0x20000000", "",
+        "0x0", "64KB", "0x10000", "320KB", "0x60000", "320KB", "0xB0000", "320KB", "n",
     ]
     it = iter(answers)
     run_wizard(conn, lambda p: next(it), lambda s: None)

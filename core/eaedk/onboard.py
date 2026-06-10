@@ -41,6 +41,12 @@ PART_SLOTS: list[tuple[str, str]] = [
     ("Slot C", "slot_c"),
 ]
 
+CONFIDENCE_LEVELS = ("HIGH", "MEDIUM", "LOW")
+# Domains for optional initial facts (-> facts.domain) and their default fine `kind`.
+FACT_DOMAINS = ("MEMORY", "CLOCK", "TIMING", "PINMUX", "POWER")
+# Provenance source types for optional facts (-> facts.source_type).
+FACT_SOURCE_TYPES = ("DATASHEET", "TRM", "SDK_DOC", "SCHEMATIC", "USER_INPUT")
+
 _MEM_RE = re.compile(r"(?i)^\s*(0x[0-9a-f]+|\d+)\s*(b|kb|kib|mb|mib|gb|gib)?\s*$")
 _MEM_FACTOR = {"b": 1, "kb": 1024, "kib": 1024, "mb": 1024**2,
                "mib": 1024**2, "gb": 1024**3, "gib": 1024**3}
@@ -67,12 +73,20 @@ class BoardDraft:
     ram_base: int | None = None
     ram_bytes: int | None = None
     partitions: list[dict[str, Any]] = field(default_factory=list)
+    facts: list[dict[str, Any]] = field(default_factory=list)
     unknown_fields: list[str] = field(default_factory=list)
+    confidence_choice: str | None = None     # engineer-selected; capped by UNKNOWNs
 
     @property
     def confidence(self) -> str:
-        # Any blank/UNKNOWN core field drops the record to MEDIUM (defensive posture).
-        return "MEDIUM" if self.unknown_fields else "HIGH"
+        # Any blank/UNKNOWN core field caps the record at MEDIUM (defensive posture); the
+        # engineer may choose lower, but never claim higher than the data supports.
+        ceiling = "MEDIUM" if self.unknown_fields else "HIGH"
+        if self.confidence_choice is None:
+            return ceiling
+        order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
+        return self.confidence_choice if order[self.confidence_choice] <= order[ceiling] \
+            else ceiling
 
 
 def _prompt(ask: Ask, out: Out, label: str, default: Any = None,
@@ -172,33 +186,67 @@ def _summary(draft: BoardDraft, out: Out) -> None:
             out(f"    {p['name']:11s} off=0x{p['base']:X}  size=0x{p['size']:X}{absstr}")
     else:
         out("  Partitions   (none recorded)")
+    if draft.facts:
+        out("  Initial facts:")
+        for f in draft.facts:
+            out(f"    {f['domain']}.{f['key']} = {f['value']}  "
+                f"[{f['source_type']}, {f['confidence']}]")
     out(f"  Confidence   {draft.confidence}"
         + (f"  (UNKNOWN: {', '.join(draft.unknown_fields)})" if draft.unknown_fields else ""))
+
+
+def _choose(ask: Ask, out: Out, label: str, options: tuple[str, ...],
+            default: str | None = None) -> str:
+    """Select one of ``options`` (case-insensitive); blank returns ``default``."""
+    hint = f" [{default}]" if default else ""
+    upper = {o.upper(): o for o in options}
+    while True:
+        raw = ask(f"{label} ({'/'.join(options)}){hint}: ").strip()
+        if raw == "" and default:
+            return default
+        if raw.upper() in upper:
+            return upper[raw.upper()]
+        out(f"  ! choose one of: {', '.join(options)}")
+
+
+def _collect_facts(ask: Ask, out: Out, default_conf: str) -> list[dict[str, Any]]:
+    """Optional loop to enter initial engineering facts with source citation."""
+    yn = ask("Add initial facts (timing/clock/memory) with citations? [y/N]: ").strip().lower()
+    if yn not in ("y", "yes"):
+        return []
+    facts: list[dict[str, Any]] = []
+    out("  Enter facts; leave the key blank to finish.")
+    while True:
+        key, _ = _prompt(ask, out, "  Fact key (blank to stop)")
+        if not key:
+            break
+        domain = _choose(ask, out, "  Domain", FACT_DOMAINS, default="MEMORY")
+        value, _ = _prompt(ask, out, "  Value (hex/number/text)")
+        if value is None:
+            out("  ! value required; skipping this fact")
+            continue
+        source_type = _choose(ask, out, "  Source", FACT_SOURCE_TYPES, default="DATASHEET")
+        section, _ = _prompt(ask, out, "  Citation section (e.g. 'Table 12, RCC')")
+        page, _ = _prompt(ask, out, "  Citation page", parser=parse_mem)
+        conf = _choose(ask, out, "  Confidence", CONFIDENCE_LEVELS, default=default_conf)
+        facts.append({"domain": domain, "key": key, "value": value,
+                      "source_type": source_type, "section": section, "page": page,
+                      "confidence": conf})
+    return facts
 
 
 def _commit(conn, draft: BoardDraft) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with conn:
-        # Board identity keeps its own (typed) row + provenance source.
-        src = conn.execute(
-            "INSERT INTO sources(type,title,uri,hash,created_at) VALUES ('manual',?,NULL,NULL,?)",
-            (f"interactive onboarding: {draft.name}", now)).lastrowid
-        # Multiple boards can share a SoC (socs.name is UNIQUE) — reuse if present.
-        soc_name = draft.soc_name or draft.name
-        existing = conn.execute("SELECT id FROM socs WHERE name=?", (soc_name,)).fetchone()
-        if existing is not None:
-            soc_id = existing["id"]
-        else:
-            soc_id = conn.execute(
-                "INSERT INTO socs(name,vendor,arch,notes) VALUES (?,?,?,?)",
-                (soc_name, draft.vendor, draft.arch,
-                 f"VTOR alignment {draft.vtor_align}B")).lastrowid
-        board_id = conn.execute(
-            "INSERT INTO boards(soc_id,name,flash_base,flash_bytes,ram_base,ram_bytes,"
-            "ddr_type,ddr_bytes,primary_storage,boot_modes_json,source_id,confidence) "
-            "VALUES (?,?,?,?,?,?,NULL,NULL,'internal_flash','[]',?,?)",
-            (soc_id, draft.name, draft.flash_base, draft.flash_bytes, draft.ram_base,
-             draft.ram_bytes, src, draft.confidence)).lastrowid
+        # Board identity keeps its own (typed) row + provenance source (no raw SQL here —
+        # everything goes through repo helpers / record_fact).
+        src = repo.create_manual_source(conn, f"interactive onboarding: {draft.name}")
+        soc_id = repo.get_or_create_soc(conn, draft.soc_name or draft.name, draft.vendor,
+                                        draft.arch, notes=f"VTOR alignment {draft.vtor_align}B")
+        board_id = repo.create_board(
+            conn, soc_id=soc_id, name=draft.name, flash_base=draft.flash_base,
+            flash_bytes=draft.flash_bytes, ram_base=draft.ram_base, ram_bytes=draft.ram_bytes,
+            source_id=src, confidence=draft.confidence)
         # Partitions normalize into the unified engineering-fact layer via record_fact().
         for p in draft.partitions:
             repo.record_fact(
@@ -207,6 +255,13 @@ def _commit(conn, draft: BoardDraft) -> None:
                 source_type="USER_INPUT", confidence=draft.confidence,
                 citation_section="interactive onboarding",
                 snippet=f"{p['name']} entered by engineer on {now}")
+        # Optional initial facts, each with its own provenance + confidence.
+        for f in draft.facts:
+            repo.record_fact(
+                conn, board_id=board_id, domain=f["domain"], fact_key=f["key"],
+                fact_value=f["value"], source_type=f["source_type"], confidence=f["confidence"],
+                citation_section=f.get("section"), citation_page=f.get("page"),
+                snippet=f"{f['source_type']} fact entered on {now}")
 
 
 def run_wizard(conn, ask: Ask, out: Out, max_attempts: int = 5) -> str | None:
@@ -238,6 +293,13 @@ def run_wizard(conn, ask: Ask, out: Out, max_attempts: int = 5) -> str | None:
         if unknown:
             draft.unknown_fields.append(attr)
 
+    # Confidence: default to what the data supports; the choice is capped by UNKNOWNs.
+    ceiling = "MEDIUM" if draft.unknown_fields else "HIGH"
+    draft.confidence_choice = _choose(ask, out, "Overall confidence", CONFIDENCE_LEVELS,
+                                      default=ceiling)
+    if draft.unknown_fields and draft.confidence_choice == "HIGH":
+        out("  ! cannot be HIGH with UNKNOWN core fields — capping at MEDIUM")
+
     out("\n3-slot partition allocation (bootloader + slots A/B/C):")
     defaults: dict[str, dict[str, int]] = {}
     for attempt in range(1, max_attempts + 1):
@@ -256,6 +318,8 @@ def run_wizard(conn, ask: Ask, out: Out, max_attempts: int = 5) -> str | None:
             out("  Too many invalid attempts — recording partitions as UNKNOWN.")
             draft.partitions = []
             draft.unknown_fields.append("partitions")
+
+    draft.facts = _collect_facts(ask, out, draft.confidence)
 
     _commit(conn, draft)
     _summary(draft, out)
