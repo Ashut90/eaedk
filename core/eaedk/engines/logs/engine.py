@@ -21,12 +21,33 @@ from pathlib import Path
 from typing import Any
 
 from ... import repo
+from ...engines.validation.rules import RULES
 from ...llm import prompts
 from ...llm.gateway import Gateway
 from ...llm.postfilter import Allowlist, build_allowlist, filter_text, numbers_in_text
 from .parser import SignatureMatch, crash_window, detect_format, match_signatures
 
 _ALLOWED_CONF = {"HIGH", "MEDIUM", "LOW", "UNKNOWN"}
+
+# Deterministic implication: which words in a triage hypothesis implicate a validation rule.
+# Only rules that are *already* a project gap can be implicated, so this never invents a rule.
+_RULE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "DDR_TIMING_VERIFIED": ("ddr", "dram", "timing", "memory training", "relocation"),
+    "LOAD_ADDR_CONFLICT": ("load address", "memory map", "overlap", "relocation"),
+    "BOOT_FLOW_CONSISTENCY": ("boot flow", "handoff", "entry point", "kernel load"),
+    "FLASH_CAPACITY": ("flash", "image size", "overflow"),
+    "RAM_BUDGET": ("ram", "stack", "heap"),
+    "VECTOR_TABLE_PLACEMENT": ("vector table", "vtor"),
+    "CONSOLE_UART_DEFINED": ("console", "uart", "serial", "stdout"),
+    "PARTITION_LAYOUT_FITS": ("partition", "slot", "layout"),
+    "PARTITION_NO_OVERLAP": ("partition", "overlap"),
+    "RECOVERY_PRESENT": ("recovery", "rollback"),
+    "TOOLCHAIN_ARCH_MATCH": ("toolchain", "cross-compile", "architecture"),
+    "POWER_SEQUENCE": ("power", "rail", "regulator", "sequenc"),
+    "PINMUX_CONFLICT": ("pin", "mux", "pinmux"),
+    "DRIVER_COMPATIBLE_STRING": ("compatible", "device tree", "dtb"),
+    "REGISTER_MAP_PRESENT": ("register map", "register"),
+}
 
 
 @dataclass
@@ -37,12 +58,13 @@ class LogAnalysisResult:
     matches: list[SignatureMatch] = field(default_factory=list)
     triage: dict[str, Any] | None = None
     log_file_id: int | None = None
+    write_backs: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "path": self.path, "format": self.format, "n_lines": self.n_lines,
             "matches": [vars(m) for m in self.matches], "triage": self.triage,
-            "log_file_id": self.log_file_id,
+            "log_file_id": self.log_file_id, "write_backs": self.write_backs,
         }
 
     def to_markdown(self) -> str:
@@ -78,6 +100,12 @@ class LogAnalysisResult:
                     L.append(t.get("text", "(no structured hypotheses)"))
                 L.append(f"\n[LLM] {t.get('removed', 0)} uncited hardware claim(s) removed "
                          f"by post-filter.")
+        if self.write_backs:
+            L += ["", "## Written Back to Project"]
+            for w in self.write_backs:
+                items = ", ".join(w["items"]) or "(no checklist item)"
+                L.append(f"- {w['rule']} [{w['status']}] -> note on [{items}]; "
+                         f"tracked risk [{w['severity']}] {w['risk']}")
         return "\n".join(L)
 
 
@@ -231,6 +259,42 @@ async def _llm_triage(conn, fmt: str, text: str, project, gateway: Gateway,
     return out
 
 
+def write_back(conn: sqlite3.Connection, project, triage: dict, path: str,
+               log_file_id: int) -> list[dict[str, Any]]:
+    """Close the loop: when a triage hypothesis implicates a project gap, append a note to
+    the owning checklist item(s) and open/append a tracked risk (severity inherited from the
+    validation rule). Deterministic — only implicates gaps that already exist.
+    """
+    correlation = triage.get("correlation")
+    hyps = triage.get("hypotheses", [])
+    if not correlation or not hyps:
+        return []
+    blob = " ".join(f"{h.get('cause','')} {h.get('suggested_check','')} "
+                    f"{h.get('evidence_line','')}" for h in hyps).lower()
+    cause = next((h.get("cause", "") for h in hyps if h.get("cause")), "triage hypothesis")
+    now = datetime.now(timezone.utc).isoformat()
+    ref = f"{Path(path).name}#{log_file_id}"
+    note = f"[{now}] log-triage ({ref}): {cause}"
+
+    written: list[dict[str, Any]] = []
+    for gap in correlation["validation_gaps"]:          # only FAIL / engaged-UNKNOWN rules
+        rule = gap["check"]
+        kws = _RULE_KEYWORDS.get(rule, ())
+        if not any(kw in blob for kw in kws):
+            continue
+        items = repo.items_for_rule(conn, project["id"], rule)
+        for item_key in items:
+            repo.append_checklist_note(conn, project["id"], item_key, note)
+        severity = RULES[rule].severity if rule in RULES else "MEDIUM"
+        action = repo.upsert_tracked_risk(
+            conn, project["id"], rule, severity,
+            explanation=f"From log triage ({ref}, gap {gap['status']}): {cause}",
+            mitigation=gap.get("reason"))
+        written.append({"rule": rule, "status": gap["status"], "severity": severity,
+                        "items": items, "risk": action})
+    return written
+
+
 async def analyze_log_async(conn: sqlite3.Connection, path: str,
                             project_name: str | None = None, use_llm: bool = False,
                             gateway: Gateway | None = None,
@@ -245,15 +309,18 @@ async def analyze_log_async(conn: sqlite3.Connection, path: str,
     log_file_id = _store_log_file(conn, project, path, text, fmt)
 
     triage = None
+    write_backs: list[dict[str, Any]] = []
     if matches:
         _store_match_analyses(conn, log_file_id, matches)
     elif use_llm:
         triage = await _llm_triage(conn, fmt, text, project, gateway or Gateway(),
                                    project_aware=project_aware)
         _store_triage(conn, log_file_id, triage)
+        if project_aware and project is not None and triage.get("available"):
+            write_backs = write_back(conn, project, triage, path, log_file_id)
 
-    return LogAnalysisResult(path=path, format=fmt, n_lines=len(lines),
-                             matches=matches, triage=triage, log_file_id=log_file_id)
+    return LogAnalysisResult(path=path, format=fmt, n_lines=len(lines), matches=matches,
+                             triage=triage, log_file_id=log_file_id, write_backs=write_backs)
 
 
 def analyze_log(conn: sqlite3.Connection, path: str, project_name: str | None = None,

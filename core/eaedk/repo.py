@@ -250,6 +250,59 @@ def list_decisions(conn: sqlite3.Connection, project_id: int) -> list[sqlite3.Ro
         "WHERE project_id=? ORDER BY made_at", (project_id,)).fetchall()
 
 
+def append_checklist_note(conn: sqlite3.Connection, project_id: int, item_key: str,
+                          note: str) -> bool:
+    """Append a line to a checklist item's note (newline-joined). Returns True if matched."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE project_checklist "
+            "SET note = CASE WHEN note IS NULL OR note='' THEN ? ELSE note || char(10) || ? END "
+            "WHERE project_id=? AND template_item_id=("
+            "  SELECT ti.id FROM template_items ti JOIN projects p ON p.template_id=ti.template_id "
+            "  WHERE p.id=? AND ti.item_key=?)",
+            (note, note, project_id, project_id, item_key))
+        return cur.rowcount > 0
+
+
+def items_for_rule(conn: sqlite3.Connection, project_id: int, rule_key: str) -> list[str]:
+    """Checklist item_keys for this project whose template item owns the given rule."""
+    out: list[str] = []
+    for row in checklist(conn, project_id):
+        if rule_key in json.loads(row["validation_rule_keys_json"]):
+            out.append(row["item_key"])
+    return out
+
+
+def get_tracked_risk(conn: sqlite3.Connection, project_id: int, rule_key: str
+                     ) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM risks WHERE project_id=? AND rule_key=? AND status='tracked' LIMIT 1",
+        (project_id, rule_key)).fetchone()
+
+
+def upsert_tracked_risk(conn: sqlite3.Connection, project_id: int, rule_key: str,
+                        severity: str, explanation: str, mitigation: str | None = None) -> str:
+    """Open a tracked risk for a triage-implicated rule, or append to the existing one.
+
+    Tracked risks (status='tracked') are distinct from the deterministic risk-engine snapshot
+    (status='open', which replace_risks() rewrites) — so they persist and never collide.
+    Returns 'opened' or 'appended'.
+    """
+    now = _now()
+    existing = get_tracked_risk(conn, project_id, rule_key)
+    with conn:
+        if existing is not None:
+            conn.execute(
+                "UPDATE risks SET explanation = explanation || char(10) || ? WHERE id=?",
+                (explanation, existing["id"]))
+            return "appended"
+        conn.execute(
+            "INSERT INTO risks(project_id,rule_key,severity,explanation,mitigation,"
+            "citation_id,status,created_at) VALUES (?,?,?,?,?,NULL,'tracked',?)",
+            (project_id, rule_key, severity, explanation, mitigation, now))
+        return "opened"
+
+
 def replace_risks(conn: sqlite3.Connection, project_id: int,
                   findings: list[dict[str, Any]]) -> None:
     """Persist the latest risk evaluation (open ones); replaces prior open rows."""

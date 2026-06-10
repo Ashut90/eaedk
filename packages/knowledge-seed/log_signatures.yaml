@@ -30,3 +30,15 @@
   cause: "Driver fault — a null/invalid pointer dereference during boot."
   fix: "Identify the faulting driver from the backtrace; review probe()/of_match_table; enable KASAN to localize."
   severity: HIGH
+
+- format: uboot
+  pattern_regex: "PLL.*(lock|locked).*(fail|timeout|timed out|not)|failed to lock PLL|clk.*PLL.*not.*lock|PLL lock timeout"
+  cause: "Clock PLL failed to lock — bad oscillator/HSE source or out-of-range PLL multiplier/divider."
+  fix: "Verify the input oscillator/HSE and the PLL M/N/P settings against the datasheet clock tree before relying on derived clocks."
+  severity: HIGH
+
+- format: uboot
+  pattern_regex: "Bad signature|signature.*(verification)?.*(fail|invalid|bad)|secure boot.*(fail|denied)|verified boot.*fail|RSA.*verify.*fail|Hash Integrity.*(Failed|error)"
+  cause: "Secure/verified boot rejected the image — signature or hash verification failed."
+  fix: "Confirm the signing key matches the device public key/eFuse and that the image was signed for this boot stage (SPL/U-Boot/FIT)."
+  severity: HIGH

@@ -73,7 +73,34 @@ Demonstrated: an unmatched "system stalled during early relocation" U-Boot hang 
 with `DDR_TIMING_VERIFIED=UNKNOWN` + `DDR_GUESSED` was triaged to "DDR timing verification
 failure" — an inference impossible from the log text alone.
 
+## Closing the loop: write-back (`--project-aware --llm`)
+
+When a project-aware triage hypothesis **implicates an existing project gap**, the engine
+writes the finding back automatically — no manual action:
+
+- **Implication is deterministic.** A per-rule keyword map (`_RULE_KEYWORDS`) is matched only
+  against rules that are *already* a project gap (FAIL / engaged-UNKNOWN), so the LLM text can
+  never invent a rule — it can only corroborate one.
+- **Note on the checklist item.** The owning checklist item(s) get a timestamped note
+  referencing the log file: `[ts] log-triage (file#id): <hypothesis>`.
+- **Tracked risk, severity inherited.** A risk is opened with `status='tracked'` and the
+  severity of the validation rule that owns it (e.g. `DDR_TIMING_VERIFIED` → HIGH). Tracked
+  risks are a separate namespace from the risk-engine snapshot (`status='open'`, which
+  `replace_risks()` rewrites), so they persist and never collide.
+- **No duplicates.** A second run appends to the same tracked risk rather than creating a new
+  row. `project show` surfaces tracked risks in their own section.
+
+Demonstrated: `eaedk log analyze --file mp1.log --project mp1 --project-aware --llm` on an
+unmatched "system stalled during early relocation" hang opened a HIGH tracked risk on
+`DDR_TIMING_VERIFIED` and noted the `ddr_init` item — surfacing a new risk into the project
+with zero engineer input.
+
+## Signature DB (now 7)
+
+DDR, U-Boot CRC, MMC/SD, kernel rootfs-panic, kernel NULL-deref, **PLL-lock**, **secure/
+verified-boot** — the latter two cover the next most common bring-up failure modes after DDR.
+
 ## Not yet built
 
-- More signatures (clock/PLL lock, secure-boot, eMMC ECC), per-format structured field
-  extraction, and writing correlated findings back onto the project checklist.
+- More signatures (eMMC ECC, USB enumeration), per-format structured field extraction, and a
+  CLI to resolve/close tracked risks once the engineer verifies the implicated item.

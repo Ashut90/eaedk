@@ -176,6 +176,14 @@ def cmd_project_show(args):
         print(json.dumps(out, indent=2, default=str))
         return
     print(resp.to_markdown())
+    tracked = conn.execute(
+        "SELECT rule_key, severity, explanation FROM risks "
+        "WHERE project_id=? AND status='tracked' ORDER BY severity", (p["id"],)).fetchall()
+    if tracked:
+        print("\n## Tracked Risks (surfaced from log triage)")
+        for t in tracked:
+            first = t["explanation"].splitlines()[0]
+            print(f"- [{t['severity']}] {t['rule_key']}: {first}")
     if decisions:
         print("\n## Decisions")
         for d in decisions:

@@ -67,6 +67,24 @@ def test_kernel_panic_rootfs_match(tmp_path):
     assert any("root" in m.cause.lower() for m in res.matches)
 
 
+def test_pll_lock_signature_match(tmp_path):
+    conn = _seeded(tmp_path)
+    log = _write(tmp_path, "pll.log",
+                 "U-Boot SPL 2023.04\nClock init...\nERROR: PLL lock timeout\n")
+    res = analyze_log(conn, log)
+    assert res.matches and any("PLL" in m.line for m in res.matches)
+    assert any("pll" in m.cause.lower() for m in res.matches)
+
+
+def test_secure_boot_signature_match(tmp_path):
+    conn = _seeded(tmp_path)
+    log = _write(tmp_path, "sb.log",
+                 "U-Boot 2023.04\n## Loading kernel from FIT Image\n"
+                 "   Verifying Hash Integrity ... sha256,rsa2048 Failed\nBad signature\n")
+    res = analyze_log(conn, log)
+    assert res.matches and any("signature" in m.cause.lower() for m in res.matches)
+
+
 class _FakeProvider:
     model = "fake"
 
@@ -154,3 +172,51 @@ def test_project_aware_triage_injects_correlation(tmp_path):
     assert "PROJECT CONTEXT" in captured["prompt"]
     assert "DDR_TIMING_VERIFIED" in captured["prompt"]
     assert res.triage["correlation"]["project"] == "bringup"
+
+
+class _DDRProvider:
+    model = "fake"
+    def available(self):
+        return True
+    def generate(self, system, prompt):
+        return json.dumps({"hypotheses": [{
+            "cause": "DDR timing not verified, likely stalling early relocation",
+            "evidence_line": "some unrecognized failure here",
+            "suggested_check": "verify DDR timing"}], "confidence": "MEDIUM"})
+
+
+def test_write_back_opens_note_and_tracked_risk(tmp_path):
+    conn = _seeded(tmp_path)
+    _uboot_project(conn, "wb")
+    log = _write(tmp_path, "b.log", "U-Boot 2023.04\nDRAM:  512 MiB\nunrecognized failure\n")
+
+    res = analyze_log(conn, log, project_name="wb", use_llm=True, project_aware=True,
+                      gateway=Gateway(provider=_DDRProvider()))
+    # implicated DDR_TIMING_VERIFIED (an engaged-UNKNOWN gap) -> note + tracked risk
+    wb = {w["rule"]: w for w in res.write_backs}
+    assert "DDR_TIMING_VERIFIED" in wb
+    assert wb["DDR_TIMING_VERIFIED"]["severity"] == "HIGH"   # inherited from the rule
+    assert wb["DDR_TIMING_VERIFIED"]["risk"] == "opened"
+    assert "ddr_init" in wb["DDR_TIMING_VERIFIED"]["items"]
+
+    p = repo.get_project(conn, "wb")
+    note = conn.execute(
+        "SELECT pc.note FROM project_checklist pc JOIN template_items ti "
+        "ON ti.id=pc.template_item_id WHERE pc.project_id=? AND ti.item_key='ddr_init'",
+        (p["id"],)).fetchone()["note"]
+    assert note and "log-triage" in note and "b.log" in note
+
+    risk = conn.execute(
+        "SELECT severity, status FROM risks WHERE project_id=? AND rule_key='DDR_TIMING_VERIFIED'",
+        (p["id"],)).fetchall()
+    assert len(risk) == 1 and risk[0]["severity"] == "HIGH" and risk[0]["status"] == "tracked"
+
+    # Re-run: appends to the SAME tracked risk (no duplicate row), and survives the
+    # replace_risks() wipe that assess_project triggers.
+    res2 = analyze_log(conn, log, project_name="wb", use_llm=True, project_aware=True,
+                       gateway=Gateway(provider=_DDRProvider()))
+    assert res2.write_backs[0]["risk"] == "appended"
+    n = conn.execute(
+        "SELECT COUNT(*) FROM risks WHERE project_id=? AND rule_key='DDR_TIMING_VERIFIED'",
+        (p["id"],)).fetchone()[0]
+    assert n == 1
