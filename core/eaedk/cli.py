@@ -336,6 +336,16 @@ def cmd_explain(args):
 
 # --- eval ------------------------------------------------------------------
 
+def cmd_log_analyze(args):
+    conn = _conn(args)
+    from .engines.logs import analyze_log
+    res = analyze_log(conn, args.file, args.project, args.llm)
+    if args.json:
+        print(json.dumps(res.to_dict(), indent=2, default=str))
+    else:
+        print(res.to_markdown())
+
+
 def cmd_eval_run(args):
     conn = _conn(args)
     res = run_eval(conn, args.case)
@@ -416,6 +426,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval").add_subparsers(dest="sub", required=True)
     er = ev.add_parser("run"); er.add_argument("--case"); er.set_defaults(func=cmd_eval_run)
+
+    lg = sub.add_parser("log").add_subparsers(dest="sub", required=True)
+    la = lg.add_parser("analyze")
+    la.add_argument("--file", required=True); la.add_argument("--project")
+    la.set_defaults(func=cmd_log_analyze)
 
     return p
 

@@ -53,6 +53,24 @@ def build_ask_prompt(resp: AssessResponse, question: str | None) -> str:
     return f"CONTEXT:\n{_context_block(resp)}\n\nQUESTION: {q}\n\nAnswer:"
 
 
+LOG_SYSTEM = """You are EAEDK's log-triage layer for embedded bring-up.
+You are given a slice of a boot/kernel log that the deterministic signature database could
+NOT match. Produce STRUCTURAL hypotheses about the failure. Hard rules:
+1. Output ONLY a JSON object, no prose around it, of the form:
+   {"hypotheses": [{"cause": "...", "evidence_line": "<quote an exact line from the log>",
+   "suggested_check": "..."}], "confidence": "MEDIUM" | "LOW"}
+2. Quote evidence verbatim from the provided log lines. Do NOT invent addresses, register
+   values, clock frequencies, or timings that are not present in the log.
+3. If you are unsure, use "confidence": "LOW" and fewer hypotheses. Never fabricate.
+"""
+
+
+def build_log_triage_prompt(fmt: str, context: str) -> str:
+    return (f"LOG FORMAT (detected): {fmt}\n"
+            f"LOG SLICE (around the crash vector):\n{context}\n\n"
+            f"Return the JSON object now:")
+
+
 def build_explain_prompt(resp: AssessResponse, rule_key: str) -> str:
     target = next((v for v in resp.validations if v["check"] == rule_key), None)
     detail = f"{target['status']} — {target['reason']}" if target else "rule not applicable"

@@ -25,3 +25,6 @@ env/
 *.swp
 .idea/
 .vscode/
+
+# Claude Code local config (not part of the project)
+.claude/

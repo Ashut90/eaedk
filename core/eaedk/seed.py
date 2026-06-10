@@ -17,7 +17,7 @@ from .paths import seed_dir, templates_dir
 _SEED_TABLES = [
     "template_items", "templates",
     "board_capabilities", "boards", "socs",
-    "risk_rules", "eval_cases",
+    "risk_rules", "eval_cases", "log_signatures",
     "citations", "sources",
 ]
 
@@ -122,6 +122,20 @@ def _load_eval_cases(conn: sqlite3.Connection) -> int:
     return len(cases)
 
 
+def _load_log_signatures(conn: sqlite3.Connection) -> int:
+    path = seed_dir() / "log_signatures.yaml"
+    if not path.exists():
+        return 0
+    sigs = yaml.safe_load(path.read_text(encoding="utf-8")) or []
+    now = _now()
+    for s in sigs:
+        conn.execute(
+            "INSERT INTO log_signatures(format,pattern_regex,cause,fix,severity,source_id,"
+            "created_at) VALUES (?,?,?,?,?,NULL,?)",
+            (s["format"], s["pattern_regex"], s["cause"], s["fix"], s["severity"], now))
+    return len(sigs)
+
+
 def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
     if _already_seeded(conn) and not force:
         raise RuntimeError("database already seeded; pass force=True to reseed")
@@ -133,5 +147,6 @@ def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
             "boards": _load_boards(conn),
             "risk_rules": _load_risk_rules(conn),
             "eval_cases": _load_eval_cases(conn),
+            "log_signatures": _load_log_signatures(conn),
         }
     return counts

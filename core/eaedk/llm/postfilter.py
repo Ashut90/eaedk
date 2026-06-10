@@ -104,6 +104,20 @@ def build_allowlist(conn: sqlite3.Connection, project: sqlite3.Row) -> Allowlist
     return Allowlist(numbers=nums)
 
 
+_DEC_RE = re.compile(r"\b\d{3,}\b")
+
+
+def numbers_in_text(text: str) -> set[int]:
+    """Collect hex literals and 3+ digit decimals appearing in provided text (e.g. a log
+    evidence window). These count as 'cited by the source' so the model may quote them."""
+    nums: set[int] = set()
+    for m in _HEX.finditer(text):
+        nums.add(int(m.group(), 16))
+    for m in _DEC_RE.finditer(text):
+        nums.add(int(m.group()))
+    return nums
+
+
 def _size_allowed(num: str, unit: str, allow: Allowlist) -> bool:
     n = float(num)
     for f in _SIZE_FACTORS.get(unit.lower(), []):

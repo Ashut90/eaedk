@@ -1,0 +1,32 @@
+# Deterministic log signatures for common bring-up failures (spec §4.8). Matched BEFORE any
+# LLM triage. Each is a known pattern -> known cause + fix. Regexes are case-sensitive unless
+# the pattern says otherwise.
+- format: uboot
+  pattern_regex: "Bad (Data CRC|Magic Number|Header Crc|CRC)"
+  cause: "Boot image is corrupt or loaded to the wrong address (checksum/CRC mismatch)."
+  fix: "Re-flash the image; verify the download size and that the load/entry addresses match the image header."
+  severity: HIGH
+
+- format: uboot
+  pattern_regex: "DRAM:\\s*0 Bytes|DDR.*(init|training|calibration).*(fail|timeout)|ERROR.*DDR"
+  cause: "DDR controller failed to initialize — timing parameters are likely wrong or unverified."
+  fix: "Verify CL/tRCD/tRP and DDR size against the datasheet/TRM before first boot (see DDR_TIMING_VERIFIED)."
+  severity: HIGH
+
+- format: uboot
+  pattern_regex: "Card did not respond to voltage select|MMC:.*timeout|mmc[0-9]*:.*error"
+  cause: "SD/eMMC did not initialize (card seating, power, or pin-mux issue)."
+  fix: "Check card power and seating, verify the MMC pin mux, and retry with a known-good card."
+  severity: MEDIUM
+
+- format: dmesg
+  pattern_regex: "VFS: Unable to mount root fs|Kernel panic.*not syncing.*VFS"
+  cause: "Root filesystem not found — wrong root= bootarg or a missing storage/filesystem driver."
+  fix: "Check root= in bootargs; ensure the storage controller and filesystem are built into the kernel (not modules)."
+  severity: HIGH
+
+- format: dmesg
+  pattern_regex: "Unable to handle kernel NULL pointer dereference|Internal error: Oops|kernel BUG at"
+  cause: "Driver fault — a null/invalid pointer dereference during boot."
+  fix: "Identify the faulting driver from the backtrace; review probe()/of_match_table; enable KASAN to localize."
+  severity: HIGH
