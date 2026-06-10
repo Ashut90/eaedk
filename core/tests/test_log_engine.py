@@ -5,7 +5,9 @@ import json
 from eaedk.store.db import connect
 from eaedk.store.migrate import migrate
 from eaedk.seed import seed_all
+from eaedk import repo
 from eaedk.engines.logs import analyze_log
+from eaedk.engines.logs.engine import build_correlation
 from eaedk.engines.logs.parser import detect_format, crash_window
 from eaedk.llm.gateway import Gateway
 
@@ -102,3 +104,53 @@ def test_degraded_triage_strips_invented_keeps_log_evidence(tmp_path):
     # persisted as a triage row (no signature, MEDIUM)
     row = conn.execute("SELECT signature_id, confidence FROM log_analyses").fetchone()
     assert row["signature_id"] is None and row["confidence"] == "MEDIUM"
+
+
+def _uboot_project(conn, name="bringup"):
+    # A U-Boot project with an engaged-UNKNOWN (DDR timing) gap and a fired risk.
+    repo.create_project(conn, name, "uboot", "STM32MP157")
+    p = repo.get_project(conn, name)
+    repo.set_input(conn, p["id"], "console_uart", "UART4", confidence="HIGH")
+    return repo.get_project(conn, name)
+
+
+def test_build_correlation_collects_gaps_and_unverified(tmp_path):
+    conn = _seeded(tmp_path)
+    p = _uboot_project(conn)
+    # add an unverified (MEDIUM) board fact via the canonical write-through
+    bid = conn.execute("SELECT id FROM boards WHERE name='STM32MP157'").fetchone()["id"]
+    with conn:
+        repo.record_fact(conn, board_id=bid, domain="CLOCK", kind="clock",
+                         fact_key="pll_cfg", fact_value="assumed-default",
+                         source_type="USER_INPUT", confidence="MEDIUM")
+    corr = build_correlation(conn, p)
+    checks = {g["check"]: g["status"] for g in corr["validation_gaps"]}
+    assert checks.get("DDR_TIMING_VERIFIED") == "UNKNOWN"      # engaged-unknown gap surfaced
+    assert any(r["rule_key"] == "DDR_GUESSED" for r in corr["risks"])
+    assert any(f["key"] == "pll_cfg" and f["confidence"] == "MEDIUM"
+               for f in corr["unverified_facts"])
+
+
+def test_project_aware_triage_injects_correlation(tmp_path):
+    conn = _seeded(tmp_path)
+    p = _uboot_project(conn)
+    log = _write(tmp_path, "boot.log",
+                 "U-Boot 2023.04\nDRAM:  512 MiB\nsome unrecognized failure here\n")
+    captured = {}
+
+    class _CapturingProvider:
+        model = "fake"
+        def available(self):
+            return True
+        def generate(self, system, prompt):
+            captured["prompt"] = prompt
+            return json.dumps({"hypotheses": [{"cause": "unclear",
+                               "evidence_line": "some unrecognized failure here",
+                               "suggested_check": "review"}], "confidence": "LOW"})
+
+    res = analyze_log(conn, log, project_name="bringup", use_llm=True,
+                      project_aware=True, gateway=Gateway(provider=_CapturingProvider()))
+    # the correlation block reached the model and is attached to the result
+    assert "PROJECT CONTEXT" in captured["prompt"]
+    assert "DDR_TIMING_VERIFIED" in captured["prompt"]
+    assert res.triage["correlation"]["project"] == "bringup"

@@ -65,10 +65,16 @@ NOT match. Produce STRUCTURAL hypotheses about the failure. Hard rules:
 """
 
 
-def build_log_triage_prompt(fmt: str, context: str) -> str:
-    return (f"LOG FORMAT (detected): {fmt}\n"
-            f"LOG SLICE (around the crash vector):\n{context}\n\n"
-            f"Return the JSON object now:")
+def build_log_triage_prompt(fmt: str, context: str, correlation: str | None = None) -> str:
+    parts = [f"LOG FORMAT (detected): {fmt}",
+             f"LOG SLICE (around the crash vector):\n{context}"]
+    if correlation:
+        parts.append(
+            "PROJECT CONTEXT — correlate the boot-log failure against these architectural "
+            "gaps the engineer has NOT yet verified. Reason about how an unverified item "
+            "could cause the observed failure; do not invent values:\n" + correlation)
+    parts.append("Return the JSON object now:")
+    return "\n\n".join(parts)
 
 
 def build_explain_prompt(resp: AssessResponse, rule_key: str) -> str:

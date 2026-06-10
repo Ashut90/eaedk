@@ -54,7 +54,26 @@ Five deterministic bring-up failures:
 - Live runs (`qwen2.5-coder:3b`): U-Boot CRC and kernel-panic logs matched deterministically;
   an unmatched driver log produced structured hypotheses quoting the exact failing line.
 
+## Project-aware correlation (`--project-aware`)
+
+`eaedk log analyze --file <path> --project-aware [--project NAME] --llm`
+
+When the signature DB misses, the engine enriches the triage with the **project's own
+architectural gaps** before calling the LLM:
+
+- Loads project state first (`repo.active_project()` if `--project` is omitted).
+- `build_correlation()` collects: validation checks currently `FAIL` or engaged-`UNKNOWN`,
+  open HIGH/MEDIUM risks, and unverified (MEDIUM/LOW or not-human-verified) board facts read
+  through the `engineering_facts` VIEW.
+- Those gaps are injected into the triage prompt ("correlate the boot-log failure against
+  these architectural gaps the engineer has NOT yet verified…"). The post-filter still
+  governs the output.
+
+Demonstrated: an unmatched "system stalled during early relocation" U-Boot hang on a project
+with `DDR_TIMING_VERIFIED=UNKNOWN` + `DDR_GUESSED` was triaged to "DDR timing verification
+failure" — an inference impossible from the log text alone.
+
 ## Not yet built
 
 - More signatures (clock/PLL lock, secure-boot, eMMC ECC), per-format structured field
-  extraction, and `--project`-aware correlation of log findings back to validation results.
+  extraction, and writing correlated findings back onto the project checklist.

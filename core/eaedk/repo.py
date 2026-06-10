@@ -150,6 +150,25 @@ def get_project(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone()
 
 
+def active_project(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """The most recently updated active project — the 'current' project for project-aware ops."""
+    return conn.execute(
+        "SELECT * FROM projects WHERE status='active' ORDER BY updated_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+
+
+def unverified_board_facts(conn: sqlite3.Connection, board_name: str) -> list[sqlite3.Row]:
+    """Board facts that are assumptions, not confirmed truth: MEDIUM/LOW confidence or
+    not human-verified. Read through the engineering_facts VIEW (provenance preserved)."""
+    return conn.execute(
+        "SELECT ef.domain AS domain, ef.fact_key AS fact_key, ef.fact_value AS fact_value, "
+        "ef.confidence AS confidence, ef.source_type AS source_type, "
+        "ef.citation_detail AS citation_detail "
+        "FROM engineering_facts ef JOIN boards b ON b.id = ef.board_id "
+        "WHERE b.name = ? AND (ef.verified_by_human = 0 OR ef.confidence IN ('MEDIUM','LOW')) "
+        "ORDER BY ef.domain, ef.fact_key", (board_name,)).fetchall()
+
+
 def project_board_name(conn: sqlite3.Connection, project: sqlite3.Row) -> str | None:
     if project["board_id"] is None:
         return None

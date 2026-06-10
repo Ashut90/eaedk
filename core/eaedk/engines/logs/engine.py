@@ -64,6 +64,12 @@ class LogAnalysisResult:
             else:
                 L.append(f"confidence: {t.get('confidence', 'LOW')}  "
                          f"(window from line {t.get('window_start')})")
+                corr = t.get("correlation")
+                if corr:
+                    ng, nr, nf = (len(corr["validation_gaps"]), len(corr["risks"]),
+                                  len(corr["unverified_facts"]))
+                    L.append(f"correlated against project '{corr['project']}': "
+                             f"{ng} validation gap(s), {nr} risk(s), {nf} unverified fact(s)")
                 for h in t.get("hypotheses", []):
                     L.append(f"- cause: {h.get('cause','')}")
                     L.append(f"    evidence: {h.get('evidence_line','')}")
@@ -159,24 +165,76 @@ def _postfilter_payload(raw: str, allow: Allowlist) -> dict[str, Any]:
     return {"hypotheses": hyps, "text": None, "confidence": conf, "removed": removed}
 
 
-async def _llm_triage(conn, fmt: str, text: str, project, gateway: Gateway) -> dict[str, Any]:
+def build_correlation(conn: sqlite3.Connection, project) -> dict[str, Any]:
+    """Cross-engine correlation payload for a project: the architectural gaps a boot-log
+    failure should be reasoned against — unresolved validations, open risks, and the
+    unverified (MEDIUM/LOW) hardware assumptions sitting in the fact layer for this board.
+    """
+    from ...orchestrator import assess_project
+    resp = assess_project(conn, project)
+    gaps = [{"check": v["check"], "status": v["status"], "reason": v["reason"]}
+            for v in resp.validations
+            if v["status"] == "FAIL" or (v["status"] == "UNKNOWN" and v.get("engaged"))]
+    risks = [{"rule_key": r["rule_key"], "severity": r["severity"],
+              "explanation": r["explanation"]}
+             for r in resp.risks if r["severity"] in ("HIGH", "MEDIUM")]
+    unverified = []
+    board_name = repo.project_board_name(conn, project)
+    if board_name:
+        for r in repo.unverified_board_facts(conn, board_name):
+            unverified.append({"domain": r["domain"], "key": r["fact_key"],
+                               "value": r["fact_value"], "confidence": r["confidence"]})
+    return {"project": project["name"], "feasibility": resp.feasibility,
+            "validation_gaps": gaps, "risks": risks, "unverified_facts": unverified}
+
+
+def _correlation_text(payload: dict[str, Any]) -> str:
+    lines = [f"Project: {payload['project']}  (deterministic feasibility: {payload['feasibility']})"]
+    if payload["validation_gaps"]:
+        lines.append("Unresolved validation checks:")
+        lines += [f"  - {g['check']} [{g['status']}]: {g['reason']}"
+                  for g in payload["validation_gaps"]]
+    if payload["risks"]:
+        lines.append("Open risks:")
+        lines += [f"  - [{r['severity']}] {r['rule_key']}: {r['explanation']}"
+                  for r in payload["risks"]]
+    if payload["unverified_facts"]:
+        lines.append("Unverified hardware assumptions (MEDIUM/LOW confidence):")
+        lines += [f"  - {f['domain']}.{f['key']} = {f['value']} [{f['confidence']}]"
+                  for f in payload["unverified_facts"]]
+    if not (payload["validation_gaps"] or payload["risks"] or payload["unverified_facts"]):
+        lines.append("(no unresolved validations, risks, or unverified assumptions)")
+    return "\n".join(lines)
+
+
+async def _llm_triage(conn, fmt: str, text: str, project, gateway: Gateway,
+                      project_aware: bool = False) -> dict[str, Any]:
     start, window, crash_line = crash_window(text, 100)
     context = "\n".join(window)
     if not gateway.available():
         return {"available": False,
                 "reason": f"LLM gateway unavailable (model '{gateway.model}' not pulled)."}
-    prompt = prompts.build_log_triage_prompt(fmt, context)
+
+    correlation = None
+    correlation_text = None
+    if project_aware and project is not None:
+        correlation = build_correlation(conn, project)
+        correlation_text = _correlation_text(correlation)
+
+    prompt = prompts.build_log_triage_prompt(fmt, context, correlation_text)
     raw = await asyncio.to_thread(gateway.provider.generate, prompts.LOG_SYSTEM, prompt)
     allow = build_allowlist(conn, project) if project else Allowlist()
     allow.numbers |= numbers_in_text(context)  # numbers quoted from the log are "cited"
     out = _postfilter_payload(raw, allow)
-    out.update({"available": True, "window_start": start, "crash_line": crash_line})
+    out.update({"available": True, "window_start": start, "crash_line": crash_line,
+                "correlation": correlation})
     return out
 
 
 async def analyze_log_async(conn: sqlite3.Connection, path: str,
                             project_name: str | None = None, use_llm: bool = False,
-                            gateway: Gateway | None = None) -> LogAnalysisResult:
+                            gateway: Gateway | None = None,
+                            project_aware: bool = False) -> LogAnalysisResult:
     text = await asyncio.to_thread(_read, path)
     lines = text.splitlines()
     fmt = detect_format(text)
@@ -190,7 +248,8 @@ async def analyze_log_async(conn: sqlite3.Connection, path: str,
     if matches:
         _store_match_analyses(conn, log_file_id, matches)
     elif use_llm:
-        triage = await _llm_triage(conn, fmt, text, project, gateway or Gateway())
+        triage = await _llm_triage(conn, fmt, text, project, gateway or Gateway(),
+                                   project_aware=project_aware)
         _store_triage(conn, log_file_id, triage)
 
     return LogAnalysisResult(path=path, format=fmt, n_lines=len(lines),
@@ -198,6 +257,8 @@ async def analyze_log_async(conn: sqlite3.Connection, path: str,
 
 
 def analyze_log(conn: sqlite3.Connection, path: str, project_name: str | None = None,
-                use_llm: bool = False, gateway: Gateway | None = None) -> LogAnalysisResult:
+                use_llm: bool = False, gateway: Gateway | None = None,
+                project_aware: bool = False) -> LogAnalysisResult:
     """Synchronous wrapper for the CLI."""
-    return asyncio.run(analyze_log_async(conn, path, project_name, use_llm, gateway))
+    return asyncio.run(analyze_log_async(conn, path, project_name, use_llm, gateway,
+                                         project_aware))

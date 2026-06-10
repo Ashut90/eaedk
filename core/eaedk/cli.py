@@ -339,7 +339,17 @@ def cmd_explain(args):
 def cmd_log_analyze(args):
     conn = _conn(args)
     from .engines.logs import analyze_log
-    res = analyze_log(conn, args.file, args.project, args.llm)
+    project_name = args.project
+    if args.project_aware and not project_name:
+        active = repo.active_project(conn)
+        if active is None:
+            print("error: --project-aware needs a project; none active. Use --project NAME.",
+                  file=sys.stderr)
+            sys.exit(2)
+        project_name = active["name"]
+    if args.project_aware and not args.llm:
+        print("[note] --project-aware enriches LLM triage; add --llm to engage it.")
+    res = analyze_log(conn, args.file, project_name, args.llm, project_aware=args.project_aware)
     if args.json:
         print(json.dumps(res.to_dict(), indent=2, default=str))
     else:
@@ -430,6 +440,8 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("log").add_subparsers(dest="sub", required=True)
     la = lg.add_parser("analyze")
     la.add_argument("--file", required=True); la.add_argument("--project")
+    la.add_argument("--project-aware", dest="project_aware", action="store_true",
+                    help="enrich LLM triage with project validation gaps + unverified facts")
     la.set_defaults(func=cmd_log_analyze)
 
     return p
