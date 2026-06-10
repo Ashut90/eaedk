@@ -176,14 +176,19 @@ def cmd_project_show(args):
         print(json.dumps(out, indent=2, default=str))
         return
     print(resp.to_markdown())
-    tracked = conn.execute(
-        "SELECT rule_key, severity, explanation FROM risks "
-        "WHERE project_id=? AND status='tracked' ORDER BY severity", (p["id"],)).fetchall()
+    tracked = repo.list_risks_by_status(conn, p["id"], "tracked")
+    resolved = repo.list_risks_by_status(conn, p["id"], "resolved")
     if tracked:
-        print("\n## Tracked Risks (surfaced from log triage)")
+        print("\n## Tracked Risks (open — surfaced from log triage)")
         for t in tracked:
-            first = t["explanation"].splitlines()[0]
-            print(f"- [{t['severity']}] {t['rule_key']}: {first}")
+            print(f"- #{t['id']} [{t['severity']}] {t['rule_key']}: "
+                  f"{t['explanation'].splitlines()[0]}")
+    if resolved:
+        print("\n## Resolved Risks")
+        for t in resolved:
+            note = f" — {t['resolution_note']}" if t["resolution_note"] else ""
+            print(f"- #{t['id']} [{t['severity']}] {t['rule_key']}  "
+                  f"(resolved {t['resolved_at']}){note}")
     if decisions:
         print("\n## Decisions")
         for d in decisions:
@@ -268,19 +273,64 @@ def cmd_validate(args):
     _emit(args, resp.to_dict(), resp.to_markdown())
 
 
-def cmd_risk(args):
+def cmd_risk_show(args):
     conn = _conn(args)
     p = _require_project(conn, args.name)
     resp = assess_project(conn, p)
+    tracked = repo.list_risks_by_status(conn, p["id"], "tracked")
+    resolved = repo.list_risks_by_status(conn, p["id"], "resolved")
     if args.json:
-        print(json.dumps({"feasibility": resp.feasibility, "risks": resp.risks}, indent=2))
+        print(json.dumps({"feasibility": resp.feasibility, "risk_engine": resp.risks,
+                          "tracked": [dict(r) for r in tracked],
+                          "resolved": [dict(r) for r in resolved]}, indent=2, default=str))
         return
     print(f"Feasibility: {resp.feasibility}")
-    if not resp.risks:
-        print("No risks identified.")
+    print("\nRisk-engine findings (live, ephemeral):")
     for r in resp.risks:
-        m = f"\n      mitigate: {r['mitigation']}" if r.get("mitigation") else ""
-        print(f"[{r['severity']}] {r['rule_key']}: {r['explanation']}{m}")
+        m = f"  mitigate: {r['mitigation']}" if r.get("mitigation") else ""
+        print(f"  [{r['severity']}] {r['rule_key']}: {r['explanation']}{m}")
+    if not resp.risks:
+        print("  (none)")
+    print("\nTracked risks (surfaced from log triage):")
+    for r in tracked:
+        print(f"  #{r['id']} [{r['severity']}] {r['rule_key']}: {r['explanation'].splitlines()[0]}")
+    if not tracked:
+        print("  (none)")
+    if resolved:
+        print("\nResolved risks:")
+        for r in resolved:
+            note = f" — {r['resolution_note']}" if r["resolution_note"] else ""
+            print(f"  #{r['id']} [{r['severity']}] {r['rule_key']}  resolved {r['resolved_at']}{note}")
+
+
+def cmd_risk_resolve(args):
+    conn = _conn(args)
+    risk = repo.get_risk(conn, args.risk_id)
+    if risk is None:
+        print(f"error: no risk with id {args.risk_id}", file=sys.stderr)
+        sys.exit(2)
+    if risk["status"] == "resolved":
+        print(f"risk #{args.risk_id} is already resolved ({risk['resolved_at']}).")
+        return
+    if risk["status"] != "tracked":
+        print(f"error: risk #{args.risk_id} is a '{risk['status']}' risk-engine finding "
+              "(ephemeral); only tracked risks can be resolved. Fix the underlying validation "
+              "instead.", file=sys.stderr)
+        sys.exit(2)
+
+    # Warn (don't block) if the implicated checklist rule is still UNKNOWN/FAIL.
+    project = repo.get_project_by_id(conn, risk["project_id"])
+    if project is not None:
+        resp = assess_project(conn, project)
+        v = next((x for x in resp.validations if x["check"] == risk["rule_key"]), None)
+        if v and (v["status"] == "FAIL" or (v["status"] == "UNKNOWN" and v["engaged"])):
+            print(f"WARNING: {risk['rule_key']} is still {v['status']} ({v['reason']}). "
+                  "You are closing this risk against an unverified item.", file=sys.stderr)
+
+    outcome = repo.resolve_risk(conn, args.risk_id, args.note)
+    if outcome == "resolved":
+        print(f"resolved risk #{args.risk_id} ({risk['rule_key']})"
+              + (f" — note: {args.note}" if args.note else ""))
 
 
 # --- decision --------------------------------------------------------------
@@ -431,7 +481,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     v = sub.add_parser("validate"); v.add_argument("name"); v.add_argument("--rule")
     v.set_defaults(func=cmd_validate)
-    rk = sub.add_parser("risk"); rk.add_argument("name"); rk.set_defaults(func=cmd_risk)
+    rk = sub.add_parser("risk").add_subparsers(dest="sub", required=True)
+    rks = rk.add_parser("show"); rks.add_argument("name"); rks.set_defaults(func=cmd_risk_show)
+    rkr = rk.add_parser("resolve")
+    rkr.add_argument("risk_id", type=int); rkr.add_argument("--note")
+    rkr.set_defaults(func=cmd_risk_resolve)
 
     dc = sub.add_parser("decision").add_subparsers(dest="sub", required=True)
     da = dc.add_parser("add"); da.add_argument("name"); da.add_argument("--title", required=True)

@@ -42,7 +42,8 @@ eaedk input set picoboot vector_table_addr 0x10000100 --confidence HIGH
 eaedk input set picoboot bl_region '{"base":268435456,"size":4096}' --confidence HIGH
 eaedk input set picoboot app_region '{"base":268439552,"size":2093056}' --confidence HIGH
 eaedk validate picoboot                # feasibility + cited validation table + facts/assumptions/unknowns
-eaedk risk picoboot
+eaedk risk show picoboot              # live risk-engine + tracked + resolved risks
+eaedk risk resolve <id> --note "..."  # close a tracked risk (warns if item still UNKNOWN/FAIL)
 ```
 
 A checklist item cannot be marked `done` while its linked validation rule is `FAIL` or an

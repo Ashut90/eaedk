@@ -307,6 +307,39 @@ def items_for_rule(conn: sqlite3.Connection, project_id: int, rule_key: str) -> 
     return out
 
 
+def get_risk(conn: sqlite3.Connection, risk_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM risks WHERE id=?", (risk_id,)).fetchone()
+
+
+def get_project_by_id(conn: sqlite3.Connection, project_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+
+
+def list_risks_by_status(conn: sqlite3.Connection, project_id: int,
+                         status: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM risks WHERE project_id=? AND status=? ORDER BY severity, id",
+        (project_id, status)).fetchall()
+
+
+def resolve_risk(conn: sqlite3.Connection, risk_id: int, note: str | None) -> str:
+    """Resolve a tracked risk. Returns one of:
+    'not_found' | 'already' | 'not_tracked' | 'resolved'. Only tracked risks are resolvable
+    (risk-engine 'open' rows are ephemeral and rewritten by replace_risks)."""
+    row = get_risk(conn, risk_id)
+    if row is None:
+        return "not_found"
+    if row["status"] == "resolved":
+        return "already"
+    if row["status"] != "tracked":
+        return "not_tracked"
+    with conn:
+        conn.execute(
+            "UPDATE risks SET status='resolved', resolved_at=?, resolution_note=? WHERE id=?",
+            (_now(), note, risk_id))
+    return "resolved"
+
+
 def get_tracked_risk(conn: sqlite3.Connection, project_id: int, rule_key: str
                      ) -> sqlite3.Row | None:
     return conn.execute(

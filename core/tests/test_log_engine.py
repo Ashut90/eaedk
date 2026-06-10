@@ -220,3 +220,35 @@ def test_write_back_opens_note_and_tracked_risk(tmp_path):
         "SELECT COUNT(*) FROM risks WHERE project_id=? AND rule_key='DDR_TIMING_VERIFIED'",
         (p["id"],)).fetchone()[0]
     assert n == 1
+
+
+def test_resolve_tracked_risk(tmp_path):
+    conn = _seeded(tmp_path)
+    _uboot_project(conn, "rz")
+    log = _write(tmp_path, "r.log", "U-Boot 2023.04\nDRAM:  512 MiB\nunrecognized failure\n")
+    res = analyze_log(conn, log, project_name="rz", use_llm=True, project_aware=True,
+                      gateway=Gateway(provider=_DDRProvider()))
+    rid = next(r for r in conn.execute(
+        "SELECT id FROM risks WHERE rule_key='DDR_TIMING_VERIFIED' AND status='tracked'"))["id"]
+
+    # resolve it
+    assert repo.resolve_risk(conn, rid, "verified CL/tRCD against RM0436") == "resolved"
+    row = repo.get_risk(conn, rid)
+    assert row["status"] == "resolved" and row["resolved_at"] is not None
+    assert row["resolution_note"] == "verified CL/tRCD against RM0436"
+
+    # idempotent / guarded
+    assert repo.resolve_risk(conn, rid, "x") == "already"
+    assert repo.resolve_risk(conn, 99999, "x") == "not_found"
+
+    # an 'open' risk-engine row is not resolvable
+    p = repo.get_project(conn, "rz")
+    with conn:
+        conn.execute("INSERT INTO risks(project_id,rule_key,severity,explanation,status,created_at)"
+                     " VALUES (?, 'DDR_GUESSED','HIGH','x','open', '2026-06-10')", (p["id"],))
+    open_id = conn.execute("SELECT id FROM risks WHERE status='open'").fetchone()["id"]
+    assert repo.resolve_risk(conn, open_id, "x") == "not_tracked"
+
+    # separation: list helpers
+    assert len(repo.list_risks_by_status(conn, p["id"], "resolved")) == 1
+    assert len(repo.list_risks_by_status(conn, p["id"], "tracked")) == 0

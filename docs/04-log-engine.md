@@ -100,7 +100,21 @@ with zero engineer input.
 DDR, U-Boot CRC, MMC/SD, kernel rootfs-panic, kernel NULL-deref, **PLL-lock**, **secure/
 verified-boot** — the latter two cover the next most common bring-up failure modes after DDR.
 
+## Closing action: `eaedk risk resolve`
+
+`eaedk risk show <project>` lists risk-engine findings (live), tracked risks (with ids), and
+resolved risks. `eaedk risk resolve <risk-id> --note "..."` closes a **tracked** risk:
+
+- Sets `status='resolved'` with `resolved_at` + `resolution_note` (migration 0004).
+- **Warns but does not block** if the implicated validation rule is still `FAIL`/engaged-
+  `UNKNOWN` — closing a risk against an unverified item is explicit, not silent.
+- Only tracked risks are resolvable; ephemeral risk-engine `open` rows are rejected (fix the
+  underlying validation instead).
+- `project show` lists "Tracked Risks (open)" and "Resolved Risks" separately.
+
+This completes the loop: **board add → assess → log analyze --project-aware (surface) →
+risk resolve (close)**.
+
 ## Not yet built
 
-- More signatures (eMMC ECC, USB enumeration), per-format structured field extraction, and a
-  CLI to resolve/close tracked risks once the engineer verifies the implicated item.
+- More signatures (eMMC ECC, USB enumeration), per-format structured field extraction.
