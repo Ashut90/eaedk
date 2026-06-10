@@ -53,9 +53,9 @@ A complete, auditable workflow — every step writes through one fact layer with
 provenance, no raw SQL:
 
 ```
-board add  ──►  project init  ──►  validate / risk  ──►  log analyze  ──►  risk resolve
-(onboard HW)   (auto-template,     (deterministic       (signatures +     (close with
-               assess at minute 0)  PASS/FAIL/UNKNOWN)    cited triage)     provenance)
+board add ─► project init ─► validate / risk ─► log analyze ─► risk resolve ─► export
+(onboard)   (auto-template,   (deterministic    (signatures +   (close with    (real files
+            assess @ min-0)    PASS/FAIL/UNK)     cited triage)   provenance)    when feasible)
 ```
 
 The standout capability: **project-aware log triage**. A vague U-Boot hang with no smoking gun
@@ -100,6 +100,7 @@ eaedk validate <project>               # cited PASS/FAIL/UNKNOWN (incl. toolchai
 eaedk log analyze --file <log> --project <p> --project-aware --llm
 eaedk risk show <project>              # live risk-engine + tracked + resolved risks
 eaedk risk resolve <id> --note "..."   # close a tracked risk (warns if item still unverified)
+eaedk export <project> [--out DIR]     # checklist + CMake scaffold + flash steps as real files
 eaedk --llm ask <project> "..."        # cited explanation; post-filtered; off by default
 ```
 
@@ -138,10 +139,10 @@ demo.sh               end-to-end STM32MP157 DDR demo
 
 ## Status
 
-MVP through V1 complete and green: **54 pytests, eval 11/11.** Tags `v0.1.0` → `v1.0.0`.
+MVP through V1 complete and green: **62 pytests, eval 11/11.** Tags `v0.1.0` → `v1.1.0`.
 Deterministic core (validation, risk, signatures, **toolchain**), unified truth layer, offline
-LLM with post-filter, project-aware triage with write-back, and the full interactive
-onboarding chain.
+LLM with post-filter, project-aware triage with write-back, the full interactive onboarding
+chain, and a feasibility-gated **output engine** that exports real build artifacts.
 
 ```bash
 PYTHONPATH=core python3 -m pytest -q

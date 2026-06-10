@@ -468,6 +468,27 @@ def cmd_toolchain_validate(args):
             print(f"          ↳ {c.teach}")
 
 
+def cmd_export(args):
+    conn = _conn(args)
+    p = _require_project(conn, args.name)
+    from .engines.output import export_project
+    out_dir = args.out or f"{args.name}-bringup"
+    res = export_project(conn, p, out_dir, force=args.force, only=args.only)
+    if args.json:
+        print(json.dumps(res.__dict__, indent=2, default=str))
+        return
+    if res.refused:
+        print(f"refused: project feasibility is {res.feasibility.upper()} — export needs a "
+              "feasible project (or pass --force to emit a DRAFT). Blockers:", file=sys.stderr)
+        for b in res.blockers:
+            print(f"  - {b}", file=sys.stderr)
+        sys.exit(3)
+    banner = "" if res.feasibility == "feasible" else "  [DRAFT — not yet feasible]"
+    print(f"exported {len(res.written)} file(s) to {res.out_dir}/{banner}")
+    for f in res.written:
+        print(f"  {f}")
+
+
 def cmd_eval_run(args):
     conn = _conn(args)
     res = run_eval(conn, args.case)
@@ -550,6 +571,11 @@ def build_parser() -> argparse.ArgumentParser:
     ak.set_defaults(func=cmd_ask)
     ex = sub.add_parser("explain"); ex.add_argument("name"); ex.add_argument("--rule", required=True)
     ex.set_defaults(func=cmd_explain)
+
+    ex = sub.add_parser("export"); ex.add_argument("name"); ex.add_argument("--out")
+    ex.add_argument("--force", action="store_true")
+    ex.add_argument("--only", choices=["checklist", "cmake", "flash"])
+    ex.set_defaults(func=cmd_export)
 
     ev = sub.add_parser("eval").add_subparsers(dest="sub", required=True)
     er = ev.add_parser("run"); er.add_argument("--case"); er.set_defaults(func=cmd_eval_run)
