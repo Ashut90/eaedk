@@ -86,8 +86,11 @@ ollama pull qwen2.5-coder:3b
 ./demo.sh                              # full STM32MP157 DDR triage, end to end
 ```
 
-`./demo.sh` runs the headline scenario above end-to-end (re-record with
-`asciinema rec -c "DEMO_PAUSE=2 ./demo.sh"`).
+`./demo.sh` runs the headline DDR-triage scenario above. **`./demo-full.sh`** runs the
+*complete* chain on an STM32F103 — board add → datasheet ingest (cited) → project init
+(`bare_metal_app`) → toolchain check → validate → export real build files → feed a HardFault
+log and get a signature match **with teach**. Record either with
+`asciinema rec -c "DEMO_PAUSE=3 ./demo-full.sh"`.
 
 ## Commands
 
