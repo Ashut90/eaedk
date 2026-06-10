@@ -421,6 +421,53 @@ def cmd_log_analyze(args):
         print(res.to_markdown())
 
 
+def cmd_toolchain_detect(args):
+    conn = _conn(args)
+    from .engines.toolchain import detect_all
+    components = [c.to_dict() for c in detect_all()]
+    repo.replace_toolchain(conn, components)
+    if args.json:
+        print(json.dumps(components, indent=2))
+        return
+    if not components:
+        print("No toolchain components detected on this host.")
+        return
+    print(f"Detected {len(components)} toolchain component(s):")
+    for c in components:
+        triple = f"  [{c['target_triple']}]" if c.get("target_triple") else ""
+        ver = c.get("version") or "present"
+        print(f"  {c['kind']:13s} {c['name']:24s} {ver}{triple}")
+
+
+def cmd_toolchain_validate(args):
+    conn = _conn(args)
+    p = _require_project(conn, args.name)
+    board_name = repo.project_board_name(conn, p)
+    from .engines.toolchain import toolchain_checks
+    board, soc = repo.load_board(conn, board_name) if board_name else (None, None)
+    checks = toolchain_checks(conn, board_name, soc, p["goal_type"])
+    if args.json:
+        print(json.dumps([{"check": c.check, "status": c.status, "reason": c.reason,
+                           "severity": c.severity_on_fail, "gating": c.gating,
+                           "teach": c.teach} for c in checks], indent=2))
+        return
+    if not board_name:
+        print("project has no board; nothing to validate.")
+        return
+    if not checks:
+        print(f"No toolchain profile defined for board {board_name!r}.")
+        return
+    detected = repo.load_toolchain(conn)
+    if not detected:
+        print("[note] no toolchain detected yet — run `eaedk toolchain detect` first.\n")
+    print(f"Toolchain validation for {p['name']} (board {board_name}):")
+    for c in checks:
+        gate = "" if c.gating else "  (non-gating)"
+        print(f"  {c.status:7s} [{c.severity_on_fail}] {c.check}: {c.reason}{gate}")
+        if c.teach and c.status != "PASS":
+            print(f"          ↳ {c.teach}")
+
+
 def cmd_eval_run(args):
     conn = _conn(args)
     res = run_eval(conn, args.case)
@@ -506,6 +553,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval").add_subparsers(dest="sub", required=True)
     er = ev.add_parser("run"); er.add_argument("--case"); er.set_defaults(func=cmd_eval_run)
+
+    tc = sub.add_parser("toolchain").add_subparsers(dest="sub", required=True)
+    tc.add_parser("detect").set_defaults(func=cmd_toolchain_detect)
+    tcv = tc.add_parser("validate"); tcv.add_argument("--project", dest="name", required=True)
+    tcv.set_defaults(func=cmd_toolchain_validate)
 
     lg = sub.add_parser("log").add_subparsers(dest="sub", required=True)
     la = lg.add_parser("analyze")

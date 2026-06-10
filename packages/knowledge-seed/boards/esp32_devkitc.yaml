@@ -26,3 +26,17 @@ capabilities:
   - capability: bluetooth
   - capability: spi
   - capability: i2c
+toolchain:
+  - kind: compiler
+    name: xtensa-esp32-elf-gcc
+    target_triple: xtensa-esp32-elf
+    severity: HIGH
+    why: "ESP32 is Xtensa LX6; only the ESP-IDF Xtensa toolchain can target it."
+  - kind: sdk
+    name: idf.py
+    severity: LOW
+    why: "ESP-IDF provides the build system and flashing flow for the ESP32."
+  - kind: build_system
+    name: cmake
+    severity: MEDIUM
+    why: "ESP-IDF projects build with CMake."

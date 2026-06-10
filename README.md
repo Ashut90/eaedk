@@ -20,7 +20,9 @@ EAEDK is built around two deterministic gates the LLM cannot bypass:
 
 1. **Validation Engine (input guard).** 18 pure-function rules return `PASS / FAIL / UNKNOWN`
    over typed board data — flash/RAM capacity, VTOR alignment (architecture-derived),
-   partition fitment, DDR-timing-verified, power sequencing, pin-mux conflicts, and more.
+   partition fitment, DDR-timing-verified, power sequencing, pin-mux conflicts, and more —
+   plus a **Toolchain Engine** that makes the build environment first-class: a host with no
+   `arm-none-eabi-gcc` makes a Cortex-M project `NOT FEASIBLE`, with a one-line fix.
    `UNKNOWN` is a hard blocker, not a soft pass. Infeasible designs never get recommended.
 2. **Post-Filter (output guard).** Every LLM response is scanned; any hex address, memory
    size, clock, or timing **not in the SQLite-cited allowlist** is removed and replaced with
@@ -68,7 +70,9 @@ Record it with `asciinema rec eaedk-demo.cast -c "DEMO_PAUSE=2 ./demo.sh"`.
 ```bash
 eaedk board add --interactive          # guided onboarding: live fitment + VTOR checks + cited facts
 eaedk project init                     # guided: name, board, goal -> auto-template + immediate assess
-eaedk validate <project>               # cited PASS/FAIL/UNKNOWN + Facts/Assumptions/Unknowns
+eaedk toolchain detect                 # inventory the host build environment
+eaedk toolchain validate --project <p> # cross-check tools vs board arch + goal (with fixes)
+eaedk validate <project>               # cited PASS/FAIL/UNKNOWN (incl. toolchain) + Facts/Assumptions/Unknowns
 eaedk log analyze --file <log> --project <p> --project-aware --llm
 eaedk risk show <project>              # live risk-engine + tracked + resolved risks
 eaedk risk resolve <id> --note "..."   # close a tracked risk (warns if item still unverified)
@@ -109,9 +113,10 @@ demo.sh               end-to-end STM32MP157 DDR demo
 
 ## Status
 
-MVP through V1 complete and green: **42 pytests, eval 11/11.** Tags `v0.1.0` → `v0.9.0`.
-Deterministic core (validation, risk, signatures), unified truth layer, offline LLM with
-post-filter, project-aware triage with write-back, and the full interactive onboarding chain.
+MVP through V1 complete and green: **54 pytests, eval 11/11.** Tags `v0.1.0` → `v1.0.0`.
+Deterministic core (validation, risk, signatures, **toolchain**), unified truth layer, offline
+LLM with post-filter, project-aware triage with write-back, and the full interactive
+onboarding chain.
 
 ```bash
 PYTHONPATH=core python3 -m pytest -q

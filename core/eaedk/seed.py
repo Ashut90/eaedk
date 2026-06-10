@@ -11,12 +11,13 @@ from datetime import datetime, timezone
 
 import yaml
 
+from . import repo
 from .paths import seed_dir, templates_dir
 
 # Tables that hold seed-derived rows (cleared on --force). Projects are excluded.
 _SEED_TABLES = [
     "template_items", "templates",
-    "board_capabilities", "boards", "socs",
+    "board_toolchain_reqs", "board_capabilities", "boards", "socs",
     "risk_rules", "eval_cases", "log_signatures",
     "citations", "sources",
 ]
@@ -96,6 +97,13 @@ def _load_boards(conn: sqlite3.Connection) -> int:
                 "INSERT INTO board_capabilities(board_id,capability,details_json) VALUES (?,?,?)",
                 (board_id, cap["capability"], cap.get("details_json")),
             )
+        # Toolchain profile (required build environment) via the repo write-through.
+        for req in data.get("toolchain", []):
+            repo.add_board_toolchain_req(
+                conn, board_id, kind=req["kind"], name=req["name"],
+                severity=req.get("severity", "MEDIUM"),
+                target_triple=req.get("target_triple"), min_version=req.get("min_version"),
+                why=req.get("why"))
         n += 1
     return n
 

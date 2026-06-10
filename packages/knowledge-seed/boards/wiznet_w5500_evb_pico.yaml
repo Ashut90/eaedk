@@ -27,3 +27,18 @@ capabilities:
   - capability: usb
   - capability: uart
   - capability: i2c
+toolchain:
+  - kind: compiler
+    name: arm-none-eabi-gcc
+    target_triple: arm-none-eabi
+    min_version: "9.0"
+    severity: HIGH
+    why: "RP2040 is a Cortex-M0+; firmware needs the bare-metal ARM cross-compiler, not host gcc."
+  - kind: build_system
+    name: cmake
+    severity: MEDIUM
+    why: "The Raspberry Pi Pico SDK builds with CMake."
+  - kind: sdk
+    name: pioasm
+    severity: LOW
+    why: "RP2040 PIO state-machine programs are assembled by pioasm from the Pico SDK."

@@ -26,3 +26,19 @@ capabilities:
   - capability: uart
   - capability: display
   - capability: sd
+toolchain:
+  - kind: compiler
+    name: arm-linux-gnueabihf-gcc
+    target_triple: arm-linux-gnueabihf
+    min_version: "8.0"
+    severity: HIGH
+    why: "STM32MP1 runs 32-bit ARM Linux/U-Boot; you need an arm cross-compiler, not the host gcc."
+  - kind: flash_tool
+    name: openocd
+    min_version: "0.11"
+    severity: MEDIUM
+    why: "OpenOCD (or STM32CubeProgrammer) loads SPL/U-Boot during bring-up."
+  - kind: build_system
+    name: make
+    severity: MEDIUM
+    why: "U-Boot, TF-A and the kernel build with make."

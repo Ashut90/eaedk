@@ -48,6 +48,8 @@ class AssessResponse:
         L.append("## Validation Results")
         for v in self.validations:
             L.append(f"- {v['status']:7s} {v['check']}: {v['reason']}")
+            if v.get("teach") and v["status"] != "PASS":
+                L.append(f"          ↳ why: {v['teach']}")
         L.append("")
         L.append("## Facts Confirmed")
         L.extend([f"- {f['key']} = {f['value']}  [{f.get('confidence','HIGH')}]"

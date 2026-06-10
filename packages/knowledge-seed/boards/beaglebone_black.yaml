@@ -25,3 +25,14 @@ capabilities:
   - capability: usb
   - capability: uart
   - capability: emmc
+toolchain:
+  - kind: compiler
+    name: arm-linux-gnueabihf-gcc
+    target_triple: arm-linux-gnueabihf
+    min_version: "8.0"
+    severity: HIGH
+    why: "AM335x is 32-bit ARM (Cortex-A8) Linux; needs an arm-linux cross-compiler."
+  - kind: build_system
+    name: make
+    severity: MEDIUM
+    why: "U-Boot and the kernel build with make."

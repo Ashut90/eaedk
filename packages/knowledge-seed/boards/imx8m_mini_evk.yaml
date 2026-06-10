@@ -26,3 +26,14 @@ capabilities:
   - capability: uart
   - capability: emmc
   - capability: pcie
+toolchain:
+  - kind: compiler
+    name: aarch64-linux-gnu-gcc
+    target_triple: aarch64-linux-gnu
+    min_version: "8.0"
+    severity: HIGH
+    why: "64-bit ARM (ARMv8-A) Linux SoC; needs an aarch64 cross-compiler, not the host gcc."
+  - kind: build_system
+    name: make
+    severity: MEDIUM
+    why: "U-Boot and the kernel build with make."

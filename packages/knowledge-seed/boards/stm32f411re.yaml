@@ -23,3 +23,19 @@ capabilities:
   - capability: usb
   - capability: spi
   - capability: i2c
+toolchain:
+  - kind: compiler
+    name: arm-none-eabi-gcc
+    target_triple: arm-none-eabi
+    min_version: "9.0"
+    severity: HIGH
+    why: "Cortex-M is bare-metal ARM (Thumb); the host gcc cannot produce firmware for this MCU."
+  - kind: flash_tool
+    name: openocd
+    min_version: "0.11"
+    severity: MEDIUM
+    why: "OpenOCD flashes and debugs over SWD/JTAG; older builds may lack this target's config."
+  - kind: build_system
+    name: cmake
+    severity: MEDIUM
+    why: "The reference CMSIS/SDK projects build with CMake."

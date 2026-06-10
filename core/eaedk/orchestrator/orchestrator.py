@@ -10,6 +10,7 @@ from typing import Any
 
 from ..context import build_context
 from ..engines.risk.engine import evaluate_risks
+from ..engines.toolchain.engine import toolchain_checks
 from ..engines.validation.rules import run_validations, feasibility, UNKNOWN
 from ..schemas.response import AssessResponse
 from .. import repo
@@ -21,7 +22,8 @@ def _assemble(goal_type: str, ctx: dict[str, Any], results, risks,
     feas = feasibility(results)
 
     validations = [{"check": r.check, "status": r.status, "reason": r.reason,
-                    "engaged": r.engaged, "severity_on_fail": r.severity_on_fail}
+                    "engaged": r.engaged, "severity_on_fail": r.severity_on_fail,
+                    "gating": r.gating, "teach": r.teach}
                    for r in results]
     risk_dicts = [{"rule_key": f.rule_key, "severity": f.severity,
                    "explanation": f.explanation, "mitigation": f.mitigation}
@@ -78,6 +80,14 @@ def assess_project(conn: sqlite3.Connection, project: "sqlite3.Row",
 
     ctx = build_context(inputs, board, soc, goal_type)
     results = run_validations(ctx, goal_type, only=only)
+
+    # Toolchain checks: the build environment as a first-class validated entity. Reads stored
+    # detection (never probes the host here); before any detection it surfaces as non-gating.
+    tool = toolchain_checks(conn, board_name, soc, goal_type)
+    if only is not None:
+        tool = [t for t in tool if t.check in only]
+    results += tool
+
     risks = evaluate_risks(ctx, repo.load_risk_rules(conn), goal_type)
 
     template = None

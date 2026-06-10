@@ -35,6 +35,8 @@ class ValidationResult:
     inputs_used: dict[str, Any] = field(default_factory=dict)
     engaged: bool = True
     citations: list[int] = field(default_factory=list)
+    teach: str = ""            # one-line "why it matters / what to do" (mentor layer)
+    gating: bool = True        # whether this result can gate feasibility
 
 
 @dataclass
@@ -467,8 +469,11 @@ def run_validations(ctx: dict[str, Any], goal_type: str,
 
 
 def feasibility(results: list[ValidationResult]) -> str:
-    if any(r.status == FAIL for r in results):
+    # Only gating results affect feasibility. Existing rules default gating=True, so behavior
+    # is unchanged; non-HIGH toolchain checks set gating=False to surface without blocking.
+    gating = [r for r in results if r.gating]
+    if any(r.status == FAIL for r in gating):
         return "not_feasible"
-    if any(r.status == UNKNOWN and r.engaged for r in results):
+    if any(r.status == UNKNOWN and r.engaged for r in gating):
         return "blocked"
     return "feasible"

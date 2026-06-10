@@ -130,6 +130,44 @@ def list_boards(conn: sqlite3.Connection, query: str | None = None) -> list[sqli
         "ORDER BY b.name").fetchall()
 
 
+# --- toolchain -------------------------------------------------------------
+
+def replace_toolchain(conn: sqlite3.Connection, components: list[dict[str, Any]]) -> int:
+    """Replace the host's detected toolchain inventory (detect is a full re-scan)."""
+    now = _now()
+    with conn:
+        conn.execute("DELETE FROM toolchain_components")
+        for c in components:
+            conn.execute(
+                "INSERT INTO toolchain_components(kind,name,version,target_triple,path,raw,"
+                "detected_at) VALUES (?,?,?,?,?,?,?)",
+                (c["kind"], c["name"], c.get("version"), c.get("target_triple"),
+                 c.get("path"), c.get("raw"), now))
+    return len(components)
+
+
+def load_toolchain(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT kind,name,version,target_triple,path,detected_at FROM toolchain_components "
+        "ORDER BY kind,name").fetchall()
+
+
+def add_board_toolchain_req(conn: sqlite3.Connection, board_id: int, kind: str, name: str,
+                            severity: str, target_triple: str | None = None,
+                            min_version: str | None = None, why: str | None = None) -> int:
+    return conn.execute(
+        "INSERT INTO board_toolchain_reqs(board_id,kind,name,target_triple,min_version,"
+        "severity,why) VALUES (?,?,?,?,?,?,?)",
+        (board_id, kind, name, target_triple, min_version, severity, why)).lastrowid
+
+
+def load_board_toolchain_reqs(conn: sqlite3.Connection, board_name: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT r.kind, r.name, r.target_triple, r.min_version, r.severity, r.why "
+        "FROM board_toolchain_reqs r JOIN boards b ON b.id = r.board_id "
+        "WHERE b.name = ?", (board_name,)).fetchall()
+
+
 # --- risk rules ------------------------------------------------------------
 
 def load_risk_rules(conn: sqlite3.Connection) -> list[RiskRule]:
