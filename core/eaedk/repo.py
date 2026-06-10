@@ -157,7 +157,10 @@ def template_items(conn: sqlite3.Connection, template_id: int) -> list[sqlite3.R
 # --- projects --------------------------------------------------------------
 
 def create_project(conn: sqlite3.Connection, name: str, goal_type: str,
-                   board_name: str | None) -> int:
+                   board_name: str | None, allow_missing_template: bool = False) -> int:
+    """Create a project. A template is auto-selected by goal_type and its checklist seeded.
+    With ``allow_missing_template`` a 'custom' goal with no template creates a template-less
+    project (no checklist; global validation rules still apply)."""
     board_id = None
     if board_name:
         row = conn.execute("SELECT id FROM boards WHERE name=?", (board_name,)).fetchone()
@@ -165,18 +168,20 @@ def create_project(conn: sqlite3.Connection, name: str, goal_type: str,
             raise ValueError(f"unknown board: {board_name}")
         board_id = row["id"]
     tpl = find_template(conn, goal_type)
-    if tpl is None:
+    if tpl is None and not allow_missing_template:
         raise ValueError(f"no template for goal_type: {goal_type}")
     now = _now()
+    template_id = tpl["id"] if tpl is not None else None
     with conn:
         pid = conn.execute(
             "INSERT INTO projects(name,board_id,goal_type,status,template_id,created_at,updated_at)"
             " VALUES (?,?,?, 'active', ?,?,?)",
-            (name, board_id, goal_type, tpl["id"], now, now)).lastrowid
-        for item in template_items(conn, tpl["id"]):
-            conn.execute(
-                "INSERT INTO project_checklist(project_id,template_item_id,status) VALUES (?,?, 'todo')",
-                (pid, item["id"]))
+            (name, board_id, goal_type, template_id, now, now)).lastrowid
+        if tpl is not None:
+            for item in template_items(conn, tpl["id"]):
+                conn.execute(
+                    "INSERT INTO project_checklist(project_id,template_item_id,status) "
+                    "VALUES (?,?, 'todo')", (pid, item["id"]))
     return pid
 
 

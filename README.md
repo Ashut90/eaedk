@@ -36,7 +36,8 @@ python3 -m eaedk.cli eval run          # -> PASSED 6/6
 ```bash
 eaedk board add --interactive          # guided onboarding with live fitment + VTOR checks
 eaedk board show WIZnet-W5500-EVB-Pico
-eaedk project new picoboot --board WIZnet-W5500-EVB-Pico --goal bootloader
+eaedk project init                     # guided: name, board, goal -> auto-template + assess
+eaedk project new picoboot --board WIZnet-W5500-EVB-Pico --goal bootloader  # non-interactive
 eaedk input set picoboot estimated_image_size 262144 --confidence HIGH
 eaedk input set picoboot vector_table_addr 0x10000100 --confidence HIGH
 eaedk input set picoboot bl_region '{"base":268435456,"size":4096}' --confidence HIGH

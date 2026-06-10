@@ -151,6 +151,13 @@ def cmd_project_new(args):
     print(f"created project {args.name!r} (id={pid}, goal={args.goal}, board={args.board})")
 
 
+def cmd_project_init(args):
+    conn = _conn(args)
+    from .project_init import run_project_init
+    name = run_project_init(conn, input, print)
+    sys.exit(0 if name else 1)
+
+
 def cmd_project_list(args):
     conn = _conn(args)
     rows = conn.execute(
@@ -459,6 +466,7 @@ def build_parser() -> argparse.ArgumentParser:
     ba.add_argument("--uri"); ba.set_defaults(func=cmd_board_add)
 
     pr = sub.add_parser("project").add_subparsers(dest="sub", required=True)
+    pr.add_parser("init").set_defaults(func=cmd_project_init)
     pn = pr.add_parser("new"); pn.add_argument("name"); pn.add_argument("--board")
     pn.add_argument("--goal", required=True); pn.set_defaults(func=cmd_project_new)
     pr.add_parser("list").set_defaults(func=cmd_project_list)
