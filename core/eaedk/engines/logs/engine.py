@@ -77,7 +77,9 @@ class LogAnalysisResult:
                 L.append(f"    cause: {m.cause}")
                 L.append(f"    fix:   {m.fix}")
         else:
-            L.append("- No known signature matched.")
+            # Never silent: if the LLM wasn't consulted, point the engineer at it.
+            hint = "" if self.triage is not None else " Run with --llm for triage."
+            L.append(f"- No known signature matched.{hint}")
         if self.triage is not None:
             L += ["", "## LLM Triage (degraded fallback)"]
             t = self.triage

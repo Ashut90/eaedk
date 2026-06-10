@@ -22,7 +22,7 @@ def _drive(conn, answers):
 
 def test_init_uboot_shows_blockers(tmp_path):
     conn = _seeded(tmp_path)
-    name, out = _drive(conn, ["bringup", "STM32MP157", "2"])   # goal 2 = uboot
+    name, out = _drive(conn, ["bringup", "STM32MP157", "3"])   # goal 3 = uboot
     assert name == "bringup"
     p = repo.get_project(conn, "bringup")
     assert p["goal_type"] == "uboot" and p["template_id"] is not None
@@ -34,7 +34,7 @@ def test_init_uboot_shows_blockers(tmp_path):
 
 def test_init_bootloader_clean_no_blockers(tmp_path):
     conn = _seeded(tmp_path)
-    name, out = _drive(conn, ["bl", "Nucleo-F411RE", "1"])     # goal 1 = bootloader
+    name, out = _drive(conn, ["bl", "Nucleo-F411RE", "2"])     # goal 2 = bootloader
     assert name == "bl"
     assert "Initial assessment" in out
     assert "YOU HAVE BLOCKERS" not in out                       # nothing engaged yet
@@ -42,8 +42,8 @@ def test_init_bootloader_clean_no_blockers(tmp_path):
 
 def test_init_custom_goal_is_templateless(tmp_path):
     conn = _seeded(tmp_path)
-    # custom is the last menu option (after 5 templates) -> index 6, then an identifier
-    name, out = _drive(conn, ["c1", "Nucleo-F411RE", "6", "secure_enclave_bringup"])
+    # custom is the last menu option (after 6 templates) -> index 7, then an identifier
+    name, out = _drive(conn, ["c1", "Nucleo-F411RE", "7", "secure_enclave_bringup"])
     assert name == "c1"
     p = repo.get_project(conn, "c1")
     assert p["goal_type"] == "secure_enclave_bringup"

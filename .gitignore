@@ -31,3 +31,6 @@ env/
 
 # asciinema recordings (hosted on asciinema.org; keep the repo lean)
 *.cast
+
+# Wokwi dogfood scratch (real-firmware build experiment; not part of the product)
+wokwi-demo/

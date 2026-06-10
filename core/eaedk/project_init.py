@@ -17,13 +17,14 @@ Out = Callable[[str], None]
 
 # Friendly labels for the goal types that have templates; "custom" is appended.
 GOAL_LABELS = {
+    "bare_metal_app": "Bare-metal application (blink / UART) — start here",
     "bootloader": "Bare-metal bootloader",
     "uboot": "U-Boot bring-up",
     "linux": "Linux bring-up",
     "ota": "Fail-safe OTA update",
     "driver": "Linux device driver",
 }
-_GOAL_ORDER = ["bootloader", "uboot", "linux", "ota", "driver"]
+_GOAL_ORDER = ["bare_metal_app", "bootloader", "uboot", "linux", "ota", "driver"]
 
 
 def _select_board(ask: Ask, out: Out, boards) -> str | None:

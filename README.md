@@ -78,7 +78,7 @@ python3 -m pip install pyyaml          # the only runtime dependency
 export PYTHONPATH=core                 # or: pip install -e .
 
 python3 -m eaedk.cli db init           # apply migrations (single local SQLite file)
-python3 -m eaedk.cli db seed           # 5 templates, 9 boards, risk rules, 7 log signatures
+python3 -m eaedk.cli db seed           # 6 templates, 9 boards, risk rules, 11 log signatures
 python3 -m eaedk.cli eval run          # -> PASSED 11/11 (deterministic golden cases)
 
 # Optional LLM layer (off by default):
@@ -142,11 +142,14 @@ demo.sh               end-to-end STM32MP157 DDR demo
 
 ## Status
 
-MVP through V1 complete and green: **67 pytests, eval 11/11.** Tags `v0.1.0` → `v1.2.0`.
+MVP through V1 complete and green: **73 pytests, eval 11/11.** Tags `v0.1.0` → `v1.3.0`.
 Deterministic core (validation, risk, signatures, **toolchain**), unified truth layer, offline
 LLM with post-filter, project-aware triage with write-back, the full interactive onboarding
-chain, a feasibility-gated **output engine** that exports real build artifacts, and **datasheet
-ingestion** that extracts cited fact candidates from PDFs (human-confirmed before commit).
+chain, a feasibility-gated **output engine** that exports real build artifacts, **datasheet
+ingestion** that extracts cited fact candidates from PDFs, and a **mentor layer** (v1.3.0) —
+MCU crash signatures (Cortex-M HardFault, ESP32 Guru Meditation), arch-default toolchain teach
+for any board, and a beginner `bare_metal_app` template. The mentor layer is evidence-backed by
+a real-hardware dogfood ([docs/10-dogfood-findings.md](docs/10-dogfood-findings.md)).
 
 ```bash
 PYTHONPATH=core python3 -m pytest -q

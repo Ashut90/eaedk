@@ -42,3 +42,29 @@
   cause: "Secure/verified boot rejected the image — signature or hash verification failed."
   fix: "Confirm the signing key matches the device public key/eFuse and that the image was signed for this boot stage (SPL/U-Boot/FIT)."
   severity: HIGH
+
+# --- Bare-metal / MCU crashes (format: mcu) — the beginner's real failures ---
+
+- format: mcu
+  pattern_regex: "Guru Meditation.*(StoreProhibited|LoadProhibited)|EXCVADDR\\s*:\\s*0x0+\\b"
+  cause: "ESP32 access fault (EXCCAUSE 0x1c/0x1d) — the program read or wrote an invalid address. EXCVADDR is the offending address; 0x00000000 means a null or uninitialised pointer."
+  fix: "Find the faulting PC in the Backtrace (decode with the ESP-IDF Exception Decoder / addr2line). Look for a null, uninitialised, or freed pointer near that line."
+  severity: HIGH
+
+- format: mcu
+  pattern_regex: "Guru Meditation Error|panic'ed|abort\\(\\) was called|CORRUPT HEAP"
+  cause: "ESP32 panic — an unhandled exception or failed assertion stopped the core (it then reboots)."
+  fix: "Read the exception type on the Guru Meditation line and decode the Backtrace for symbol names; enable core-dump or the Exception Decoder."
+  severity: HIGH
+
+- format: mcu
+  pattern_regex: "HardFault|Hard Fault|HFSR\\s*[:=]|forced exception"
+  cause: "Cortex-M HardFault — a fault escalated to the HardFault handler (HFSR.FORCED). The CPU hit something it could not handle."
+  fix: "Decode CFSR to find the underlying fault. Common causes: null/bad pointer, unaligned access, stack overflow, or a call through a corrupt function pointer. Inspect the stacked PC/LR in the fault dump."
+  severity: HIGH
+
+- format: mcu
+  pattern_regex: "CFSR\\s*[:=]|UsageFault|BusFault|MemManage|IACCVIOL|DACCVIOL|UNALIGNED|UNDEFINSTR|INVSTATE"
+  cause: "Cortex-M configurable fault (CFSR) — a specific usage/bus/memory-management fault bit was set."
+  fix: "Read CFSR bits: IACCVIOL/DACCVIOL = bad instruction/data access, UNALIGNED = unaligned access, UNDEFINSTR = bad/corrupt instruction or function pointer, STKERR/MSTKERR = stack overflow on exception entry."
+  severity: HIGH

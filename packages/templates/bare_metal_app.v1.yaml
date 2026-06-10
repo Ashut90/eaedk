@@ -1,0 +1,45 @@
+key: bare_metal_app
+name: Bare-Metal Application
+version: 1
+goal_type: bare_metal_app
+items:
+  - key: peripheral_confirmed
+    text: "Target peripheral(s) confirmed (LED, UART, etc.)"
+    category: hardware
+    required_inputs: []
+    validation_rules: []
+  - key: vector_table_placement
+    text: "Vector table at the start of flash (VTOR), correctly aligned"
+    category: memory_layout
+    required_inputs: [vector_table_addr]
+    validation_rules: [VECTOR_TABLE_PLACEMENT]
+  - key: flash_fits
+    text: "Firmware image fits in flash"
+    category: memory_layout
+    required_inputs: [estimated_image_size]
+    validation_rules: [FLASH_CAPACITY]
+  - key: ram_budget
+    text: "Stack + heap + statics fit in RAM"
+    category: memory_layout
+    required_inputs: [stack_size, heap_size, static_size]
+    validation_rules: [RAM_BUDGET]
+  - key: clock_init
+    text: "Clock initialization (HSI/HSE/PLL) before peripherals"
+    category: bringup
+    required_inputs: []
+    validation_rules: []
+  - key: console_uart
+    text: "Debug console UART configured for printf/logging"
+    category: bringup
+    required_inputs: [console_uart]
+    validation_rules: [CONSOLE_UART_DEFINED]
+  - key: main_loop
+    text: "Main application loop / superloop defined"
+    category: design
+    required_inputs: []
+    validation_rules: []
+  - key: build_and_flash
+    text: "Toolchain + flash method confirmed (run `eaedk toolchain validate`)"
+    category: toolchain
+    required_inputs: []
+    validation_rules: []

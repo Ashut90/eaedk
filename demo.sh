@@ -28,7 +28,7 @@ run db init
 run db seed
 
 say "2) Start a U-Boot bring-up project on the STM32MP157 (guided)."
-printf '%s\n' "mp157-ddr" "STM32MP157" "2" | eaedk project init
+printf '%s\n' "mp157-ddr" "STM32MP157" "3" | eaedk project init   # goal 3 = U-Boot bring-up
 sleep "$PAUSE"
 
 say "   ^ Note the BLOCKERS banner: DDR_TIMING_VERIFIED is UNKNOWN — flagged at minute zero."

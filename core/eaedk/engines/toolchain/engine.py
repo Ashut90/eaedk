@@ -133,15 +133,60 @@ def validate_toolchain(detected: list[dict], reqs: list[dict], board_arch: str,
     return results
 
 
+# 64-bit ARM cores (ARMv8-A) need aarch64; 32-bit ARM Cortex-A use arm-linux.
+_AARCH64 = ("a53", "a55", "a57", "a72", "a73", "a76", "a78", "a35", "x1")
+
+
+def arch_default_reqs(arch: str) -> list[dict[str, Any]]:
+    """Infer a sensible toolchain profile from the SoC architecture, so a board onboarded by
+    an engineer (with no seeded profile) still gets toolchain validation + the teach layer."""
+    a = (arch or "").lower()
+    note = "(inferred from architecture — confirm against your SDK)"
+    if a.startswith("arm-cortex-m"):
+        return [
+            {"kind": "compiler", "name": "arm-none-eabi-gcc", "target_triple": "arm-none-eabi",
+             "min_version": None, "severity": "HIGH",
+             "why": f"Cortex-M is bare-metal ARM (Thumb); the host gcc cannot build firmware "
+                    f"for this MCU. {note}"},
+            {"kind": "build_system", "name": "cmake", "target_triple": None, "min_version": None,
+             "severity": "MEDIUM", "why": f"Most Cortex-M SDKs build with CMake. {note}"}]
+    if a.startswith("arm-cortex-a"):
+        is64 = any(c in a for c in _AARCH64)
+        triple = "aarch64-linux-gnu" if is64 else "arm-linux-gnueabihf"
+        name = ("aarch64-linux-gnu-gcc" if is64 else "arm-linux-gnueabihf-gcc")
+        bits = "64-bit (ARMv8-A)" if is64 else "32-bit (ARMv7-A)"
+        return [
+            {"kind": "compiler", "name": name, "target_triple": triple, "min_version": None,
+             "severity": "HIGH",
+             "why": f"{bits} ARM Linux SoC; needs the matching cross-compiler, not host gcc. {note}"},
+            {"kind": "build_system", "name": "make", "target_triple": None, "min_version": None,
+             "severity": "MEDIUM", "why": f"U-Boot and the kernel build with make. {note}"}]
+    if a.startswith("xtensa"):
+        return [
+            {"kind": "compiler", "name": "xtensa-esp32-elf-gcc", "target_triple": "xtensa-esp32-elf",
+             "min_version": None, "severity": "HIGH",
+             "why": f"Xtensa core; only the ESP-IDF toolchain can target it. {note}"}]
+    if a.startswith("riscv"):
+        return [
+            {"kind": "compiler", "name": "riscv64-unknown-elf-gcc",
+             "target_triple": "riscv64-unknown-elf", "min_version": None, "severity": "HIGH",
+             "why": f"RISC-V core; needs a riscv cross-compiler. {note}"}]
+    return []
+
+
 def toolchain_checks(conn, board_name: str | None, soc: dict | None,
                      goal_type: str) -> list[ValidationResult]:
-    """DB-backed wrapper: load detected components + the board's required profile, validate."""
+    """DB-backed wrapper: load detected components + the board's required profile, validate.
+    If the board has no seeded profile, fall back to an arch-default profile so the teach
+    layer still fires for engineer-onboarded boards."""
     from ... import repo
     if not board_name:
         return []
+    board_arch = soc["arch"] if soc else ""
     reqs = [dict(r) for r in repo.load_board_toolchain_reqs(conn, board_name)]
+    if not reqs:
+        reqs = arch_default_reqs(board_arch)
     if not reqs:
         return []
     detected = [dict(r) for r in repo.load_toolchain(conn)]
-    board_arch = soc["arch"] if soc else ""
     return validate_toolchain(detected, reqs, board_arch, goal_type, detection_ran=bool(detected))

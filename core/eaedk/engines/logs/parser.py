@@ -13,6 +13,10 @@ _DMESG_TS = re.compile(r"^\[\s*\d+\.\d+\]")
 _UBOOT_HINTS = re.compile(
     r"^U-Boot(\s+SPL)?\s+20\d\d|Hit any key to stop autoboot|"
     r"^=>\s|Loading Environment|^Net:\s|^DRAM:\s", re.MULTILINE)
+# Bare-metal / RTOS MCU output: ESP32 boot ROM + panics, and Cortex-M fault dumps.
+_MCU_HINTS = re.compile(
+    r"Guru Meditation|HardFault|Hard Fault|HFSR|CFSR|EXCVADDR|EXCCAUSE|"
+    r"rst:0x|^ets\s|SPI_FAST_FLASH_BOOT|panic'ed", re.IGNORECASE | re.MULTILINE)
 
 # Words that mark the failure point ("crash vector") to centre the context window on.
 _CRASH = re.compile(
@@ -32,14 +36,17 @@ class SignatureMatch:
 
 
 def detect_format(text: str) -> str:
-    """Return 'dmesg', 'uboot', or 'unknown' from line heuristics."""
+    """Return 'dmesg', 'uboot', 'mcu', or 'unknown' from line heuristics."""
     lines = text.splitlines()
     dmesg = sum(1 for ln in lines if _DMESG_TS.match(ln))
     uboot = len(_UBOOT_HINTS.findall(text))
-    if dmesg >= 3 and dmesg >= uboot:
+    mcu = len(_MCU_HINTS.findall(text))
+    if dmesg >= 3 and dmesg >= uboot and dmesg >= mcu:
         return "dmesg"
-    if uboot >= 1 and uboot > dmesg:
+    if uboot >= 1 and uboot > dmesg and uboot >= mcu:
         return "uboot"
+    if mcu >= 1:                       # bare-metal MCU / ESP32 — the beginner's world
+        return "mcu"
     if dmesg > 0:
         return "dmesg"
     return "unknown"

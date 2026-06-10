@@ -134,7 +134,7 @@ def _vt_align(ctx: dict[str, Any]) -> int:
     return 256
 
 
-@rule("VECTOR_TABLE_PLACEMENT", ("bootloader",), ("vector_table_addr",), "HIGH")
+@rule("VECTOR_TABLE_PLACEMENT", ("bootloader", "bare_metal_app"), ("vector_table_addr",), "HIGH")
 def vector_table_placement(ctx):
     (addr, base, size), missing = _ints(
         ctx, "vector_table_addr", "board.flash_base", "board.flash_bytes")
@@ -315,7 +315,7 @@ def boot_flow_consistency(ctx):
                             "bootloader/kernel/init addresses are distinct", "HIGH", used)
 
 
-@rule("CONSOLE_UART_DEFINED", ("uboot", "linux"), ("console_uart",), "MEDIUM")
+@rule("CONSOLE_UART_DEFINED", ("uboot", "linux", "bare_metal_app"), ("console_uart",), "MEDIUM")
 def console_uart_defined(ctx):
     cu = ctx.get("console_uart")
     used = {"console_uart": cu, "stdout_path": ctx.get("stdout_path")}

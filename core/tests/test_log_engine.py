@@ -85,6 +85,38 @@ def test_secure_boot_signature_match(tmp_path):
     assert res.matches and any("signature" in m.cause.lower() for m in res.matches)
 
 
+def test_mcu_format_and_esp32_guru_meditation(tmp_path):
+    conn = _seeded(tmp_path)
+    log = _write(tmp_path, "esp.log",
+                 "ets Jul 29 2019\nrst:0x1 (POWERON_RESET)\nEAEDK boot: ESP32 alive\n"
+                 "Guru Meditation Error: Core 1 panic'ed (StoreProhibited). Exception was unhandled.\n"
+                 "EXCVADDR: 0x00000000  EXCCAUSE: 0x0000001d\n")
+    res = analyze_log(conn, log)
+    assert res.format == "mcu"
+    esp = next(m for m in res.matches if "ESP32 access fault" in m.cause)
+    assert "null" in esp.cause.lower() and esp.fix          # teach: what it means + what to do
+    assert all(m.severity == "HIGH" for m in res.matches)
+
+
+def test_cortex_m_hardfault_signature(tmp_path):
+    conn = _seeded(tmp_path)
+    log = _write(tmp_path, "hf.log",
+                 "app: running\n[FAULT] HardFault_Handler: forced exception\n"
+                 "HFSR=0x40000000 CFSR=0x00000082\n")
+    res = analyze_log(conn, log)
+    assert res.format == "mcu"
+    assert any("HardFault" in m.cause for m in res.matches)
+    assert any("CFSR" in m.fix for m in res.matches)        # teach explains what to check
+
+
+def test_no_signature_match_suggests_llm_not_silent(tmp_path):
+    conn = _seeded(tmp_path)
+    log = _write(tmp_path, "g.log", "totally unrecognizable gibberish\nno markers here\n")
+    res = analyze_log(conn, log)
+    assert not res.matches
+    assert "Run with --llm for triage." in res.to_markdown()
+
+
 class _FakeProvider:
     model = "fake"
 

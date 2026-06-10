@@ -139,6 +139,32 @@ def test_assess_project_medium_issue_does_not_block(tmp_path):
     assert ft["status"] == "FAIL" and ft["gating"] is False
 
 
+def test_user_board_inherits_arch_default_toolchain_profile(tmp_path):
+    # A board with NO seeded toolchain profile must still get checks (so teach fires).
+    from eaedk.engines.toolchain.engine import arch_default_reqs, toolchain_checks
+    assert any(r["name"] == "arm-none-eabi-gcc" for r in arch_default_reqs("arm-cortex-m4"))
+    assert any(r["name"] == "aarch64-linux-gnu-gcc" for r in arch_default_reqs("arm-cortex-a53"))
+    assert any(r["name"] == "arm-linux-gnueabihf-gcc" for r in arch_default_reqs("arm-cortex-a7"))
+    assert any(r["name"] == "xtensa-esp32-elf-gcc" for r in arch_default_reqs("xtensa-lx6"))
+
+    conn = connect(str(tmp_path / "t.db"))
+    migrate(conn)
+    seed_all(conn, force=True)
+    # onboard a board with no toolchain profile (no board_toolchain_reqs rows)
+    sid = repo.get_or_create_soc(conn, "MyM4", "Acme", "arm-cortex-m4")
+    with conn:
+        src = repo.create_manual_source(conn, "manual")
+        repo.create_board(conn, soc_id=sid, name="MyBoard", flash_base=0x08000000,
+                          flash_bytes=262144, ram_base=0x20000000, ram_bytes=65536,
+                          source_id=src, confidence="HIGH")
+        repo.replace_toolchain(conn, [
+            {"kind": "compiler", "name": "gcc", "version": "13", "target_triple": "x86_64-linux-gnu"}])
+    checks = toolchain_checks(conn, "MyBoard", {"arch": "arm-cortex-m4"}, "bare_metal_app")
+    # inherited the arm-none-eabi requirement -> wrong host triple is flagged with teach
+    assert any(c.check == "TOOLCHAIN_TARGET_TRIPLE" and c.status == "FAIL" and c.teach
+               for c in checks)
+
+
 def test_assess_project_clean_when_toolchain_matches(tmp_path):
     conn, p = _project(tmp_path)
     repo.replace_toolchain(conn, [
