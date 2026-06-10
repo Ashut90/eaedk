@@ -31,6 +31,22 @@ EAEDK is built around two deterministic gates the LLM cannot bypass:
 
 See **[docs/architecture.md](docs/architecture.md)** for the trust-boundary diagram.
 
+## The mentor layer (teach, not just flag)
+
+A status flag tells an expert what's wrong; it leaves a beginner stuck. So every toolchain
+`FAIL`/`UNKNOWN` carries a one-line **`teach`**: *why it matters* and *what to do*. It shows in
+both `toolchain validate` and `eaedk validate`:
+
+```
+FAIL [HIGH] TOOLCHAIN_TARGET_TRIPLE: detected compiler target(s) ['x86_64'] do not match arm
+   ↳ Cortex-M is bare-metal ARM (Thumb); the host gcc cannot produce firmware for this MCU.
+     Fix: apt install gcc-arm-none-eabi.
+```
+
+This is the first step toward the beginner-mentor vision: the tool doesn't just gate you, it
+teaches you past the gate. The explanation is curated data (`board_toolchain_reqs.why`), not
+LLM-generated — so it's trustworthy and offline.
+
 ## The bring-up chain
 
 A complete, auditable workflow — every step writes through one fact layer with structured
@@ -109,6 +125,7 @@ core/eaedk/
   engines/
     validation/       18 pure-function rules (the trust core)
     risk/             data-driven rules over a sandboxed mini-DSL (no eval())
+    toolchain/        host detection + build-environment validation (with teach layer)
     logs/             format detection, signature matching, async triage, write-back
   llm/                gateway (Ollama) + post-filter + constrained prompts
   orchestrator/       deterministic-first assembly of the fixed response schema
