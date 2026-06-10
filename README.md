@@ -93,6 +93,8 @@ ollama pull qwen2.5-coder:3b
 
 ```bash
 eaedk board add --interactive          # guided onboarding: live fitment + VTOR checks + cited facts
+eaedk ingest --file ds.pdf --board <b> # extract cited fact candidates from a datasheet PDF
+eaedk ingest --board <b> --review      # review candidates; --confirm <id> commits (human-in-the-loop)
 eaedk project init                     # guided: name, board, goal -> auto-template + immediate assess
 eaedk toolchain detect                 # inventory the host build environment
 eaedk toolchain validate --project <p> # cross-check tools vs board arch + goal (with fixes)
@@ -127,6 +129,7 @@ core/eaedk/
     validation/       18 pure-function rules (the trust core)
     risk/             data-driven rules over a sandboxed mini-DSL (no eval())
     toolchain/        host detection + build-environment validation (with teach layer)
+    ingest/           datasheet PDF -> cited fact candidates (PyMuPDF, optional); review/confirm
     logs/             format detection, signature matching, async triage, write-back
   llm/                gateway (Ollama) + post-filter + constrained prompts
   orchestrator/       deterministic-first assembly of the fixed response schema
@@ -139,10 +142,11 @@ demo.sh               end-to-end STM32MP157 DDR demo
 
 ## Status
 
-MVP through V1 complete and green: **62 pytests, eval 11/11.** Tags `v0.1.0` → `v1.1.0`.
+MVP through V1 complete and green: **67 pytests, eval 11/11.** Tags `v0.1.0` → `v1.2.0`.
 Deterministic core (validation, risk, signatures, **toolchain**), unified truth layer, offline
 LLM with post-filter, project-aware triage with write-back, the full interactive onboarding
-chain, and a feasibility-gated **output engine** that exports real build artifacts.
+chain, a feasibility-gated **output engine** that exports real build artifacts, and **datasheet
+ingestion** that extracts cited fact candidates from PDFs (human-confirmed before commit).
 
 ```bash
 PYTHONPATH=core python3 -m pytest -q

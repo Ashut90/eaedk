@@ -468,6 +468,55 @@ def cmd_toolchain_validate(args):
             print(f"          ↳ {c.teach}")
 
 
+def cmd_ingest(args):
+    conn = _conn(args)
+    from .engines.ingest import (ingest_datasheet, confirm_candidate, reject_candidate)
+    if args.confirm is not None:
+        outcome = confirm_candidate(conn, args.confirm, confidence=args.confidence)
+        if outcome == "not_found":
+            print(f"error: no candidate #{args.confirm}", file=sys.stderr); sys.exit(2)
+        if outcome == "already":
+            print(f"candidate #{args.confirm} is not pending."); return
+        print(f"confirmed candidate #{args.confirm} → committed to the knowledge base (DATASHEET).")
+        return
+    if args.reject is not None:
+        outcome = reject_candidate(conn, args.reject)
+        if outcome == "not_found":
+            print(f"error: no candidate #{args.reject}", file=sys.stderr); sys.exit(2)
+        print(f"rejected candidate #{args.reject}."); return
+    if args.review:
+        if not args.board:
+            print("error: --review needs --board", file=sys.stderr); sys.exit(2)
+        rows = repo.list_fact_candidates(conn, args.board, status="pending")
+        if args.json:
+            print(json.dumps([dict(r) for r in rows], indent=2)); return
+        if not rows:
+            print(f"No pending candidates for {args.board}."); return
+        print(f"Pending datasheet candidates for {args.board} (confirm/reject by id):")
+        for r in rows:
+            cite = f"p.{r['page']}" + (f" §{r['section']}" if r["section"] else "")
+            print(f"  #{r['id']} [{r['confidence']}/{r['method']}] {r['domain']}.{r['fact_key']}"
+                  f" = {r['fact_value']}   ({cite})")
+            if r["snippet"]:
+                print(f"        “{r['snippet']}”")
+        return
+    # default action: ingest a PDF
+    if not args.file or not args.board:
+        print("error: ingest needs --file <pdf> --board <name> (or --review/--confirm/--reject)",
+              file=sys.stderr); sys.exit(2)
+    try:
+        res = ingest_datasheet(conn, args.file, args.board, use_llm=args.llm)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr); sys.exit(2)
+    except Exception as e:  # PdfUnavailable etc.
+        print(f"error: {e}", file=sys.stderr); sys.exit(2)
+    counts = ", ".join(f"{k}={v}" for k, v in sorted(res.counts.items())) or "none"
+    print(f"staged {len(res.candidates)} candidate(s) from {args.file} for {args.board} "
+          f"({counts}). Review with `eaedk ingest --board {args.board} --review`.")
+    for c in res.candidates:
+        print(f"  #{c['id']} [{c['confidence']}/{c['method']}] {c['key']} = {c['value']} (p.{c['page']})")
+
+
 def cmd_export(args):
     conn = _conn(args)
     p = _require_project(conn, args.name)
@@ -571,6 +620,13 @@ def build_parser() -> argparse.ArgumentParser:
     ak.set_defaults(func=cmd_ask)
     ex = sub.add_parser("explain"); ex.add_argument("name"); ex.add_argument("--rule", required=True)
     ex.set_defaults(func=cmd_explain)
+
+    ing = sub.add_parser("ingest")
+    ing.add_argument("--file"); ing.add_argument("--board")
+    ing.add_argument("--review", action="store_true")
+    ing.add_argument("--confirm", type=int); ing.add_argument("--reject", type=int)
+    ing.add_argument("--confidence", choices=["HIGH", "MEDIUM", "LOW"])
+    ing.set_defaults(func=cmd_ingest)
 
     ex = sub.add_parser("export"); ex.add_argument("name"); ex.add_argument("--out")
     ex.add_argument("--force", action="store_true")

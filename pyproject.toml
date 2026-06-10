@@ -11,6 +11,11 @@ dependencies = [
     "PyYAML>=6.0",
 ]
 
+[project.optional-dependencies]
+# Datasheet ingestion (`eaedk ingest`) needs a PDF reader. Optional and lazily imported —
+# the rest of EAEDK runs on PyYAML alone.
+ingest = ["pymupdf>=1.23"]
+
 [project.scripts]
 eaedk = "eaedk.cli:main"
 

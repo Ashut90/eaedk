@@ -34,24 +34,26 @@ def record_fact(conn: sqlite3.Connection, *, board_id: int, domain: str, fact_ke
                 fact_value: Any, source_type: str, confidence: str,
                 kind: str | None = None, citation_section: str | None = None,
                 citation_page: int | None = None, snippet: str | None = None,
-                verified_by_human: bool | None = None) -> int:
+                verified_by_human: bool | None = None, source_id: int | None = None) -> int:
     """Canonical write-through for one engineering fact.
 
-    Single entry point for the onboarding wizard and future datasheet/SDK parsers. Creates
-    the provenance chain (source -> citation) consistent with ``source_type`` and inserts a
+    Single entry point for the onboarding wizard and the datasheet ingester. Creates the
+    provenance chain (source -> citation) consistent with ``source_type`` and inserts a
     `facts` row carrying the new ``domain``/``source_type`` dimensions. Does NOT open its own
-    transaction — the caller controls it.
+    transaction — the caller controls it. Pass ``source_id`` to attach the citation to an
+    existing source (e.g. one datasheet shared by many confirmed facts).
     """
     if source_type not in _SOURCE_TYPE_TO_DOC:
         raise ValueError(f"unknown source_type: {source_type}")
     now = _now()
     doc_type = _SOURCE_TYPE_TO_DOC[source_type]
-    src_id = conn.execute(
-        "INSERT INTO sources(type,title,uri,hash,created_at) VALUES (?,?,NULL,NULL,?)",
-        (doc_type, f"{source_type}: {fact_key}", now)).lastrowid
+    if source_id is None:
+        source_id = conn.execute(
+            "INSERT INTO sources(type,title,uri,hash,created_at) VALUES (?,?,NULL,NULL,?)",
+            (doc_type, f"{source_type}: {fact_key}", now)).lastrowid
     cit_id = conn.execute(
         "INSERT INTO citations(source_id,page,section,bbox_json,snippet) VALUES (?,?,?,NULL,?)",
-        (src_id, citation_page, citation_section or "engineering fact",
+        (source_id, citation_page, citation_section or "engineering fact",
          snippet if snippet is not None else str(fact_value))).lastrowid
     if verified_by_human is None:
         verified_by_human = confidence == "HIGH"
@@ -128,6 +130,44 @@ def list_boards(conn: sqlite3.Connection, query: str | None = None) -> list[sqli
     return conn.execute(
         "SELECT b.name, s.name AS soc, s.arch FROM boards b JOIN socs s ON s.id=b.soc_id "
         "ORDER BY b.name").fetchall()
+
+
+# --- datasheet ingestion (fact candidates) ---------------------------------
+
+def create_datasheet_source(conn: sqlite3.Connection, title: str, uri: str | None,
+                            file_hash: str | None) -> int:
+    return conn.execute(
+        "INSERT INTO sources(type,title,uri,hash,created_at) VALUES ('datasheet',?,?,?,?)",
+        (title, uri, file_hash, _now())).lastrowid
+
+
+def add_fact_candidate(conn: sqlite3.Connection, *, board_id: int, source_id: int | None,
+                       domain: str, fact_key: str, fact_value: str, method: str,
+                       confidence: str, page: int | None = None, section: str | None = None,
+                       snippet: str | None = None, kind: str | None = None) -> int:
+    return conn.execute(
+        "INSERT INTO fact_candidates(board_id,source_id,domain,kind,fact_key,fact_value,"
+        "method,confidence,page,section,snippet,status,created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?, 'pending', ?)",
+        (board_id, source_id, domain, kind, fact_key, str(fact_value), method, confidence,
+         page, section, snippet, _now())).lastrowid
+
+
+def list_fact_candidates(conn: sqlite3.Connection, board_name: str,
+                         status: str = "pending") -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT c.* FROM fact_candidates c JOIN boards b ON b.id = c.board_id "
+        "WHERE b.name = ? AND c.status = ? ORDER BY c.confidence, c.domain, c.fact_key",
+        (board_name, status)).fetchall()
+
+
+def get_fact_candidate(conn: sqlite3.Connection, candidate_id: int) -> sqlite3.Row | None:
+    return conn.execute("SELECT * FROM fact_candidates WHERE id=?", (candidate_id,)).fetchone()
+
+
+def set_candidate_status(conn: sqlite3.Connection, candidate_id: int, status: str) -> None:
+    with conn:
+        conn.execute("UPDATE fact_candidates SET status=? WHERE id=?", (status, candidate_id))
 
 
 # --- toolchain -------------------------------------------------------------
