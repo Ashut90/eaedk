@@ -10,12 +10,12 @@ deterministic rule functions (`PARTITION_LAYOUT_FITS`, `PARTITION_NO_OVERLAP`,
 """
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from . import repo
 from .context import build_context
 from .engines.validation.rules import RULES, FAIL, UNKNOWN
 
@@ -179,13 +179,10 @@ def _summary(draft: BoardDraft, out: Out) -> None:
 def _commit(conn, draft: BoardDraft) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with conn:
+        # Board identity keeps its own (typed) row + provenance source.
         src = conn.execute(
             "INSERT INTO sources(type,title,uri,hash,created_at) VALUES ('manual',?,NULL,NULL,?)",
             (f"interactive onboarding: {draft.name}", now)).lastrowid
-        cit = conn.execute(
-            "INSERT INTO citations(source_id,page,section,bbox_json,snippet) "
-            "VALUES (?,NULL,'interactive onboarding',NULL,?)",
-            (src, f"entered by engineer on {now}")).lastrowid
         # Multiple boards can share a SoC (socs.name is UNIQUE) — reuse if present.
         soc_name = draft.soc_name or draft.name
         existing = conn.execute("SELECT id FROM socs WHERE name=?", (soc_name,)).fetchone()
@@ -202,13 +199,14 @@ def _commit(conn, draft: BoardDraft) -> None:
             "VALUES (?,?,?,?,?,?,NULL,NULL,'internal_flash','[]',?,?)",
             (soc_id, draft.name, draft.flash_base, draft.flash_bytes, draft.ram_base,
              draft.ram_bytes, src, draft.confidence)).lastrowid
-        verified = 1 if draft.confidence == "HIGH" else 0
+        # Partitions normalize into the unified engineering-fact layer via record_fact().
         for p in draft.partitions:
-            conn.execute(
-                "INSERT INTO facts(board_id,kind,key,value,citation_id,confidence,"
-                "verified_by_human,created_at) VALUES (?,'partition',?,?,?,?,?,?)",
-                (board_id, p["role"], json.dumps({"base": p["base"], "size": p["size"]}),
-                 cit, draft.confidence, verified, now))
+            repo.record_fact(
+                conn, board_id=board_id, domain="MEMORY", kind="partition",
+                fact_key=p["role"], fact_value={"base": p["base"], "size": p["size"]},
+                source_type="USER_INPUT", confidence=draft.confidence,
+                citation_section="interactive onboarding",
+                snippet=f"{p['name']} entered by engineer on {now}")
 
 
 def run_wizard(conn, ask: Ask, out: Out, max_attempts: int = 5) -> str | None:

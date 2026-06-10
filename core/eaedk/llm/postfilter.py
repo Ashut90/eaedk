@@ -51,6 +51,13 @@ def _collect_ints(value: Any, out: set[int]) -> None:
         out.add(value)
         return
     if isinstance(value, str):
+        s = value.strip()
+        if s[:1] in "[{":  # a JSON-encoded region/partition stored as text
+            try:
+                _collect_ints(json.loads(s), out)
+                return
+            except json.JSONDecodeError:
+                pass
         iv = as_int(value)
         if iv is not None:
             out.add(iv)
@@ -74,16 +81,18 @@ def build_allowlist(conn: sqlite3.Connection, project: sqlite3.Row) -> Allowlist
                 v = board.get(k)
                 if isinstance(v, int):
                     nums.add(v)
-        # cited facts. For partition facts, also admit the ABSOLUTE address
+        # Cited facts read through the unified engineering_facts VIEW (provenance preserved
+        # via citation_id). For partition facts, also admit the ABSOLUTE address
         # (flash_base + offset) so verified slot boundaries the LLM cites aren't stripped.
         flash_base = board.get("flash_base") if board else None
         for row in conn.execute(
-            "SELECT f.kind, f.value FROM facts f JOIN boards b ON b.id=f.board_id "
-            "WHERE b.name=? AND f.citation_id IS NOT NULL", (board_name,)).fetchall():
-            _collect_ints(row["value"], nums)
+            "SELECT ef.kind, ef.fact_value FROM engineering_facts ef "
+            "JOIN boards b ON b.id = ef.board_id "
+            "WHERE b.name = ? AND ef.citation_id IS NOT NULL", (board_name,)).fetchall():
+            _collect_ints(row["fact_value"], nums)
             if row["kind"] == "partition" and isinstance(flash_base, int):
                 try:
-                    base = int(json.loads(row["value"]).get("base"))
+                    base = int(json.loads(row["fact_value"]).get("base"))
                     nums.add(flash_base + base)
                 except (ValueError, TypeError, AttributeError):
                     pass

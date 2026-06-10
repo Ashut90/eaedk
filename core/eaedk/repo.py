@@ -16,6 +16,55 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# --- engineering facts (canonical write-through) ---------------------------
+
+# Engineering source_type -> sources.type. SCHEMATIC has no dedicated sources.type yet, so
+# it links to a 'manual' source while the precise classifier lives on facts.source_type.
+_SOURCE_TYPE_TO_DOC = {
+    "USER_INPUT": "user", "DATASHEET": "datasheet", "TRM": "trm",
+    "SDK_DOC": "sdk_doc", "SCHEMATIC": "manual",
+}
+# Default fine `kind` per domain (kind retains its existing CHECK enum).
+_DOMAIN_TO_KIND = {
+    "MEMORY": "memmap", "PINMUX": "pinmux", "CLOCK": "clock", "TIMING": "timing",
+}
+
+
+def record_fact(conn: sqlite3.Connection, *, board_id: int, domain: str, fact_key: str,
+                fact_value: Any, source_type: str, confidence: str,
+                kind: str | None = None, citation_section: str | None = None,
+                citation_page: int | None = None, snippet: str | None = None,
+                verified_by_human: bool | None = None) -> int:
+    """Canonical write-through for one engineering fact.
+
+    Single entry point for the onboarding wizard and future datasheet/SDK parsers. Creates
+    the provenance chain (source -> citation) consistent with ``source_type`` and inserts a
+    `facts` row carrying the new ``domain``/``source_type`` dimensions. Does NOT open its own
+    transaction — the caller controls it.
+    """
+    if source_type not in _SOURCE_TYPE_TO_DOC:
+        raise ValueError(f"unknown source_type: {source_type}")
+    now = _now()
+    doc_type = _SOURCE_TYPE_TO_DOC[source_type]
+    src_id = conn.execute(
+        "INSERT INTO sources(type,title,uri,hash,created_at) VALUES (?,?,NULL,NULL,?)",
+        (doc_type, f"{source_type}: {fact_key}", now)).lastrowid
+    cit_id = conn.execute(
+        "INSERT INTO citations(source_id,page,section,bbox_json,snippet) VALUES (?,?,?,NULL,?)",
+        (src_id, citation_page, citation_section or "engineering fact",
+         snippet if snippet is not None else str(fact_value))).lastrowid
+    if verified_by_human is None:
+        verified_by_human = confidence == "HIGH"
+    value_str = (json.dumps(fact_value) if isinstance(fact_value, (list, dict))
+                 else str(fact_value))
+    return conn.execute(
+        "INSERT INTO facts(board_id,kind,domain,source_type,key,value,citation_id,"
+        "confidence,verified_by_human,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (board_id, kind or _DOMAIN_TO_KIND.get(domain, "memmap"), domain, source_type,
+         fact_key, value_str, cit_id, confidence, 1 if verified_by_human else 0, now)
+    ).lastrowid
+
+
 # --- boards ----------------------------------------------------------------
 
 def load_board(conn: sqlite3.Connection, name: str
