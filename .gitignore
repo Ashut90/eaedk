@@ -28,3 +28,6 @@ env/
 
 # Claude Code local config (not part of the project)
 .claude/
+
+# asciinema recordings (hosted on asciinema.org; keep the repo lean)
+*.cast

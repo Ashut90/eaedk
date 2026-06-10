@@ -47,6 +47,14 @@ is correlated against the project's *own* unverified gaps and triaged to a speci
 architectural assumption — then written back as a tracked risk **with zero manual correlation.**
 The LLM proposes; the deterministic layer decides and records.
 
+## Watch the 90-second demo
+
+[![asciicast](https://asciinema.org/a/Qn8aqCKKsNrOzE0R.svg)](https://asciinema.org/a/Qn8aqCKKsNrOzE0R)
+
+A vague U-Boot hang on an STM32MP157 → triaged to a specific unverified DDR timing → written
+back as a tracked risk → verified → resolved. Zero manual correlation; the LLM never asserts a
+hardware fact.
+
 ## Try it (offline)
 
 ```bash
@@ -62,8 +70,8 @@ ollama pull qwen2.5-coder:3b
 ./demo.sh                              # full STM32MP157 DDR triage, end to end
 ```
 
-`./demo.sh` runs the headline scenario: a U-Boot hang → DDR triage → write-back → resolve.
-Record it with `asciinema rec eaedk-demo.cast -c "DEMO_PAUSE=2 ./demo.sh"`.
+`./demo.sh` runs the headline scenario above end-to-end (re-record with
+`asciinema rec -c "DEMO_PAUSE=2 ./demo.sh"`).
 
 ## Commands
 
