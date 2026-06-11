@@ -50,6 +50,36 @@ _RULE_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Fix 6 (v1.7.0): a Cortex-M fault report carries the faulting address — turn it into a
+# concrete, runnable next step instead of "decode CFSR / inspect the stacked PC".
+_PC_RE = re.compile(r"\bPC[=:\s]+0x([0-9a-fA-F]{4,8})\b")
+_FLASH_ADDR_RE = re.compile(r"\b0x(0[0-9a-fA-F]{7})\b")     # fallback: a flash-range address
+_FAULT_WORDS = ("hardfault", "cfsr", "busfault", "usagefault", "memmanage", "cortex-m")
+
+
+def _sanitize_elf(project_name: str | None) -> str:
+    if not project_name:
+        return "build/<your-firmware>.elf"
+    safe = "".join(c if c.isalnum() else "_" for c in project_name)
+    return f"build/{safe}.elf"
+
+
+def crash_locate_hint(text: str, matches: list[SignatureMatch],
+                      project_name: str | None) -> str | None:
+    """Concrete next action for an MCU fault: addr2line on the faulting PC. None if there's no
+    fault match or no address to act on (degrade silently rather than guess)."""
+    fault = any(w in (m.cause + " " + m.line).lower() for m in matches for w in _FAULT_WORDS)
+    if not fault:
+        return None
+    m = _PC_RE.search(text) or _FLASH_ADDR_RE.search(text)
+    if not m:
+        return None
+    addr = "0x" + m.group(1)
+    elf = _sanitize_elf(project_name)
+    return (f"Find the crash location (the line of C it faulted on) with:\n"
+            f"    arm-none-eabi-addr2line -e {elf} {addr}")
+
+
 @dataclass
 class LogAnalysisResult:
     path: str
@@ -59,12 +89,14 @@ class LogAnalysisResult:
     triage: dict[str, Any] | None = None
     log_file_id: int | None = None
     write_backs: list[dict[str, Any]] = field(default_factory=list)
+    next_action: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "path": self.path, "format": self.format, "n_lines": self.n_lines,
             "matches": [vars(m) for m in self.matches], "triage": self.triage,
             "log_file_id": self.log_file_id, "write_backs": self.write_backs,
+            "next_action": self.next_action,
         }
 
     def to_markdown(self) -> str:
@@ -76,6 +108,8 @@ class LogAnalysisResult:
                 L.append(f"- [HIGH] {m.severity}  line {m.line_no}: \"{m.line}\"")
                 L.append(f"    cause: {m.cause}")
                 L.append(f"    fix:   {m.fix}")
+            if self.next_action:
+                L += ["", "## Next: find where it crashed", self.next_action]
         else:
             # Never silent: if the LLM wasn't consulted, point the engineer at it.
             hint = "" if self.triage is not None else " Run with --llm for triage."
@@ -321,8 +355,10 @@ async def analyze_log_async(conn: sqlite3.Connection, path: str,
         if project_aware and project is not None and triage.get("available"):
             write_backs = write_back(conn, project, triage, path, log_file_id)
 
+    next_action = crash_locate_hint(text, matches, project_name)
     return LogAnalysisResult(path=path, format=fmt, n_lines=len(lines), matches=matches,
-                             triage=triage, log_file_id=log_file_id, write_backs=write_backs)
+                             triage=triage, log_file_id=log_file_id, write_backs=write_backs,
+                             next_action=next_action)
 
 
 def analyze_log(conn: sqlite3.Connection, path: str, project_name: str | None = None,

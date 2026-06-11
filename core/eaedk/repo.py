@@ -163,6 +163,24 @@ def apply_soc_defaults(conn: sqlite3.Connection, board_name: str) -> sqlite3.Row
     return d
 
 
+def debug_probes(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Seeded debug-probe -> OpenOCD interface cfg map (for the FLASH.md 'other probes' table)."""
+    return conn.execute(
+        "SELECT name, interface_cfg, summary FROM debug_probes ORDER BY id").fetchall()
+
+
+def soc_flash_profile_for(conn: sqlite3.Connection, board_name: str) -> sqlite3.Row | None:
+    """OpenOCD target + default probe (with its interface cfg) for a board's SoC, if seeded.
+    Lets FLASH.md emit a filled-in flash command instead of <probe>/<target> placeholders."""
+    return conn.execute(
+        "SELECT f.soc_name, f.openocd_target, f.default_probe, p.interface_cfg "
+        "FROM soc_flash_profiles f "
+        "JOIN socs s ON s.name = f.soc_name "
+        "JOIN boards b ON b.soc_id = s.id "
+        "LEFT JOIN debug_probes p ON p.name = f.default_probe "
+        "WHERE b.name = ?", (board_name,)).fetchone()
+
+
 def add_board_capability(conn: sqlite3.Connection, board_name: str, capability: str) -> bool:
     """Add a capability to a board (idempotent). Returns False if the board is unknown. Does
     NOT open a transaction — the caller controls it."""

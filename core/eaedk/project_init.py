@@ -53,7 +53,11 @@ def _select_goal(ask: Ask, out: Out, goal_types: list[str]) -> tuple[str, bool]:
     custom_idx = len(ordered) + 1
     out(f"  {custom_idx}) Custom (no template)")
     while True:
-        raw = ask(f"Goal [1-{custom_idx}]: ").strip()
+        # Fix 5 (v1.7.0): Enter honors the most knowable default in the tool — option 1, the
+        # "start here" bare-metal app — instead of looping/aborting on a beginner's blank.
+        raw = ask(f'Goal [1-{custom_idx}, Enter = 1 "start here"]: ').strip()
+        if raw == "" and ordered:
+            return ordered[0], False
         if raw.isdigit():
             n = int(raw)
             if 1 <= n <= len(ordered):
@@ -61,7 +65,7 @@ def _select_goal(ask: Ask, out: Out, goal_types: list[str]) -> tuple[str, bool]:
             if n == custom_idx:
                 gt = ask("  Custom goal_type identifier: ").strip() or "custom"
                 return gt, True
-        out(f"  ! enter a number 1-{custom_idx}")
+        out(f"  ! enter a number 1-{custom_idx}, or press Enter for 1")
 
 
 def _print_assessment(out: Out, name: str, board: str | None, goal: str,

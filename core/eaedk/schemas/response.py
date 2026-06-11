@@ -35,6 +35,18 @@ class AssessResponse:
         L.append("## Feasibility Assessment")
         L.append(verdict)
         L.append("")
+        # Fix 4 (v1.7.0): lead with ONE clear status so a beginner isn't told "clean" while
+        # staring at a wall of UNKNOWNs. A feasible project is ready to export; the unknowns
+        # below are optional checks, not errors that block a first blink.
+        if self.feasibility == "feasible":
+            if self.unknowns:
+                L.append("✅ **Your project is feasible and ready to export.** The items below "
+                         "are optional — you do not need them to blink an LED. "
+                         "Next: `eaedk export`.")
+            else:
+                L.append("✅ **Your project is feasible and ready to export.** "
+                         "Next: `eaedk export`.")
+            L.append("")
         L.append("## Risk Summary")
         if self.risks:
             for r in self.risks:

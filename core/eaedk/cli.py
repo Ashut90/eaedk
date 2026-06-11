@@ -667,6 +667,17 @@ def cmd_eval_run(args):
 
 # --- parser ----------------------------------------------------------------
 
+def _add_llm(sp):
+    """Fix 3 (v1.7.0): accept --llm/--no-llm *after* the subcommand too, so the hint the tool
+    prints ('add --llm …') matches what actually works. SUPPRESS keeps the subparser from
+    clobbering the global default unless the flag is explicitly given after the subcommand."""
+    g = sp.add_mutually_exclusive_group()
+    g.add_argument("--llm", dest="llm", action="store_true", default=argparse.SUPPRESS,
+                   help="enable LLM (deferred)")
+    g.add_argument("--no-llm", dest="llm", action="store_false", default=argparse.SUPPRESS)
+    return sp
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="eaedk",
                                 description="Embedded AI Engineering Development Kit")
@@ -737,23 +748,23 @@ def build_parser() -> argparse.ArgumentParser:
     da.add_argument("--rationale"); da.add_argument("--alt"); da.set_defaults(func=cmd_decision_add)
 
     ak = sub.add_parser("ask"); ak.add_argument("name"); ak.add_argument("question", nargs="?")
-    ak.set_defaults(func=cmd_ask)
+    _add_llm(ak); ak.set_defaults(func=cmd_ask)
     ex = sub.add_parser("explain"); ex.add_argument("name"); ex.add_argument("--rule", required=True)
-    ex.set_defaults(func=cmd_explain)
+    _add_llm(ex); ex.set_defaults(func=cmd_explain)
 
     mt = sub.add_parser("mentor")
     mt.add_argument("--board", required=True)
     mt.add_argument("--ask"); mt.add_argument("--explain")
     mt.add_argument("--review-code", dest="review_code", action="store_true")
     mt.add_argument("--project")
-    mt.set_defaults(func=cmd_mentor)
+    _add_llm(mt); mt.set_defaults(func=cmd_mentor)
 
     ing = sub.add_parser("ingest")
     ing.add_argument("--file"); ing.add_argument("--board")
     ing.add_argument("--review", action="store_true")
     ing.add_argument("--confirm", type=int); ing.add_argument("--reject", type=int)
     ing.add_argument("--confidence", choices=["HIGH", "MEDIUM", "LOW"])
-    ing.set_defaults(func=cmd_ingest)
+    _add_llm(ing); ing.set_defaults(func=cmd_ingest)
 
     ex = sub.add_parser("export"); ex.add_argument("name"); ex.add_argument("--out")
     ex.add_argument("--force", action="store_true")
@@ -773,7 +784,7 @@ def build_parser() -> argparse.ArgumentParser:
     la.add_argument("--file", required=True); la.add_argument("--project")
     la.add_argument("--project-aware", dest="project_aware", action="store_true",
                     help="enrich LLM triage with project validation gaps + unverified facts")
-    la.set_defaults(func=cmd_log_analyze)
+    _add_llm(la); la.set_defaults(func=cmd_log_analyze)
 
     return p
 

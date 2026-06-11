@@ -1,0 +1,20 @@
+# SoC -> OpenOCD target cfg + the probe a beginner most likely owns for boards using it.
+# Target cfgs ship with OpenOCD (scripts/target/*.cfg). default_probe must exist in debug_probes.yaml.
+- soc_name: STM32F103C8       # Blue Pill — the canonical $2 starter; clone ST-Link is near-universal
+  openocd_target: target/stm32f1x.cfg
+  default_probe: st-link
+- soc_name: STM32F103RB       # Nucleo-F103RB — onboard ST-Link
+  openocd_target: target/stm32f1x.cfg
+  default_probe: st-link
+- soc_name: STM32F411RE       # Nucleo-F411RE — onboard ST-Link
+  openocd_target: target/stm32f4x.cfg
+  default_probe: st-link
+- soc_name: STM32F407VG
+  openocd_target: target/stm32f4x.cfg
+  default_probe: st-link
+- soc_name: STM32H743
+  openocd_target: target/stm32h7x.cfg
+  default_probe: st-link
+- soc_name: RP2040            # Pico — most beginners flash via UF2, but SWD uses a second Pico/CMSIS-DAP
+  openocd_target: target/rp2040.cfg
+  default_probe: raspberrypi-pico-probe

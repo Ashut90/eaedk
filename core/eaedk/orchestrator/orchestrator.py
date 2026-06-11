@@ -61,8 +61,12 @@ def _assemble(goal_type: str, ctx: dict[str, Any], results, risks,
         next_step = f"Resolve FAIL — {first.check}: {first.reason}"
     elif feas == "blocked":
         next_step = f"Provide missing info — {unknowns[0]}" if unknowns else "Resolve unknowns."
+    elif unknowns:
+        # Feasible, but optional checks remain — never call it "clean" while listing unknowns.
+        next_step = ("Feasible — ready to export. The Missing Information items are optional "
+                     "advanced checks; run `eaedk export` to generate your build files.")
     else:
-        next_step = "Validation clean. Proceed to the next checklist item."
+        next_step = "Validation clean — ready to export. Run `eaedk export`."
 
     return AssessResponse(
         goal_type=goal_type, feasibility=feas, template=template,

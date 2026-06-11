@@ -1,0 +1,14 @@
+# Common beginner debug probes -> their OpenOCD interface config. These are the cfg files
+# shipped with OpenOCD; a beginner picks the one matching the adapter they physically have.
+- name: st-link
+  interface_cfg: interface/stlink.cfg
+  summary: "ST-Link (and the $2 clones) — the default for STM32 boards, and what's onboard every Nucleo/Discovery."
+- name: j-link
+  interface_cfg: interface/jlink.cfg
+  summary: "SEGGER J-Link — common commercial probe; the EDU version is popular with students."
+- name: cmsis-dap
+  interface_cfg: interface/cmsis-dap.cfg
+  summary: "CMSIS-DAP — the open ARM standard; covers DAPLink boards and the Pi Pico used as a probe (picoprobe)."
+- name: raspberrypi-pico-probe
+  interface_cfg: interface/cmsis-dap.cfg
+  summary: "Raspberry Pi Pico running picoprobe firmware — a $4 CMSIS-DAP probe you can build from a spare Pico."

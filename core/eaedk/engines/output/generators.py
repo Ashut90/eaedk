@@ -174,11 +174,25 @@ def render_flash(data: dict) -> str:
     L.append(f"- **Flash tool (from board profile):** {tool or '<not specified>'}")
     L.append("")
     L.append("## Command")
-    cmds = {
-        "openocd": [
+    profile = data.get("flash_profile")
+    # Fix 2 (v1.7.0): for an OpenOCD board with a seeded SoC profile, fill in the real probe +
+    # target cfg (e.g. Blue Pill + ST-Link) instead of <probe>/<target> placeholders.
+    if tool == "openocd" and profile and profile.get("interface_cfg"):
+        iface, target = profile["interface_cfg"], profile["openocd_target"]
+        probe = profile.get("default_probe") or "your probe"
+        openocd_cmds = [
+            f"# Assumes a {probe} adapter (the most common for this board). "
+            "Change the interface line if yours differs.",
+            f'openocd -f {iface} -f {target} \\',
+            f'        -c "program build/{name}.elf verify reset exit"']
+    elif tool == "openocd":
+        openocd_cmds = [
             "# Placeholders <probe>/<target> depend on your debug adapter and SoC config:",
             f'openocd -f interface/<probe>.cfg -f target/<target>.cfg \\',
-            f'        -c "program build/{name}.elf verify reset exit"'],
+            f'        -c "program build/{name}.elf verify reset exit"']
+    else:
+        openocd_cmds = None
+    cmds = openocd_cmds if openocd_cmds is not None else {
         "st-flash": [f"st-flash write build/{name}.bin {flash_base}"],
         "dfu-util": [f"dfu-util -a 0 -s {flash_base}:leave -D build/{name}.bin"],
         "esptool.py": [f"esptool.py --chip esp32 write_flash {flash_base} build/{name}.bin"],
@@ -190,6 +204,13 @@ def render_flash(data: dict) -> str:
     L.append("```bash")
     L.extend(cmds)
     L.append("```")
+    # Other probes a beginner might have, from the seeded map — so a different adapter isn't a wall.
+    if tool == "openocd" and profile and data.get("probes"):
+        L.append("")
+        L.append("Using a different probe? Swap the `interface/…cfg` for yours:")
+        for p in data["probes"]:
+            L.append(f"- **{p['name']}** → `{p['interface_cfg']}`"
+                     + (f" — {p['summary']}" if p.get("summary") else ""))
     if data["detected_flash"] is None and tool:
         L.append("")
         L.append(f"> ⚠ `{tool}` was not detected on this host. Run `eaedk toolchain detect`; "

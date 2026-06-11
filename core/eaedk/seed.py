@@ -20,6 +20,7 @@ _SEED_TABLES = [
     "board_toolchain_reqs", "board_capabilities", "boards", "socs",
     "risk_rules", "eval_cases", "log_signatures",
     "capabilities", "learning_steps", "concepts", "soc_defaults",
+    "debug_probes", "soc_flash_profiles",
     "citations", "sources",
 ]
 
@@ -195,6 +196,25 @@ def _load_soc_defaults(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+def _load_debug_probes(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "debug_probes.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO debug_probes(name,interface_cfg,summary) VALUES (?,?,?)",
+            (r["name"], r["interface_cfg"], r.get("summary")))
+    return len(rows)
+
+
+def _load_soc_flash_profiles(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "soc_flash_profiles.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO soc_flash_profiles(soc_name,openocd_target,default_probe) "
+            "VALUES (?,?,?)",
+            (r["soc_name"], r["openocd_target"], r.get("default_probe")))
+    return len(rows)
+
+
 def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
     if _already_seeded(conn) and not force:
         raise RuntimeError("database already seeded; pass force=True to reseed")
@@ -211,5 +231,7 @@ def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
             "learning_steps": _load_learning_steps(conn),
             "concepts": _load_concepts(conn),
             "soc_defaults": _load_soc_defaults(conn),
+            "debug_probes": _load_debug_probes(conn),
+            "soc_flash_profiles": _load_soc_flash_profiles(conn),
         }
     return counts

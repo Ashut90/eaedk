@@ -238,6 +238,13 @@ def render_start_here(data: dict) -> str:
                  "a comment explaining it." if working else
                  "`src/main.c` is a **skeleton** with TODOs — fill in your MCU's register init "
                  "(see the comments).")
+    # Fix 1 (v1.7.0): tell the beginner exactly how to install the tools, for THEIR OS — never
+    # just "a tool is missing". The install block is emitted from the board's required tools.
+    from .install import install_block
+    install_lines = install_block(data.get("host_os", ""), data.get("required_tools", []))
+    install_md = ("\n## Install the tools first\n"
+                  "You need these installed before the build below will work.\n\n"
+                  + "\n".join(install_lines) + "\n") if install_lines else ""
     return f"""# START HERE — {name}
 
 You asked EAEDK for a starting point. Here's what's in this folder and what to do, in order.
@@ -251,7 +258,7 @@ You asked EAEDK for a starting point. Here's what's in this folder and what to d
 - **`CMakeLists.txt`** — the build recipe. You rarely edit this to start.
 - **`FLASH.md`** — how to copy the built program onto the board.
 - **`BRINGUP_CHECKLIST.md`** — everything EAEDK checked, and what's still missing.
-
+{install_md}
 ## Build it
 ```bash
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain.cmake

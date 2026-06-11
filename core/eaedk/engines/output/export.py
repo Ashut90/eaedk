@@ -6,6 +6,7 @@ hierarchy carries into the artifacts via the generators (UNKNOWN -> explicit pla
 """
 from __future__ import annotations
 
+import platform
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,16 @@ def gather(conn: sqlite3.Connection, project: sqlite3.Row) -> dict[str, Any]:
         facts = repo.board_facts_map(conn, board_name)
         from ...mentor import learning_path_for         # lazy (avoids import cycle)
         learning_path = learning_path_for(conn, repo.board_capability_names(conn, board_name))
+    # Fix 1: the exact tools the user must install, in build-then-flash order (compiler,
+    # build system, flash tool), so START_HERE can emit a concrete install command.
+    by_kind = {r["kind"]: r["name"] for r in reqs}
+    required_tools = [by_kind[k] for k in ("compiler", "build_system", "flash_tool")
+                      if k in by_kind]
+    # Fix 2: the real flash command — board -> SoC -> openocd target + the probe a beginner
+    # most likely has, plus the full seeded probe map for the "other probes" table.
+    flash_profile = dict(repo.soc_flash_profile_for(conn, board_name)) \
+        if board_name and repo.soc_flash_profile_for(conn, board_name) else None
+    probes = [dict(p) for p in repo.debug_probes(conn)]
     return {
         "project": project, "resp": resp, "board": board, "soc": soc,
         "board_name": board_name, "checklist": repo.checklist(conn, project["id"]),
@@ -49,6 +60,8 @@ def gather(conn: sqlite3.Connection, project: sqlite3.Row) -> dict[str, Any]:
         "flash_req": flash_req, "detected_flash": detected_flash,
         "tracked": repo.list_risks_by_status(conn, project["id"], "tracked"),
         "facts": facts, "learning_path": learning_path,
+        "host_os": platform.system(), "required_tools": required_tools,
+        "flash_profile": flash_profile, "probes": probes,
     }
 
 
