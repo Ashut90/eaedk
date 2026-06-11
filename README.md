@@ -43,9 +43,11 @@ FAIL [HIGH] TOOLCHAIN_TARGET_TRIPLE: detected compiler target(s) ['x86_64'] do n
      Fix: apt install gcc-arm-none-eabi.
 ```
 
-This is the first step toward the beginner-mentor vision: the tool doesn't just gate you, it
-teaches you past the gate. The explanation is curated data (`board_toolchain_reqs.why`), not
-LLM-generated — so it's trustworthy and offline.
+Every **validation** `UNKNOWN`/`FAIL` teaches too — what the field is, its units, where to find
+it, and what breaks without it (e.g. *"board.flash_bytes: total flash in bytes — datasheet
+memory map, STM32F411RE = 524288; without it image-fit checks and export can't run"*). The tool
+doesn't just gate you, it teaches you past the gate — and the explanations are curated data, not
+LLM-generated, so they're trustworthy and offline.
 
 ## The bring-up chain
 
@@ -109,8 +111,9 @@ eaedk export <project> [--out DIR]     # checklist + CMake scaffold + flash step
 eaedk --llm ask <project> "..."        # cited explanation; post-filtered; off by default
 ```
 
-Goal types / templates: `bootloader`, `uboot`, `linux`, `ota`, `driver` (the five embedded
-bring-up templates, encoded as versioned YAML), plus custom (template-less) projects.
+Goal types / templates: `bare_metal_app` (blink/UART — the beginner's first project),
+`bootloader`, `uboot`, `linux`, `ota`, `driver` (six versioned-YAML templates), plus custom
+(template-less) projects.
 
 ## Design decisions that matter
 
@@ -138,7 +141,7 @@ core/eaedk/
   orchestrator/       deterministic-first assembly of the fixed response schema
   onboard.py          interactive board wizard      project_init.py  interactive project setup
   repo.py             one place for DB access + record_fact() write-through
-packages/             5 templates, 9 seed boards, risk rules, log signatures, eval cases
+packages/             6 templates, 9 seed boards, risk rules, log signatures, eval cases
 docs/                 architecture review, MVP spec, truth-layer, log-engine, this README's diagram
 demo.sh               end-to-end STM32MP157 DDR demo
 ```
