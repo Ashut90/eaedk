@@ -21,6 +21,14 @@ def _assemble(goal_type: str, ctx: dict[str, Any], results, risks,
               template: str | None, checklist_counts: dict[str, int]) -> AssessResponse:
     feas = feasibility(results)
 
+    # A board with no flash AND no RAM size is a board we know nothing about — "FEASIBLE" would
+    # mislead a beginner into thinking it's ready. Surface the real state instead.
+    has_board = "board.flash_bytes" in ctx
+    no_geometry = has_board and ctx.get("board.flash_bytes") is None \
+        and ctx.get("board.ram_bytes") is None
+    if feas == "feasible" and no_geometry:
+        feas = "no_geometry"
+
     validations = [{"check": r.check, "status": r.status, "reason": r.reason,
                     "engaged": r.engaged, "severity_on_fail": r.severity_on_fail,
                     "gating": r.gating, "teach": r.teach}
@@ -45,7 +53,10 @@ def _assemble(goal_type: str, ctx: dict[str, Any], results, risks,
                    if r.status == UNKNOWN and not r.engaged]
     unknowns += not_started
 
-    if feas == "not_feasible":
+    if feas == "no_geometry":
+        next_step = ("Complete the board's flash/RAM geometry — onboard it with real values, "
+                     "run `eaedk ingest` on its datasheet, or use a seeded board — then validate.")
+    elif feas == "not_feasible":
         first = next(r for r in results if r.status == "FAIL")
         next_step = f"Resolve FAIL — {first.check}: {first.reason}"
     elif feas == "blocked":

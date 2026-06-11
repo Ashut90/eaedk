@@ -28,7 +28,10 @@ class AssessResponse:
     def to_markdown(self) -> str:
         L: list[str] = []
         verdict = {"feasible": "FEASIBLE", "blocked": "BLOCKED (unknowns present)",
-                   "not_feasible": "NOT FEASIBLE"}.get(self.feasibility, self.feasibility)
+                   "not_feasible": "NOT FEASIBLE",
+                   "no_geometry": "INCOMPLETE — board has no flash/RAM geometry; "
+                                  "complete board facts before relying on this"}.get(
+                       self.feasibility, self.feasibility)
         L.append("## Feasibility Assessment")
         L.append(verdict)
         L.append("")

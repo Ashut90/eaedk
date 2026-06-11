@@ -450,6 +450,71 @@ def power_sequence(ctx):
                             f"{len(rails)} rails sequenced consistently", "HIGH", used)
 
 
+# Per-rule teach (mentor layer): what the field is, units, where to find it, the consequence.
+# Attached to any non-PASS result so a beginner is never left with a bare key name.
+RULE_TEACH: dict[str, str] = {
+    "FLASH_CAPACITY":
+        "Checks the firmware fits in flash. Needs estimated_image_size (your compiled .bin "
+        "size in bytes) and the board's flash size (datasheet memory map, e.g. STM32F411RE = "
+        "524288). Without it, image-fit checks and export cannot run.",
+    "RAM_BUDGET":
+        "Checks stack + heap + statics fit in RAM. Needs stack_size/heap_size/static_size "
+        "(bytes) and the board's RAM size (datasheet, e.g. STM32F411RE = 131072). Without it, "
+        "a RAM overflow won't be caught until the board crashes.",
+    "VECTOR_TABLE_PLACEMENT":
+        "The interrupt vector table must sit at the start of flash and be aligned. Set "
+        "vector_table_addr — for a simple app this is the flash base (e.g. 0x08000000 on STM32). "
+        "Wrong placement means the MCU faults on the first interrupt.",
+    "BOOTLOADER_APP_NO_OVERLAP":
+        "Bootloader and application flash regions must not overlap. Provide bl_region and "
+        "app_region as {base,size}. Overlap corrupts one image when you flash the other.",
+    "PARTITION_LAYOUT_FITS":
+        "All partitions must fit in storage. Provide partitions [{name,role,base,size}] and "
+        "primary_storage_bytes. If they exceed storage, the layout won't flash.",
+    "PARTITION_NO_OVERLAP":
+        "Partitions must not overlap. Provide partitions [{name,role,base,size}]; overlapping "
+        "ranges corrupt adjacent images.",
+    "PARTITION_AB_SYMMETRY":
+        "A/B OTA slots must be the same size so either can hold a full image. Give slot_a and "
+        "slot_b equal sizes.",
+    "RECOVERY_PRESENT":
+        "Fail-safe OTA needs a recovery (or slot_b) partition to fall back to. Without one, a "
+        "bad update bricks the device.",
+    "LOAD_ADDR_CONFLICT":
+        "Kernel/DTB load addresses must be inside DDR and clear of the DDR-init region. Needs "
+        "kernel_load_addr, dtb_load_addr, ddr_base, ddr_bytes (datasheet). A conflict overwrites "
+        "early-boot data.",
+    "DDR_TIMING_VERIFIED":
+        "DDR timing must be confirmed from the datasheet before first boot. Set "
+        "ddr_timing_verified=1 once you've checked CL/tRCD/tRP in the TRM. Unverified DDR is "
+        "unstable and corrupts memory intermittently.",
+    "BOOT_FLOW_CONSISTENCY":
+        "bootloader -> kernel -> init load addresses must form a clean, non-overlapping chain. "
+        "Provide bootloader_load_addr, kernel_load_addr, init_addr.",
+    "CONSOLE_UART_DEFINED":
+        "The debug console UART carries printf/boot output. Set console_uart (e.g. USART2; for "
+        "Linux also stdout_path). Without it you have no log to debug a failed boot.",
+    "TOOLCHAIN_ARCH_MATCH":
+        "Your compiler's target must match the board's CPU. Run `eaedk toolchain detect`, or set "
+        "toolchain_arch. A mismatch produces firmware the chip cannot run.",
+    "SDK_HOST_OS_MATCH":
+        "Some SDKs require a specific host OS. Set host_os if your SDK is OS-specific (e.g. "
+        "vendor tools that are Windows-only).",
+    "PINMUX_CONFLICT":
+        "Two signals must not be wired to the same physical pin. Provide pin_assignments "
+        "[{pin,signal}]; a double-claimed pin means one peripheral silently won't work.",
+    "POWER_SEQUENCE":
+        "Power rails must come up in the required order. Provide power_rails "
+        "[{name,order,depends_on}]. A bad sequence can damage the silicon or hang boot.",
+    "DRIVER_COMPATIBLE_STRING":
+        "A Linux driver binds via its DTB compatible string. Set dtb_compatible (e.g. "
+        "\"wiznet,w5500\") matching the driver's of_match_table.",
+    "REGISTER_MAP_PRESENT":
+        "A driver needs the peripheral's register map, human-verified from the datasheet. Add "
+        "register facts (ingest the datasheet, then confirm) before writing register code.",
+}
+
+
 # --- runner ----------------------------------------------------------------
 
 def run_validations(ctx: dict[str, Any], goal_type: str,
@@ -464,6 +529,8 @@ def run_validations(ctx: dict[str, Any], goal_type: str,
             continue
         res = r.func(ctx)
         res.engaged = (not r.user_inputs) or any(k in provided for k in r.user_inputs)
+        if res.status != PASS and not res.teach:        # attach the mentor teach string
+            res.teach = RULE_TEACH.get(res.check, "")
         results.append(res)
     return results
 

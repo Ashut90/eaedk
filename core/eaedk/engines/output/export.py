@@ -23,6 +23,7 @@ class ExportResult:
     blockers: list[str] = field(default_factory=list)
     written: list[str] = field(default_factory=list)
     out_dir: str = ""
+    geometry_unknown: bool = False
 
 
 def gather(conn: sqlite3.Connection, project: sqlite3.Row) -> dict[str, Any]:
@@ -50,12 +51,25 @@ def _blockers(resp) -> list[str]:
             and (v["status"] == "FAIL" or (v["status"] == "UNKNOWN" and v["engaged"]))]
 
 
+_GEOMETRY_MSG = ("Board has no flash/RAM geometry — generated build files will NOT compile. "
+                 "Run `eaedk ingest` on the datasheet, onboard the board with real flash/RAM "
+                 "values, or use a seeded board first.")
+
+
+def _geometry_unknown(board) -> bool:
+    """Linker geometry can't be emitted (flash base/size missing) -> files won't build."""
+    if not board:
+        return True
+    return board.get("flash_base") is None or board.get("flash_bytes") is None
+
+
 def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
                    force: bool = False, only: str | None = None) -> ExportResult:
     data = gather(conn, project)
     feas = data["resp"].feasibility
     if feas != "feasible" and not force:
-        return ExportResult(feasibility=feas, refused=True, blockers=_blockers(data["resp"]))
+        blockers = ([_GEOMETRY_MSG] if feas == "no_geometry" else _blockers(data["resp"]))
+        return ExportResult(feasibility=feas, refused=True, blockers=blockers)
 
     arch = data["soc"]["arch"] if data["soc"] else None
     out = Path(out_dir)
@@ -78,4 +92,8 @@ def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         written.append(str(path))
-    return ExportResult(feasibility=feas, written=sorted(written), out_dir=str(out))
+    # If geometry is missing, the linker is placeholders — flag it loudly (e.g. --force path).
+    geometry_unknown = _geometry_unknown(data["board"]) and any(
+        "linker" in w or "CMakeLists" in w for w in written)
+    return ExportResult(feasibility=feas, written=sorted(written), out_dir=str(out),
+                        geometry_unknown=geometry_unknown)

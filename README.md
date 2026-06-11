@@ -145,7 +145,7 @@ demo.sh               end-to-end STM32MP157 DDR demo
 
 ## Status
 
-MVP through V1 complete and green: **73 pytests, eval 11/11.** Tags `v0.1.0` → `v1.3.0`.
+MVP through V1 complete and green: **77 pytests, eval 11/11.** Tags `v0.1.0` → `v1.4.0`.
 Deterministic core (validation, risk, signatures, **toolchain**), unified truth layer, offline
 LLM with post-filter, project-aware triage with write-back, the full interactive onboarding
 chain, a feasibility-gated **output engine** that exports real build artifacts, **datasheet

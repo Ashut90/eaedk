@@ -69,7 +69,13 @@ def _print_assessment(out: Out, name: str, board: str | None, goal: str,
     out("")
     out(f"Project '{name}' created  (board: {board or '-'}, goal: {goal}, "
         f"template: {template or 'none (custom)'})")
-    out(f"Initial assessment — feasibility: {resp.feasibility.upper()}")
+    if resp.feasibility == "no_geometry":
+        out("Initial assessment — INCOMPLETE: this board has no flash/RAM geometry, so most "
+            "checks can't run yet.")
+        out("  -> Onboard it with real values, run `eaedk ingest` on its datasheet, or pick a "
+            "seeded board. Then re-validate.")
+    else:
+        out(f"Initial assessment — feasibility: {resp.feasibility.upper()}")
 
     fails = [v for v in resp.validations if v["status"] == "FAIL"]
     unknowns = [v for v in resp.validations if v["status"] == "UNKNOWN" and v["engaged"]]

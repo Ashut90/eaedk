@@ -235,6 +235,38 @@ def _collect_facts(ask: Ask, out: Out, default_conf: str) -> list[dict[str, Any]
     return facts
 
 
+def _seeded_matches(conn, name: str, soc_name: str | None) -> list[dict]:
+    """Find existing boards whose name/SoC shares a significant token with the new board."""
+    cand = f"{name or ''} {soc_name or ''}".lower()
+    toks = [t for t in re.split(r"[^a-z0-9]+", cand) if len(t) >= 4]
+    if not toks:
+        return []
+    out: list[dict] = []
+    for row in conn.execute(
+            "SELECT b.name, b.flash_bytes, s.name AS soc, s.arch "
+            "FROM boards b JOIN socs s ON s.id = b.soc_id"):
+        hay = re.sub(r"[^a-z0-9]", "", f"{row['name']}{row['soc'] or ''}".lower())
+        if any(t in hay for t in toks):
+            out.append(dict(row))
+    return out
+
+
+def _nudge_if_seeded(conn, out: Out, draft: BoardDraft) -> None:
+    """Before committing, tell the engineer if a matching board with real geometry already
+    exists — so a beginner doesn't hand-build a duplicate with no data. Never blocks."""
+    useful = [m for m in _seeded_matches(conn, draft.name, draft.soc_name)
+              if m["flash_bytes"] is not None]
+    if not useful:
+        return
+    m = useful[0]
+    out("")
+    out(f"  ℹ  '{m['name']}' is already in the database with full geometry "
+        f"({m['soc']}, {m['arch']}).")
+    out(f"     Use it directly:                eaedk project init   (then pick {m['name']})")
+    out(f"     Or enrich your own entry:        eaedk ingest --file <datasheet>.pdf "
+        f"--board \"{draft.name}\"")
+
+
 def _commit(conn, draft: BoardDraft) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with conn:
@@ -321,6 +353,7 @@ def run_wizard(conn, ask: Ask, out: Out, max_attempts: int = 5) -> str | None:
 
     draft.facts = _collect_facts(ask, out, draft.confidence)
 
+    _nudge_if_seeded(conn, out, draft)
     _commit(conn, draft)
     _summary(draft, out)
     return draft.name

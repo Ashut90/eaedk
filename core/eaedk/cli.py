@@ -536,6 +536,10 @@ def cmd_export(args):
     print(f"exported {len(res.written)} file(s) to {res.out_dir}/{banner}")
     for f in res.written:
         print(f"  {f}")
+    if res.geometry_unknown:
+        print("\n⚠  Your board has no flash geometry — these files will NOT build "
+              "(linker shows <UNKNOWN ...>). Run `eaedk ingest` or fill the board's flash/RAM "
+              "facts first.", file=sys.stderr)
 
 
 def cmd_eval_run(args):

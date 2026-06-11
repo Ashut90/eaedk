@@ -88,6 +88,33 @@ seeded — use it" + ingest nudge (friction #1/#2), readiness score vs. "FEASIBL
 
 ---
 
+## v1.4.0 update — mentor-UX (the start-of-funnel friction, now closed)
+
+A second dogfood confirmed the three v1.3.0 fixes landed, and exposed that the deferred
+start-of-funnel items were where every beginner still got stuck. v1.4.0 closes them:
+
+- **Friction #2 — "board already seeded" nudge** ✅ The wizard now matches the new board's
+  name/SoC against existing boards and, before committing, points the engineer at the seeded
+  entry (`use it with project init`) or `eaedk ingest` for their own — without blocking.
+- **Friction #7 — per-rule validation teach** ✅ Every non-PASS validation now carries a
+  `teach` string (what the field is, units, where to find it, the consequence) via a central
+  `RULE_TEACH` catalog — e.g. `board.flash_bytes: total flash in bytes — datasheet memory map,
+  STM32F411RE = 524288; without it image-fit checks and export can't run`.
+- **Friction #4 — "FEASIBLE" misleads** ✅ A board with no flash AND no RAM now reports
+  feasibility **`no_geometry`** ("INCOMPLETE — complete board facts before relying on this"),
+  not FEASIBLE.
+- **New export finding — silent unbuildable files** ✅ Export now **refuses** on `no_geometry`
+  with a clear message (or, with `--force`, emits files plus a loud "these will NOT build —
+  run ingest" banner). A beginner can no longer walk away with placeholder artifacts.
+
+Verified on the same beginner path: the nudge fired, project init said INCOMPLETE, validate
+taught each UNKNOWN, and export refused with the geometry message. **77 tests, eval 11/11.**
+
+Still deferred (lower frequency): friction #5 (filling a field flips feasible↔blocked) and a
+beginner "what is a linker script / how to build" on-ramp in the export bundle.
+
+---
+
 > The mentor layer isn't a nice-to-have bolted on later. The dogfood proves EAEDK currently
 > gates a beginner without teaching them past the gate — on the exact crashes and projects a
 > beginner actually hits. The engines are ready; the knowledge needs to meet the audience.
