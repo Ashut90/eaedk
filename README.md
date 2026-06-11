@@ -65,13 +65,19 @@ is correlated against the project's *own* unverified gaps and triaged to a speci
 architectural assumption — then written back as a tracked risk **with zero manual correlation.**
 The LLM proposes; the deterministic layer decides and records.
 
-## Watch the 90-second demo
+## Watch the demo
 
-[![asciicast](https://asciinema.org/a/Qn8aqCKKsNrOzE0R.svg)](https://asciinema.org/a/Qn8aqCKKsNrOzE0R)
+[![asciicast](https://asciinema.org/a/w1gmp5g7DxaZMPnR.svg)](https://asciinema.org/a/w1gmp5g7DxaZMPnR)
 
-A vague U-Boot hang on an STM32MP157 → triaged to a specific unverified DDR timing → written
-back as a tracked risk → verified → resolved. Zero manual correlation; the LLM never asserts a
-hardware fact.
+The **complete chain** on an STM32F103, in one run: onboard the board → ingest its datasheet
+(cited facts you confirm) → start a bare-metal project → check the build environment → validate
+deterministically (each UNKNOWN explains itself) → export real build files → then feed a
+**HardFault crash log** and watch EAEDK match the fault and teach what to check — without ever
+guessing a hardware value.
+
+A focused **DDR-triage** scenario is also recorded — a vague U-Boot hang correlated to a
+specific unverified DDR timing, written back as a tracked risk, and resolved:
+[asciinema.org/a/Qn8aqCKKsNrOzE0R](https://asciinema.org/a/Qn8aqCKKsNrOzE0R).
 
 ## Try it (offline)
 
