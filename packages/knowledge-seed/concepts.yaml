@@ -1,0 +1,20 @@
+# One factual anchor sentence per concept — a deterministic backbone the LLM mentor elaborates
+# on (and the post-filter trims). Curated, not LLM-generated.
+- name: hardfault
+  anchor: "A HardFault is the Cortex-M CPU's 'something went unrecoverably wrong' exception — usually a bad/null pointer, an unaligned access, or a stack overflow."
+- name: watchdog
+  anchor: "A watchdog is a timer that resets the chip if your code stops periodically 'petting' it — a safety net against hangs."
+- name: vector_table
+  anchor: "The vector table is a list of handler addresses at the very start of flash; the CPU reads it on reset and on every interrupt to know where to jump."
+- name: interrupt
+  anchor: "An interrupt is the CPU pausing your main code to run a short handler when an event happens, then resuming where it left off."
+- name: dma
+  anchor: "DMA moves data between memory and a peripheral without the CPU, freeing the CPU to do other work."
+- name: bootloader
+  anchor: "A bootloader is a small program that runs first, can verify or update your main application, then jumps to it."
+- name: uart
+  anchor: "UART is asynchronous serial: two wires (TX and RX) and an agreed baud rate carry bytes between two devices."
+- name: spi
+  anchor: "SPI is a synchronous 4-wire bus (clock, two data lines, chip-select) where one controller talks to one or more peripherals."
+- name: stack_overflow
+  anchor: "A stack overflow is when function calls and local variables grow past the RAM reserved for the stack, corrupting other memory."

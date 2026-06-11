@@ -1,0 +1,27 @@
+# Plain-language, one sentence per peripheral — for a 0-experience engineer. No jargon.
+- name: uart
+  summary: "UART — serial communication; the simplest way to print debug messages from your board to your PC."
+- name: usb
+  summary: "USB — connect the board to a computer as a device (serial port, storage, or custom)."
+- name: spi
+  summary: "SPI — a fast 4-wire bus for talking to sensors, displays, and external flash chips."
+- name: i2c
+  summary: "I2C — a 2-wire bus where several small sensors share the same two lines."
+- name: ethernet
+  summary: "Ethernet — a wired network connection for sending data over a LAN."
+- name: wifi
+  summary: "Wi-Fi — a wireless network connection."
+- name: bluetooth
+  summary: "Bluetooth — short-range wireless for phones, headsets, and accessories."
+- name: sdmmc
+  summary: "SD/MMC — removable card or block storage for files, logs, or firmware images."
+- name: emmc
+  summary: "eMMC — soldered-on flash storage, often used to hold a Linux root filesystem."
+- name: sd
+  summary: "SD card — removable storage for files, firmware, or a boot image."
+- name: pcie
+  summary: "PCIe — a high-speed expansion bus for things like NVMe storage or accelerators."
+- name: hdmi
+  summary: "HDMI — video output to a monitor or TV."
+- name: display
+  summary: "Display — drive an attached screen or LCD."

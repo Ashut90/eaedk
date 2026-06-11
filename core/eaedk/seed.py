@@ -19,6 +19,7 @@ _SEED_TABLES = [
     "template_items", "templates",
     "board_toolchain_reqs", "board_capabilities", "boards", "socs",
     "risk_rules", "eval_cases", "log_signatures",
+    "capabilities", "learning_steps", "concepts",
     "citations", "sources",
 ]
 
@@ -144,6 +145,38 @@ def _load_log_signatures(conn: sqlite3.Connection) -> int:
     return len(sigs)
 
 
+def _load_yaml(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def _load_capabilities(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "capabilities.yaml") or []
+    for r in rows:
+        conn.execute("INSERT INTO capabilities(name,summary) VALUES (?,?)",
+                     (r["name"], r["summary"]))
+    return len(rows)
+
+
+def _load_learning_steps(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "learning_path.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO learning_steps(step,key,title,goal_type,requires_json,why,"
+            "before_you_start_json) VALUES (?,?,?,?,?,?,?)",
+            (r["step"], r["key"], r["title"], r.get("goal_type"),
+             json.dumps(r.get("requires", [])), r["why"],
+             json.dumps(r.get("before_you_start", []))))
+    return len(rows)
+
+
+def _load_concepts(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "concepts.yaml") or []
+    for r in rows:
+        conn.execute("INSERT INTO concepts(name,anchor) VALUES (?,?)",
+                     (r["name"].lower(), r["anchor"]))
+    return len(rows)
+
+
 def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
     if _already_seeded(conn) and not force:
         raise RuntimeError("database already seeded; pass force=True to reseed")
@@ -156,5 +189,8 @@ def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
             "risk_rules": _load_risk_rules(conn),
             "eval_cases": _load_eval_cases(conn),
             "log_signatures": _load_log_signatures(conn),
+            "capabilities": _load_capabilities(conn),
+            "learning_steps": _load_learning_steps(conn),
+            "concepts": _load_concepts(conn),
         }
     return counts

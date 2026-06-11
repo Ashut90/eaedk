@@ -49,6 +49,15 @@ memory map, STM32F411RE = 524288; without it image-fit checks and export can't r
 doesn't just gate you, it teaches you past the gate — and the explanations are curated data, not
 LLM-generated, so they're trustworthy and offline.
 
+**`eaedk mentor --board <name>`** is the full vision: a senior engineer next to a beginner. It
+lists the board's capabilities in plain language, gives a learning path in deliberate order
+(Blink → UART → SPI sensor → … with the *reason* each comes before the next), and `export`
+generates **working, teach-commented starter code** (every non-obvious line explained) plus a
+`START_HERE.md`. An optional **Actor-Critic** pass (`--review-code`) hardens the scaffold — the
+LLM critiques for beginner mistakes, but the **Validation Engine deterministically arbitrates**
+every memory claim before it's shown as confirmed. See
+[docs/11-mentor-layer.md](docs/11-mentor-layer.md).
+
 ## The bring-up chain
 
 A complete, auditable workflow — every step writes through one fact layer with structured
@@ -103,6 +112,8 @@ log and get a signature match **with teach**. Record either with
 ## Commands
 
 ```bash
+eaedk mentor --board <name>            # plain-language capabilities + a learning path with reasons
+eaedk mentor --board <name> --explain HardFault   # explain a concept (anchor offline; LLM opt-in)
 eaedk board add --interactive          # guided onboarding: live fitment + VTOR checks + cited facts
 eaedk ingest --file ds.pdf --board <b> # extract cited fact candidates from a datasheet PDF
 eaedk ingest --board <b> --review      # review candidates; --confirm <id> commits (human-in-the-loop)
@@ -154,7 +165,7 @@ demo.sh               end-to-end STM32MP157 DDR demo
 
 ## Status
 
-MVP through V1 complete and green: **77 pytests, eval 11/11.** Tags `v0.1.0` → `v1.4.0`.
+MVP through V1 complete and green: **85 pytests, eval 11/11.** Tags `v0.1.0` → `v1.5.0`.
 Deterministic core (validation, risk, signatures, **toolchain**), unified truth layer, offline
 LLM with post-filter, project-aware triage with write-back, the full interactive onboarding
 chain, a feasibility-gated **output engine** that exports real build artifacts, **datasheet

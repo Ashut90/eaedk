@@ -70,37 +70,42 @@ def _collect_ints(value: Any, out: set[int]) -> None:
             _collect_ints(v, out)
 
 
+def _board_numbers(conn: sqlite3.Connection, board_name: str) -> set[int]:
+    """Cited numbers for a board: typed geometry + facts (incl. absolute partition addresses)."""
+    nums: set[int] = set()
+    board, _soc = repo.load_board(conn, board_name)
+    if board:
+        for k in ("flash_base", "flash_bytes", "ram_base", "ram_bytes", "ddr_bytes"):
+            v = board.get(k)
+            if isinstance(v, int):
+                nums.add(v)
+    flash_base = board.get("flash_base") if board else None
+    for row in conn.execute(
+        "SELECT ef.kind, ef.fact_value FROM engineering_facts ef "
+        "JOIN boards b ON b.id = ef.board_id "
+        "WHERE b.name = ? AND ef.citation_id IS NOT NULL", (board_name,)).fetchall():
+        _collect_ints(row["fact_value"], nums)
+        if row["kind"] == "partition" and isinstance(flash_base, int):
+            try:
+                nums.add(flash_base + int(json.loads(row["fact_value"]).get("base")))
+            except (ValueError, TypeError, AttributeError):
+                pass
+    return nums
+
+
+def build_board_allowlist(conn: sqlite3.Connection, board_name: str) -> Allowlist:
+    """Allowlist from a board alone (no project) — used by the mentor layer."""
+    return Allowlist(numbers=_board_numbers(conn, board_name))
+
+
 def build_allowlist(conn: sqlite3.Connection, project: sqlite3.Row) -> Allowlist:
     nums: set[int] = set()
-
     board_name = repo.project_board_name(conn, project)
     if board_name:
-        board, _soc = repo.load_board(conn, board_name)
-        if board:
-            for k in ("flash_base", "flash_bytes", "ram_base", "ram_bytes", "ddr_bytes"):
-                v = board.get(k)
-                if isinstance(v, int):
-                    nums.add(v)
-        # Cited facts read through the unified engineering_facts VIEW (provenance preserved
-        # via citation_id). For partition facts, also admit the ABSOLUTE address
-        # (flash_base + offset) so verified slot boundaries the LLM cites aren't stripped.
-        flash_base = board.get("flash_base") if board else None
-        for row in conn.execute(
-            "SELECT ef.kind, ef.fact_value FROM engineering_facts ef "
-            "JOIN boards b ON b.id = ef.board_id "
-            "WHERE b.name = ? AND ef.citation_id IS NOT NULL", (board_name,)).fetchall():
-            _collect_ints(row["fact_value"], nums)
-            if row["kind"] == "partition" and isinstance(flash_base, int):
-                try:
-                    base = int(json.loads(row["fact_value"]).get("base"))
-                    nums.add(flash_base + base)
-                except (ValueError, TypeError, AttributeError):
-                    pass
-
+        nums |= _board_numbers(conn, board_name)
     inputs, _conf = repo.load_inputs(conn, project["id"])
     for v in inputs.values():
         _collect_ints(v, nums)
-
     return Allowlist(numbers=nums)
 
 

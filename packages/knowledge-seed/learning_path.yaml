@@ -1,0 +1,65 @@
+# A deliberate learning order. The sequence AND the reason both matter — each project teaches
+# the prerequisite skill for the next. `requires` filters steps to what the board can actually do.
+- step: 1
+  key: blink
+  title: "Blink an LED"
+  goal_type: bare_metal_app
+  requires: []
+  why: "Start here. It teaches the whole build → flash → run loop with the least possible code. If the LED blinks, your toolchain and flashing actually work — everything else builds on that."
+  before_you_start:
+    - "Which GPIO pin your LED is on (check the board schematic)."
+    - "That your toolchain can build and flash — run `eaedk toolchain validate`."
+    - "The flash base address where your code runs (the board's memory map)."
+
+- step: 2
+  key: uart_logger
+  title: "UART Logger (print over serial)"
+  goal_type: bare_metal_app
+  requires: [uart]
+  why: "Once code runs, you need to SEE what it's doing. UART printing is how you debug every project after this — learn it before anything complex."
+  before_you_start:
+    - "Which UART peripheral and TX pin to use (datasheet + schematic)."
+    - "Your CPU clock frequency — it sets the baud-rate divisor."
+    - "A serial terminal on your PC set to 115200 8N1."
+
+- step: 3
+  key: spi_sensor
+  title: "Read an SPI Sensor"
+  goal_type: bare_metal_app
+  requires: [spi]
+  why: "Now learn a real bus protocol. SPI is the most common way to read sensors and is simpler to get right than I2C, so it's the place to start with peripherals."
+  before_you_start:
+    - "The sensor's SPI mode (clock polarity/phase) and register map (sensor datasheet)."
+    - "Which SPI peripheral and the CS / SCK / MOSI / MISO pins."
+
+- step: 4
+  key: interrupt
+  title: "Handle an Interrupt"
+  goal_type: bare_metal_app
+  requires: []
+  why: "Polling wastes the CPU. Interrupts let the chip react to events — a button press, data arriving — and are the foundation of responsive firmware. Learn them before multitasking."
+  before_you_start:
+    - "What the vector table is and where it lives (the start of flash)."
+    - "Which interrupt line your event uses, and how the NVIC enables it."
+
+- step: 5
+  key: bootloader
+  title: "Write a Bootloader"
+  goal_type: bootloader
+  requires: []
+  why: "With peripherals and interrupts understood, learn memory layout: a bootloader lives in one flash region and jumps to your app in another. This is the gateway to firmware updates."
+  before_you_start:
+    - "Your flash partition layout — bootloader region vs application region."
+    - "How to verify an image (CRC/checksum) before jumping to it."
+    - "A recovery path if an update fails (so you don't brick the board)."
+
+- step: 6
+  key: rtos
+  title: "Run an RTOS"
+  goal_type: bare_metal_app
+  requires: []
+  why: "The final step. A real-time OS lets multiple tasks run 'at once' with scheduling — how production firmware manages complexity once a superloop isn't enough."
+  before_you_start:
+    - "How much RAM you have — each task needs its own stack."
+    - "What a context switch is and roughly what it costs."
+    - "Task priorities, and why a greedy high-priority task can starve the others."

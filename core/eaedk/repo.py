@@ -132,6 +132,45 @@ def list_boards(conn: sqlite3.Connection, query: str | None = None) -> list[sqli
         "ORDER BY b.name").fetchall()
 
 
+# --- mentor layer ----------------------------------------------------------
+
+def board_capability_map(conn: sqlite3.Connection, board_name: str) -> list[sqlite3.Row]:
+    """Each board capability with its plain-language summary (NULL if not described yet)."""
+    return conn.execute(
+        "SELECT bc.capability AS capability, c.summary AS summary "
+        "FROM board_capabilities bc JOIN boards b ON b.id = bc.board_id "
+        "LEFT JOIN capabilities c ON c.name = bc.capability "
+        "WHERE b.name = ? ORDER BY bc.capability", (board_name,)).fetchall()
+
+
+def board_capability_names(conn: sqlite3.Connection, board_name: str) -> set[str]:
+    return {r["capability"] for r in conn.execute(
+        "SELECT bc.capability FROM board_capabilities bc JOIN boards b ON b.id = bc.board_id "
+        "WHERE b.name = ?", (board_name,)).fetchall()}
+
+
+def board_facts_map(conn: sqlite3.Connection, board_name: str) -> dict[str, str]:
+    """All confirmed facts for a board as {fact_key: fact_value} (via the engineering_facts view)."""
+    return {r["fact_key"]: r["fact_value"] for r in conn.execute(
+        "SELECT ef.fact_key AS fact_key, ef.fact_value AS fact_value FROM engineering_facts ef "
+        "JOIN boards b ON b.id = ef.board_id WHERE b.name = ?", (board_name,)).fetchall()}
+
+
+def learning_steps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT step, key, title, goal_type, requires_json, why, before_you_start_json "
+        "FROM learning_steps ORDER BY step").fetchall()
+
+
+def get_concept(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
+    return conn.execute("SELECT name, anchor FROM concepts WHERE name = ?",
+                        (name.lower(),)).fetchone()
+
+
+def list_concepts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT name, anchor FROM concepts ORDER BY name").fetchall()
+
+
 # --- datasheet ingestion (fact candidates) ---------------------------------
 
 def create_datasheet_source(conn: sqlite3.Connection, title: str, uri: str | None,

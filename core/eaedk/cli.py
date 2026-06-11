@@ -517,6 +517,43 @@ def cmd_ingest(args):
         print(f"  #{c['id']} [{c['confidence']}/{c['method']}] {c['key']} = {c['value']} (p.{c['page']})")
 
 
+def cmd_mentor(args):
+    conn = _conn(args)
+    board, _soc = repo.load_board(conn, args.board)
+    if board is None:
+        print(f"error: unknown board {args.board!r} (see `eaedk board list`)", file=sys.stderr)
+        sys.exit(2)
+    if args.ask:
+        from .mentor_llm import mentor_ask
+        print(mentor_ask(conn, args.board, args.ask, use_llm=args.llm))
+    elif args.explain:
+        from .mentor_llm import mentor_explain
+        print(mentor_explain(conn, args.board, args.explain, use_llm=args.llm))
+    elif args.review_code:
+        if not args.project:
+            print("error: --review-code needs --project NAME", file=sys.stderr); sys.exit(2)
+        p = _require_project(conn, args.project)
+        from .actor_critic import run_actor_critic
+        res = run_actor_critic(conn, p)
+        if not res.available:
+            print(f"Actor-Critic needs the LLM ({res.reason}). The deterministic scaffold is "
+                  "already in your export (`eaedk export`).")
+            return
+        print(f"Actor-Critic review of '{args.project}' ({res.epochs} epoch(s)):")
+        print("\nCONFIRMED by the Validation Engine (real problems):")
+        for c in res.confirmed or [{"message": "(none)"}]:
+            print(f"  - {c.get('kind','')}: {c.get('message','')}"
+                  + (f"  [{c['verified']}]" if c.get("verified") else ""))
+        print("\nAdvisory (Critic reasoning, not deterministically proven):")
+        for a in res.advisory or [{"message": "(none)"}]:
+            print(f"  - {a.get('kind','')}: {a.get('message','')}")
+        for f in res.fixes:
+            print(f"\nActor fix (epoch {f['epoch']}): {f['fix']}")
+    else:
+        from .mentor import render_board_mentor
+        print(render_board_mentor(conn, args.board))
+
+
 def cmd_export(args):
     conn = _conn(args)
     p = _require_project(conn, args.name)
@@ -624,6 +661,13 @@ def build_parser() -> argparse.ArgumentParser:
     ak.set_defaults(func=cmd_ask)
     ex = sub.add_parser("explain"); ex.add_argument("name"); ex.add_argument("--rule", required=True)
     ex.set_defaults(func=cmd_explain)
+
+    mt = sub.add_parser("mentor")
+    mt.add_argument("--board", required=True)
+    mt.add_argument("--ask"); mt.add_argument("--explain")
+    mt.add_argument("--review-code", dest="review_code", action="store_true")
+    mt.add_argument("--project")
+    mt.set_defaults(func=cmd_mentor)
 
     ing = sub.add_parser("ingest")
     ing.add_argument("--file"); ing.add_argument("--board")

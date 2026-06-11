@@ -36,12 +36,19 @@ def gather(conn: sqlite3.Connection, project: sqlite3.Row) -> dict[str, Any]:
     detected_flash = None
     if flash_req:
         detected_flash = next((d for d in detected if d["name"] == flash_req["name"]), None)
+    facts: dict[str, str] = {}
+    learning_path: list = []
+    if board_name:
+        facts = repo.board_facts_map(conn, board_name)
+        from ...mentor import learning_path_for         # lazy (avoids import cycle)
+        learning_path = learning_path_for(conn, repo.board_capability_names(conn, board_name))
     return {
         "project": project, "resp": resp, "board": board, "soc": soc,
         "board_name": board_name, "checklist": repo.checklist(conn, project["id"]),
         "reqs": reqs, "compiler_req": next((r for r in reqs if r["kind"] == "compiler"), None),
         "flash_req": flash_req, "detected_flash": detected_flash,
         "tracked": repo.list_risks_by_status(conn, project["id"], "tracked"),
+        "facts": facts, "learning_path": learning_path,
     }
 
 
@@ -84,7 +91,14 @@ def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
         files["cmake/toolchain.cmake"] = gen.render_toolchain_cmake(data)
         if gen.is_mcu(arch):
             files["linker/memory.ld"] = gen.render_linker(data)
-            files["src/main.c"] = gen.render_main_c(data)
+            # bare_metal_app gets working teach-commented code + a plain-language guide;
+            # other goals keep the minimal stub.
+            if data["project"]["goal_type"] == "bare_metal_app":
+                from . import codegen
+                files["src/main.c"] = codegen.render_main_c(data)
+                files["START_HERE.md"] = codegen.render_start_here(data)
+            else:
+                files["src/main.c"] = gen.render_main_c(data)
 
     written: list[str] = []
     for rel, content in files.items():
