@@ -1,0 +1,36 @@
+soc:
+  name: ATmega2560
+  vendor: Microchip (Atmel)
+  arch: avr
+  notes: "8-bit AVR @ 16 MHz — the Arduino Mega's MCU; more pins and memory than the Uno"
+board:
+  name: Arduino-Mega
+  flash_base: 0x00000000
+  flash_bytes: 262144         # 256 KiB program flash
+  ram_base: 0x00000200        # SRAM begins after the register/IO space
+  ram_bytes: 8192             # 8 KiB SRAM
+  primary_storage: internal_flash
+  boot_modes: [flash, bootloader]
+  confidence: HIGH
+source:
+  type: seed
+  title: "ATmega2560 datasheet (DS40002211)"
+  uri: "https://ww1.microchip.com/downloads/en/devicedoc/atmel-2549-8-bit-avr-microcontroller-atmega640-1280-1281-2560-2561_datasheet.pdf"
+  section: "Memories"
+  snippet: "256 KB Flash; 8 KB internal SRAM."
+capabilities:
+  - capability: gpio
+  - capability: timer
+  - capability: uart
+  - capability: spi
+  - capability: i2c
+toolchain:
+  - kind: compiler
+    name: avr-gcc
+    target_triple: avr
+    severity: HIGH
+    why: "The ATmega2560 is an 8-bit AVR; it needs avr-gcc, not an ARM compiler or the host gcc."
+  - kind: sdk
+    name: arduino-cli
+    severity: LOW
+    why: "Most beginners build Arduino sketches with the Arduino IDE or arduino-cli."

@@ -42,6 +42,7 @@ def test_successful_terminal_onboard_pass(tmp_path):
         "0x20000", "0x80000",   # Slot A      off 0x20000,  size 512 KiB
         "0xA0000", "0x80000",   # Slot B      off 0xA0000,  size 512 KiB
         "0x120000", "0x80000",  # Slot C      off 0x120000, size 512 KiB
+        "",                # capabilities -> common MCU set
         "n",               # no initial facts
     ]
     name, out = _drive(conn, answers)
@@ -75,6 +76,7 @@ def test_blank_field_drops_to_medium_and_writes_null(tmp_path):
         "", "0x08000000", "512KB", "0x20000000",   # flash size left blank -> UNKNOWN
         "",                                        # confidence -> default MEDIUM (capped)
         "", "", "", "", "", "", "", "",            # no partitions
+        "",                                        # capabilities -> common MCU set
         "n",                                       # no initial facts
     ]
     name, out = _drive(conn, answers)
@@ -91,6 +93,7 @@ def test_two_boards_can_share_a_soc(tmp_path):
     base = ["{n}", "ST", "SharedSoC", "4", "2MB", "0x08000000", "1MB", "0x20000000",
             "",                            # confidence
             "", "", "", "", "", "", "", "",  # no partitions
+            "",                            # capabilities -> common MCU set
             "n"]                           # no initial facts
     for n in ("BoardOne", "BoardTwo"):
         _drive(conn, [a.replace("{n}", n) for a in base])
@@ -103,7 +106,7 @@ def test_explicit_confidence_low_is_respected(tmp_path):
     migrate(conn)
     # all core fields known -> ceiling HIGH, but engineer chooses LOW
     answers = ["LowBoard", "ST", "SOC", "4", "2MB", "0x08000000", "1MB", "0x20000000",
-               "LOW", "", "", "", "", "", "", "", "", "n"]
+               "LOW", "", "", "", "", "", "", "", "", "", "n"]
     name, out = _drive(conn, answers)
     board, _ = repo.load_board(conn, "LowBoard")
     assert board["confidence"] == "LOW"
@@ -114,7 +117,7 @@ def test_confidence_high_capped_to_medium_when_unknown(tmp_path):
     migrate(conn)
     # flash size blank -> ceiling MEDIUM; choosing HIGH must be capped
     answers = ["CapBoard", "ST", "SOC", "4", "", "0x08000000", "1MB", "0x20000000",
-               "HIGH", "", "", "", "", "", "", "", "", "n"]
+               "HIGH", "", "", "", "", "", "", "", "", "", "n"]
     name, out = _drive(conn, answers)
     board, _ = repo.load_board(conn, "CapBoard")
     assert board["confidence"] == "MEDIUM"
@@ -128,6 +131,7 @@ def test_initial_facts_written_with_citation(tmp_path):
         "FactBoard", "ST", "STM32MP1", "1", "2MB", "0x10000000", "256KB", "0x20000000",
         "",                                   # confidence default
         "", "", "", "", "", "", "", "",       # no partitions
+        "",                                   # capabilities -> common MCU set
         "y",                                  # add facts
         "ddr_cas_latency",                    # fact key
         "TIMING",                             # domain
@@ -171,6 +175,7 @@ def test_overlap_is_caught_and_reprompted(tmp_path):
         "", "",                 # Slot A unchanged
         "", "",                 # Slot B unchanged
         "0x120000", "",         # Slot C base fixed; size kept
+        "",                     # capabilities -> common MCU set
         "n",                    # no initial facts
     ]
     name, out = _drive(conn, answers)

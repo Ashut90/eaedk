@@ -1,4 +1,8 @@
 # Plain-language, one sentence per peripheral — for a 0-experience engineer. No jargon.
+- name: gpio
+  summary: "GPIO — general-purpose pins you turn on/off or read; how you blink an LED or read a button."
+- name: timer
+  summary: "Timer — a hardware counter for precise delays, PWM (e.g. dimming an LED), and periodic events."
 - name: uart
   summary: "UART — serial communication; the simplest way to print debug messages from your board to your PC."
 - name: usb

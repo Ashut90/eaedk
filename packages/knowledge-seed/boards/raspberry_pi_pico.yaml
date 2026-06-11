@@ -1,0 +1,42 @@
+soc:
+  name: RP2040
+  vendor: Raspberry Pi
+  arch: arm-cortex-m0plus
+  notes: "Dual Cortex-M0+ up to 133 MHz; boots from external QSPI flash (no on-die program flash)"
+board:
+  name: Raspberry-Pi-Pico
+  flash_base: 0x10000000      # XIP window for external QSPI NOR
+  flash_bytes: 2097152        # 2 MiB external QSPI (W25Q16 on the Pico)
+  ram_base: 0x20000000
+  ram_bytes: 270336           # 264 KiB on-chip SRAM
+  primary_storage: nor
+  boot_modes: [bootrom_usb, bootrom_flash]
+  confidence: HIGH
+source:
+  type: seed
+  title: "RP2040 Datasheet + Raspberry Pi Pico datasheet"
+  uri: "https://datasheets.raspberrypi.com/pico/pico-datasheet.pdf"
+  section: "Memory map / boot sequence"
+  snippet: "264 KiB SRAM at 0x2000_0000; XIP flash window at 0x1000_0000; bootrom loads a 256-byte stage-2 from external QSPI."
+capabilities:
+  - capability: gpio
+  - capability: timer
+  - capability: uart
+  - capability: spi
+  - capability: i2c
+  - capability: usb
+toolchain:
+  - kind: compiler
+    name: arm-none-eabi-gcc
+    target_triple: arm-none-eabi
+    min_version: "9.0"
+    severity: HIGH
+    why: "RP2040 is a Cortex-M0+; firmware needs the bare-metal ARM cross-compiler, not host gcc."
+  - kind: build_system
+    name: cmake
+    severity: MEDIUM
+    why: "The Raspberry Pi Pico SDK builds with CMake."
+  - kind: sdk
+    name: pioasm
+    severity: LOW
+    why: "RP2040 PIO programs are assembled by pioasm from the Pico SDK."

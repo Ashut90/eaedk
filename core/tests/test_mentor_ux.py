@@ -24,7 +24,9 @@ def _onboard_geometryless(conn, name):
     # name, vendor, soc(blank), arch=3(M4), flash size(unparseable), flash base, ram, ram base,
     # confidence, 8 partition blanks, facts=n  -> a board with no geometry
     answers = [name, "ST", "", "3", "I dont know", "", "", "", "",
-               "", "", "", "", "", "", "", "", "n"]
+               "", "", "", "", "", "", "", "",
+               "",  # capabilities -> common MCU set
+               "n"]
     it = iter(answers)
     out: list[str] = []
     run_wizard(conn, lambda p: next(it), out.append)

@@ -1,30 +1,30 @@
 soc:
-  name: STM32F411RE
+  name: STM32F103RB
   vendor: STMicroelectronics
-  arch: arm-cortex-m4
-  notes: "Cortex-M4F @ 100 MHz"
+  arch: arm-cortex-m3
+  notes: "Cortex-M3 @ 72 MHz on an ST Nucleo-64 board (on-board ST-Link)"
 board:
-  name: Nucleo-F411RE
+  name: Nucleo-F103RB
   flash_base: 0x08000000
-  flash_bytes: 524288        # 512 KiB
+  flash_bytes: 131072         # 128 KiB
   ram_base: 0x20000000
-  ram_bytes: 131072          # 128 KiB SRAM
+  ram_bytes: 20480            # 20 KiB SRAM
   primary_storage: internal_flash
   boot_modes: [flash, system_memory, sram]
   confidence: HIGH
 source:
   type: seed
-  title: "STM32F411xC/xE datasheet (DS10115)"
-  uri: "https://www.st.com/resource/en/datasheet/stm32f411re.pdf"
-  section: "Memory map / Flash & SRAM organization"
-  snippet: "512 KB Flash at 0x0800_0000; 128 KB SRAM at 0x2000_0000."
+  title: "STM32F103x8/xB datasheet (DS5319) + UM1724 (Nucleo-64)"
+  uri: "https://www.st.com/resource/en/datasheet/stm32f103rb.pdf"
+  section: "Memory mapping"
+  snippet: "128 KB Flash at 0x0800_0000; 20 KB SRAM at 0x2000_0000."
 capabilities:
-  - capability: uart
-  - capability: usb
-  - capability: spi
-  - capability: i2c
   - capability: gpio
   - capability: timer
+  - capability: uart
+  - capability: spi
+  - capability: i2c
+  - capability: usb
 toolchain:
   - kind: compiler
     name: arm-none-eabi-gcc
@@ -36,8 +36,8 @@ toolchain:
     name: openocd
     min_version: "0.11"
     severity: MEDIUM
-    why: "OpenOCD flashes and debugs over SWD/JTAG; older builds may lack this target's config."
+    why: "The Nucleo has an on-board ST-Link; OpenOCD flashes/debugs it over SWD."
   - kind: build_system
     name: cmake
     severity: MEDIUM
-    why: "The reference CMSIS/SDK projects build with CMake."
+    why: "STM32Cube/CMSIS projects build with CMake."

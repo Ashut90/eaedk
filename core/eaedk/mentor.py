@@ -30,6 +30,21 @@ def learning_path_for(conn: sqlite3.Connection, cap_names: set[str]) -> list[dic
     return out
 
 
+def dropped_steps_for(conn: sqlite3.Connection, cap_names: set[str]) -> list[dict]:
+    """Steps filtered OUT of the path, with the capabilities they're missing (Fix 6).
+
+    A beginner must learn *why* a step is hidden and how to unlock it — never a silent drop.
+    """
+    out = []
+    for s in repo.learning_steps(conn):
+        required = set(json.loads(s["requires_json"]))
+        missing = required - cap_names
+        if missing:
+            out.append({"step": s["step"], "title": s["title"],
+                        "missing": sorted(missing)})
+    return out
+
+
 def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None:
     board, soc = repo.load_board(conn, board_name)
     if board is None:
@@ -37,6 +52,7 @@ def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None
     caps = capability_map(conn, board_name)
     cap_names = {c["capability"] for c in caps}
     path = learning_path_for(conn, cap_names)
+    dropped = dropped_steps_for(conn, cap_names)
 
     L = [f"# Mentor — {board_name}  ({soc['name']}, {soc['arch']})", ""]
     L.append("## What this board can do")
@@ -52,6 +68,17 @@ def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None
         if s["before_you_start"]:
             L.append("       before you write code:")
             L.extend(f"         - {b}" for b in s["before_you_start"])
+        L.append("")
+    if not path:
+        L.append("  (no steps unlocked yet — see below)")
+        L.append("")
+    if dropped:
+        L.append("## Steps not shown yet — and how to unlock them")
+        for s in dropped:
+            caps_list = ", ".join(s["missing"])
+            cmd = f"eaedk board capability add \"{board_name}\" {s['missing'][0].upper()}"
+            L.append(f"  {s['step']}. {s['title']} — needs {caps_list} capability. "
+                     f"Add it with `{cmd}`")
         L.append("")
     L.append(f"Ask me anything:  eaedk mentor --board \"{board_name}\" --ask \"what should I "
              f"build first\"")

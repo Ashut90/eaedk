@@ -27,6 +27,8 @@ capabilities:
   - capability: usb
   - capability: uart
   - capability: i2c
+  - capability: gpio
+  - capability: timer
 toolchain:
   - kind: compiler
     name: arm-none-eabi-gcc

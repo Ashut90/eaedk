@@ -85,7 +85,7 @@ def cmd_board_show(args):
     conn = _conn(args)
     board, soc = repo.load_board(conn, args.name)
     if board is None:
-        print(f"error: unknown board {args.name!r}", file=sys.stderr)
+        _unknown_board(conn, args.name)
         sys.exit(2)
     caps = [r["capability"] for r in conn.execute(
         "SELECT capability FROM board_capabilities bc JOIN boards b ON b.id=bc.board_id "
@@ -104,11 +104,53 @@ def cmd_board_show(args):
     print(f"  capabilities     {', '.join(caps)}")
 
 
+def cmd_board_fill_geometry(args):
+    """Fix 4: fill a board's missing flash/RAM from its SoC's standard geometry."""
+    conn = _conn(args)
+    d = repo.apply_soc_defaults(conn, args.name)
+    if d is None:
+        if repo.load_board(conn, args.name)[0] is None:
+            _unknown_board(conn, args.name)
+        else:
+            print(f"no standard geometry on file for {args.name!r}'s SoC — onboard it with "
+                  "`eaedk ingest` or `eaedk board add --interactive`.", file=sys.stderr)
+        sys.exit(2)
+    print(f"filled {args.name} from {d['soc_name']} standard geometry: "
+          f"{d['flash_bytes'] // 1024}KB flash @ {hex(d['flash_base'])}, "
+          f"{d['ram_bytes'] // 1024}KB RAM @ {hex(d['ram_base'])}.")
+
+
+def cmd_board_capability_add(args):
+    """Fix 6: add a capability to a board so its learning-path steps unlock."""
+    conn = _conn(args)
+    cap = args.capability.lower()
+    with conn:
+        ok = repo.add_board_capability(conn, args.name, cap)
+    if not ok:
+        _unknown_board(conn, args.name)
+        sys.exit(2)
+    print(f"added capability {cap!r} to {args.name}.")
+
+
+def _run_wizard_safely(fn, *a):
+    """Run an interactive wizard so a traceback never reaches a beginner."""
+    try:
+        return fn(*a)
+    except (EOFError, KeyboardInterrupt):
+        print("\nonboarding cancelled — nothing was saved. Run it again any time.",
+              file=sys.stderr)
+        return None
+    except Exception as e:  # last-resort guard: a plain message, never a stack trace
+        print(f"\nsomething went wrong in the wizard ({e}); nothing was saved. "
+              "Please re-run, or use a seeded board (`eaedk board list`).", file=sys.stderr)
+        return None
+
+
 def cmd_board_add(args):
     conn = _conn(args)
     if args.interactive:
         from .onboard import run_wizard
-        name = run_wizard(conn, input, print)
+        name = _run_wizard_safely(run_wizard, conn, input, print)
         sys.exit(0 if name else 1)
     if not (args.name and args.soc and args.arch):
         print("error: board add requires NAME --soc --arch (or use --interactive)",
@@ -151,10 +193,24 @@ def cmd_project_new(args):
     print(f"created project {args.name!r} (id={pid}, goal={args.goal}, board={args.board})")
 
 
+def _unknown_board(conn, name: str) -> None:
+    """Fix 3: never a dead end — suggest a near-match, else show the path forward."""
+    matches = [m for m in repo.near_match_boards(conn, name) if m["flash_bytes"] is not None]
+    print(f"'{name}' isn't in the database.", file=sys.stderr)
+    if matches:
+        m = matches[0]
+        print(f"  Did you mean '{m['name']}' ({m['soc']}, {m['arch']})? It's already set up — "
+              f"use it directly.", file=sys.stderr)
+    else:
+        print("  Onboard it:   eaedk board add --interactive", file=sys.stderr)
+        print(f"  Or from a PDF: eaedk ingest --file <datasheet>.pdf --board \"{name}\"",
+              file=sys.stderr)
+
+
 def cmd_project_init(args):
     conn = _conn(args)
     from .project_init import run_project_init
-    name = run_project_init(conn, input, print)
+    name = _run_wizard_safely(run_project_init, conn, input, print)
     sys.exit(0 if name else 1)
 
 
@@ -521,7 +577,7 @@ def cmd_mentor(args):
     conn = _conn(args)
     board, _soc = repo.load_board(conn, args.board)
     if board is None:
-        print(f"error: unknown board {args.board!r} (see `eaedk board list`)", file=sys.stderr)
+        _unknown_board(conn, args.board)
         sys.exit(2)
     if args.ask:
         from .mentor_llm import mentor_ask
@@ -568,6 +624,7 @@ def cmd_export(args):
               "feasible project (or pass --force to emit a DRAFT). Blockers:", file=sys.stderr)
         for b in res.blockers:
             print(f"  - {b}", file=sys.stderr)
+        _offer_geometry(conn, p)
         sys.exit(3)
     banner = "" if res.feasibility == "feasible" else "  [DRAFT — not yet feasible]"
     print(f"exported {len(res.written)} file(s) to {res.out_dir}/{banner}")
@@ -575,8 +632,23 @@ def cmd_export(args):
         print(f"  {f}")
     if res.geometry_unknown:
         print("\n⚠  Your board has no flash geometry — these files will NOT build "
-              "(linker shows <UNKNOWN ...>). Run `eaedk ingest` or fill the board's flash/RAM "
-              "facts first.", file=sys.stderr)
+              "(linker shows <UNKNOWN ...>).", file=sys.stderr)
+        _offer_geometry(conn, p)
+
+
+def _offer_geometry(conn, project):
+    """Fix 4: a recognized SoC reaches working geometry without a datasheet — offer its
+    standard values and the one command that applies them, instead of a silent dead end."""
+    bn = repo.project_board_name(conn, project)
+    d = repo.soc_defaults_for(conn, bn) if bn else None
+    if d:
+        print(f"\n   For {d['soc_name']} the standard values are "
+              f"{d['flash_bytes'] // 1024}KB flash at {hex(d['flash_base'])}, "
+              f"{d['ram_bytes'] // 1024}KB RAM at {hex(d['ram_base'])}.", file=sys.stderr)
+        print(f"   Use them:  eaedk board fill-geometry {bn}", file=sys.stderr)
+    elif bn:
+        print(f"\n   No standard geometry on file for {bn}'s SoC — run `eaedk ingest` on its "
+              "datasheet, or onboard real flash/RAM values.", file=sys.stderr)
 
 
 def cmd_eval_run(args):
@@ -622,6 +694,13 @@ def build_parser() -> argparse.ArgumentParser:
     ba.add_argument("--ram-bytes", dest="ram_bytes"); ba.add_argument("--ddr-type", dest="ddr_type")
     ba.add_argument("--ddr-bytes", dest="ddr_bytes"); ba.add_argument("--primary-storage", dest="primary_storage")
     ba.add_argument("--uri"); ba.set_defaults(func=cmd_board_add)
+    bf = bd.add_parser("fill-geometry",
+                       help="fill missing flash/RAM from the board's SoC standard geometry")
+    bf.add_argument("name"); bf.set_defaults(func=cmd_board_fill_geometry)
+    bc = bd.add_parser("capability").add_subparsers(dest="sub2", required=True)
+    bca = bc.add_parser("add", help="add a capability (e.g. UART) so its learning steps unlock")
+    bca.add_argument("name"); bca.add_argument("capability")
+    bca.set_defaults(func=cmd_board_capability_add)
 
     pr = sub.add_parser("project").add_subparsers(dest="sub", required=True)
     pr.add_parser("init").set_defaults(func=cmd_project_init)

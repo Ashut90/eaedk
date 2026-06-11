@@ -26,6 +26,8 @@ capabilities:
   - capability: bluetooth
   - capability: spi
   - capability: i2c
+  - capability: gpio
+  - capability: timer
 toolchain:
   - kind: compiler
     name: xtensa-esp32-elf-gcc

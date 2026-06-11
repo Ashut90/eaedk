@@ -18,7 +18,7 @@ _VERSION_RE = re.compile(r"(\d+\.\d+(?:\.\d+)?)")
 # Binaries to probe per kind. openocd legitimately serves as both debugger and flash tool.
 PROBES: list[tuple[str, list[str]]] = [
     ("compiler", ["arm-none-eabi-gcc", "aarch64-linux-gnu-gcc", "arm-linux-gnueabihf-gcc",
-                  "xtensa-esp32-elf-gcc", "riscv64-unknown-elf-gcc", "clang", "gcc"]),
+                  "xtensa-esp32-elf-gcc", "riscv64-unknown-elf-gcc", "avr-gcc", "clang", "gcc"]),
     ("debugger", ["openocd", "st-util", "JLinkExe"]),
     ("flash_tool", ["openocd", "st-flash", "dfu-util", "esptool.py", "esptool", "picotool"]),
     ("build_system", ["cmake", "make", "meson", "ninja"]),

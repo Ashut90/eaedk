@@ -121,6 +121,63 @@ def load_board(conn: sqlite3.Connection, name: str
     return board, soc
 
 
+def near_match_boards(conn: sqlite3.Connection, name: str,
+                      soc_name: str | None = None) -> list[sqlite3.Row]:
+    """Existing boards whose name/SoC shares a 4+ char token with the query (for suggestions)."""
+    import re as _re
+    toks = [t for t in _re.split(r"[^a-z0-9]+", f"{name or ''} {soc_name or ''}".lower())
+            if len(t) >= 4]
+    if not toks:
+        return []
+    out: list[sqlite3.Row] = []
+    for row in conn.execute(
+            "SELECT b.name, b.flash_bytes, s.name AS soc, s.arch "
+            "FROM boards b JOIN socs s ON s.id = b.soc_id").fetchall():
+        hay = _re.sub(r"[^a-z0-9]", "", f"{row['name']}{row['soc'] or ''}".lower())
+        if any(t in hay for t in toks):
+            out.append(row)
+    return out
+
+
+def soc_defaults_for(conn: sqlite3.Connection, board_name: str) -> sqlite3.Row | None:
+    """Standard geometry for the board's SoC, if known (lets export offer values)."""
+    return conn.execute(
+        "SELECT d.soc_name, d.flash_base, d.flash_bytes, d.ram_base, d.ram_bytes "
+        "FROM soc_defaults d JOIN socs s ON s.name = d.soc_name "
+        "JOIN boards b ON b.soc_id = s.id WHERE b.name = ?", (board_name,)).fetchone()
+
+
+def apply_soc_defaults(conn: sqlite3.Connection, board_name: str) -> sqlite3.Row | None:
+    """Fill the board's NULL geometry columns from its SoC's standard values. Returns the
+    applied row, or None if the SoC isn't recognized."""
+    d = soc_defaults_for(conn, board_name)
+    if d is None:
+        return None
+    with conn:
+        conn.execute(
+            "UPDATE boards SET "
+            "flash_base = COALESCE(flash_base, ?), flash_bytes = COALESCE(flash_bytes, ?), "
+            "ram_base = COALESCE(ram_base, ?), ram_bytes = COALESCE(ram_bytes, ?) "
+            "WHERE name = ?",
+            (d["flash_base"], d["flash_bytes"], d["ram_base"], d["ram_bytes"], board_name))
+    return d
+
+
+def add_board_capability(conn: sqlite3.Connection, board_name: str, capability: str) -> bool:
+    """Add a capability to a board (idempotent). Returns False if the board is unknown. Does
+    NOT open a transaction — the caller controls it."""
+    row = conn.execute("SELECT id FROM boards WHERE name = ?", (board_name,)).fetchone()
+    if row is None:
+        return False
+    existing = {r["capability"] for r in conn.execute(
+        "SELECT capability FROM board_capabilities WHERE board_id = ?", (row["id"],)).fetchall()}
+    if capability not in existing:
+        conn.execute(
+            "INSERT INTO board_capabilities(board_id,capability,details_json) "
+            "VALUES (?,?,NULL)", (row["id"], capability))
+    return True
+
+
 def list_boards(conn: sqlite3.Connection, query: str | None = None) -> list[sqlite3.Row]:
     if query:
         return conn.execute(

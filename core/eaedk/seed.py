@@ -19,7 +19,7 @@ _SEED_TABLES = [
     "template_items", "templates",
     "board_toolchain_reqs", "board_capabilities", "boards", "socs",
     "risk_rules", "eval_cases", "log_signatures",
-    "capabilities", "learning_steps", "concepts",
+    "capabilities", "learning_steps", "concepts", "soc_defaults",
     "citations", "sources",
 ]
 
@@ -77,10 +77,17 @@ def _load_boards(conn: sqlite3.Connection) -> int:
             (source_id, src.get("page"), src.get("section"), None, src.get("snippet")),
         )
 
-        soc_id = conn.execute(
-            "INSERT INTO socs(name,vendor,arch,notes) VALUES (?,?,?,?)",
-            (soc["name"], soc.get("vendor"), soc["arch"], soc.get("notes")),
-        ).lastrowid
+        # Get-or-create the SoC: boards legitimately share one (e.g. two RP2040 boards), and
+        # socs.name is UNIQUE — so reuse the row when it already exists.
+        existing_soc = conn.execute(
+            "SELECT id FROM socs WHERE name = ?", (soc["name"],)).fetchone()
+        if existing_soc is not None:
+            soc_id = existing_soc["id"]
+        else:
+            soc_id = conn.execute(
+                "INSERT INTO socs(name,vendor,arch,notes) VALUES (?,?,?,?)",
+                (soc["name"], soc.get("vendor"), soc["arch"], soc.get("notes")),
+            ).lastrowid
 
         board_id = conn.execute(
             "INSERT INTO boards(soc_id,name,flash_base,flash_bytes,ram_base,ram_bytes,"
@@ -177,6 +184,17 @@ def _load_concepts(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+def _load_soc_defaults(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "soc_defaults.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO soc_defaults(soc_name,flash_base,flash_bytes,ram_base,ram_bytes) "
+            "VALUES (?,?,?,?,?)",
+            (r["soc_name"], r.get("flash_base"), r.get("flash_bytes"),
+             r.get("ram_base"), r.get("ram_bytes")))
+    return len(rows)
+
+
 def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
     if _already_seeded(conn) and not force:
         raise RuntimeError("database already seeded; pass force=True to reseed")
@@ -192,5 +210,6 @@ def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
             "capabilities": _load_capabilities(conn),
             "learning_steps": _load_learning_steps(conn),
             "concepts": _load_concepts(conn),
+            "soc_defaults": _load_soc_defaults(conn),
         }
     return counts

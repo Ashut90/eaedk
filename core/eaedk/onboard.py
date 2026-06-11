@@ -74,6 +74,7 @@ class BoardDraft:
     ram_bytes: int | None = None
     partitions: list[dict[str, Any]] = field(default_factory=list)
     facts: list[dict[str, Any]] = field(default_factory=list)
+    capabilities: list[str] = field(default_factory=list)
     unknown_fields: list[str] = field(default_factory=list)
     confidence_choice: str | None = None     # engineer-selected; capped by UNKNOWNs
 
@@ -109,14 +110,17 @@ def _prompt(ask: Ask, out: Out, label: str, default: Any = None,
     return raw, False
 
 
-def _select_arch(ask: Ask, out: Out) -> tuple[str, str | None, int]:
-    """Returns (arch_string, soc_core_label, vtor_align). Reprompts on bad selection."""
-    out("SoC core architecture:")
+def _select_arch(ask: Ask, out: Out, max_tries: int = 6) -> tuple[str, str | None, int]:
+    """Returns (arch_string, label, vtor_align). Blank = unknown (no infinite loop, never crash)."""
+    out("SoC core architecture (don't know? press Enter to skip — many checks still work):")
     for i, (label, _arch, align) in enumerate(ARCH_OPTIONS, 1):
         extra = f"  (VTOR {align}B)" if align else ""
         out(f"  {i}) {label}{extra}")
-    while True:
-        raw = ask("Select core [1-%d]: " % len(ARCH_OPTIONS)).strip()
+    for _ in range(max_tries):
+        raw = ask("Select core [1-%d, Enter to skip]: " % len(ARCH_OPTIONS)).strip()
+        if raw == "":
+            out("  -> architecture left unknown; you can set it later or use a seeded board.")
+            return "", "Unknown", 512
         if raw.isdigit() and 1 <= int(raw) <= len(ARCH_OPTIONS):
             label, arch, align = ARCH_OPTIONS[int(raw) - 1]
             if arch == "":  # Other
@@ -126,7 +130,33 @@ def _select_arch(ask: Ask, out: Out) -> tuple[str, str | None, int]:
                 label = arch
             out(f"  -> {label} bound; VTOR alignment = {align} bytes")
             return arch, label, align
-        out("  ! enter a number from the list")
+        out("  ! type one of the numbers above, or just press Enter to skip.")
+    out("  -> architecture left unknown.")
+    return "", "Unknown", 512
+
+
+# Capabilities a beginner can answer in plain language. Default = the common MCU set.
+CAPABILITY_CHOICES = ["uart", "spi", "i2c", "gpio", "timer", "usb", "wifi", "bluetooth"]
+_DEFAULT_CAPS = ["uart", "spi", "i2c", "gpio", "timer"]
+
+
+def _collect_capabilities(ask: Ask, out: Out) -> list[str]:
+    out("\nWhat can your board do? (so the mentor and learning path know what to suggest)")
+    for i, c in enumerate(CAPABILITY_CHOICES, 1):
+        out(f"  {i}) {c}")
+    raw = ask("Enter the numbers it has (comma-separated), or 'all' [Enter = common MCU set]: ").strip()
+    if raw == "":
+        out(f"  -> using the common set: {', '.join(_DEFAULT_CAPS)}")
+        return list(_DEFAULT_CAPS)
+    if raw.lower() == "all":
+        return list(CAPABILITY_CHOICES)
+    picked = []
+    for tok in re.split(r"[,\s]+", raw):
+        if tok.isdigit() and 1 <= int(tok) <= len(CAPABILITY_CHOICES):
+            picked.append(CAPABILITY_CHOICES[int(tok) - 1])
+        elif tok.lower() in CAPABILITY_CHOICES:
+            picked.append(tok.lower())
+    return list(dict.fromkeys(picked)) or list(_DEFAULT_CAPS)
 
 
 def _collect_partitions(ask: Ask, out: Out, defaults: dict[str, dict[str, int]]
@@ -235,26 +265,10 @@ def _collect_facts(ask: Ask, out: Out, default_conf: str) -> list[dict[str, Any]
     return facts
 
 
-def _seeded_matches(conn, name: str, soc_name: str | None) -> list[dict]:
-    """Find existing boards whose name/SoC shares a significant token with the new board."""
-    cand = f"{name or ''} {soc_name or ''}".lower()
-    toks = [t for t in re.split(r"[^a-z0-9]+", cand) if len(t) >= 4]
-    if not toks:
-        return []
-    out: list[dict] = []
-    for row in conn.execute(
-            "SELECT b.name, b.flash_bytes, s.name AS soc, s.arch "
-            "FROM boards b JOIN socs s ON s.id = b.soc_id"):
-        hay = re.sub(r"[^a-z0-9]", "", f"{row['name']}{row['soc'] or ''}".lower())
-        if any(t in hay for t in toks):
-            out.append(dict(row))
-    return out
-
-
 def _nudge_if_seeded(conn, out: Out, draft: BoardDraft) -> None:
     """Before committing, tell the engineer if a matching board with real geometry already
     exists — so a beginner doesn't hand-build a duplicate with no data. Never blocks."""
-    useful = [m for m in _seeded_matches(conn, draft.name, draft.soc_name)
+    useful = [m for m in repo.near_match_boards(conn, draft.name, draft.soc_name)
               if m["flash_bytes"] is not None]
     if not useful:
         return
@@ -294,10 +308,25 @@ def _commit(conn, draft: BoardDraft) -> None:
                 fact_value=f["value"], source_type=f["source_type"], confidence=f["confidence"],
                 citation_section=f.get("section"), citation_page=f.get("page"),
                 snippet=f"{f['source_type']} fact entered on {now}")
+        # Capabilities — so the mentor/learning path aren't empty for a user board.
+        for cap in draft.capabilities:
+            repo.add_board_capability(conn, draft.name, cap)
 
 
-def run_wizard(conn, ask: Ask, out: Out, max_attempts: int = 5) -> str | None:
-    """Drive the onboarding wizard. Returns the committed board name, or None if aborted."""
+def run_wizard(conn, raw_ask: Ask, out: Out, max_attempts: int = 5) -> str | None:
+    """Drive the onboarding wizard. Returns the committed board name, or None if aborted.
+
+    Fix 2: a traceback must never reach a beginner. Exhausted or closed input (EOFError /
+    StopIteration, e.g. a piped or empty stdin) is treated as a blank answer — every prompt
+    already handles blank as "leave UNKNOWN / use the default", so the wizard always resolves
+    rather than crashing. KeyboardInterrupt propagates to the CLI, which reports a clean abort.
+    """
+    def ask(prompt: str) -> str:
+        try:
+            return raw_ask(prompt)
+        except (EOFError, StopIteration):
+            return ""
+
     out("EAEDK interactive board onboarding — Enter to leave a field UNKNOWN.\n")
     draft = BoardDraft()
 
@@ -351,6 +380,7 @@ def run_wizard(conn, ask: Ask, out: Out, max_attempts: int = 5) -> str | None:
             draft.partitions = []
             draft.unknown_fields.append("partitions")
 
+    draft.capabilities = _collect_capabilities(ask, out)
     draft.facts = _collect_facts(ask, out, draft.confidence)
 
     _nudge_if_seeded(conn, out, draft)
