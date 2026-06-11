@@ -1,0 +1,37 @@
+key: low_power
+name: Low-Power / Sleep Bring-up
+version: 1
+goal_type: low_power
+# Power-management sequencing for battery / energy-harvesting designs. New checklist items only;
+# the POWER_SEQUENCE rule is reused unchanged for rail ordering.
+items:
+  - key: sleep_mode_selected
+    text: "Target sleep mode selected (e.g. STM32 Sleep/Stop/Standby; ESP32 light/deep sleep) with its RAM-retention and wake-latency trade-offs understood"
+    category: power
+    required_inputs: []
+    validation_rules: []
+  - key: sleep_entry_exit_sequence
+    text: "Sleep entry/exit sequence defined (flush work, enter WFI/WFE or vendor API, and the exact resume path after wake)"
+    category: power
+    required_inputs: []
+    validation_rules: []
+  - key: peripheral_clock_gating
+    text: "Peripheral clock gating before sleep (disable unused peripheral clocks and put GPIOs in their lowest-leakage state) — the usual cause of 'sleep current is too high'"
+    category: power
+    required_inputs: []
+    validation_rules: []
+  - key: wakeup_source_configured
+    text: "Wakeup source(s) configured (RTC alarm, EXTI/GPIO, or wake timer) and confirmed able to wake the chosen sleep mode"
+    category: power
+    required_inputs: []
+    validation_rules: []
+  - key: clock_reconfig_on_wake
+    text: "Clock reconfiguration on wake (PLLs are often disabled in deep sleep — re-lock them before timing-critical work resumes)"
+    category: power
+    required_inputs: []
+    validation_rules: []
+  - key: power_sequencing
+    text: "Power rail sequencing documented (power-on order from datasheet)"
+    category: hardware
+    required_inputs: [power_rails]
+    validation_rules: [POWER_SEQUENCE]

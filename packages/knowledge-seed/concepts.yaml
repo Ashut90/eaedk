@@ -18,3 +18,13 @@
   anchor: "SPI is a synchronous 4-wire bus (clock, two data lines, chip-select) where one controller talks to one or more peripherals."
 - name: stack_overflow
   anchor: "A stack overflow is when function calls and local variables grow past the RAM reserved for the stack, corrupting other memory."
+- name: gpio
+  anchor: "GPIO is a general-purpose pin you configure as an output (to drive an LED) or an input (to read a button); each pin's direction and state live in the port's registers."
+- name: uart-debug
+  anchor: |
+    Board boots but nothing prints on serial? Work down this list, in order — it's almost always one of these:
+      1. Clock/init order — is the UART's peripheral clock enabled and the UART initialised BEFORE your first print? A print before init sends nothing.
+      2. Baud rate — both sides must match. Set your terminal to 115200 8N1 (the EAEDK starter code's default), and make sure your baud divisor was computed from the ACTUAL clock (reset HSI: 8 MHz on STM32F1, 16 MHz on F4), not the max clock.
+      3. Wiring — TX on the board must go to RX on your USB-serial adapter (TX→RX, not TX→TX), and the two grounds must be connected.
+      4. Right pin/peripheral — confirm you configured the alternate-function for the exact TX pin you wired (e.g. PA9 = USART1_TX on a Blue Pill).
+    Check them in this order; most "dead serial" bugs are #1 (init order) or #2 (baud).

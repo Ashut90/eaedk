@@ -1,0 +1,39 @@
+# The mistakes a beginner actually makes first, per chip family — surfaced by
+# `eaedk mentor --board <name> --common-mistakes`. Curated from the common-failure literature,
+# not LLM-generated. `family` is matched from the board's SoC (stm32 / rp2040 / esp32 / avr).
+- family: stm32
+  mistake: "BOOT0 pin left HIGH (or floating) — the chip boots the system bootloader, not your flash, so your program never runs."
+  fix: "Tie BOOT0 LOW for normal boot from flash. On a Blue Pill that's the jumper nearest the reset button set to 0."
+  severity: HIGH
+- family: stm32
+  mistake: "Touching a peripheral before enabling its clock — every read/write reads back 0 or faults."
+  fix: "Enable the peripheral's clock in RCC (e.g. RCC_APB2ENR for GPIO/USART1) BEFORE configuring it. Peripherals are off at reset to save power."
+  severity: HIGH
+- family: stm32
+  mistake: "Wrong UART baud-rate divisor (USART_BRR) — garbage characters on the serial terminal."
+  fix: "Compute BRR from the ACTUAL clock feeding the UART (reset HSI is 8 MHz on F1, 16 MHz on F4), not the max clock. BRR = clk / baud."
+  severity: MEDIUM
+- family: rp2040
+  mistake: "Wrong flash XIP offset — code linked at the flash base instead of 0x10000000, so it won't run from external QSPI flash."
+  fix: "Link for the XIP window at 0x10000000; the second-stage bootloader maps QSPI flash there."
+  severity: HIGH
+- family: rp2040
+  mistake: "Missing the boot2 second-stage bootloader — the RP2040 boot ROM can't configure the external flash, so execution never reaches your code."
+  fix: "Include a boot2 stage (e.g. boot2_w25q080) at the start of flash with its required checksum; the SDK adds it automatically — a bare link does not."
+  severity: HIGH
+- family: esp32
+  mistake: "Wrong or missing partition table — the bootloader can't find the app partition and reboots in a loop."
+  fix: "Flash a valid partition table (default or custom CSV) at 0x8000 with an 'app' partition large enough for your binary."
+  severity: HIGH
+- family: esp32
+  mistake: "Using NVS / Wi-Fi before nvs_flash_init() — the call fails and Wi-Fi/BLE won't start."
+  fix: "Call nvs_flash_init() early in app_main(); handle ESP_ERR_NVS_NO_FREE_PAGES by erasing and re-initialising."
+  severity: MEDIUM
+- family: avr
+  mistake: "F_CPU in code doesn't match the actual clock (e.g. code assumes 16 MHz but the fuses select the 1 MHz internal oscillator) — every delay and baud rate is wrong."
+  fix: "Set F_CPU to the real clock and program the fuses to match (external crystal vs internal RC)."
+  severity: MEDIUM
+- family: avr
+  mistake: "Wrong fuse bits — disabling SPIEN or mis-setting the clock source can make the chip unresponsive to the programmer."
+  fix: "Double-check fuse calculations before writing; keep SPIEN enabled so ISP still works, and don't enable an external clock you don't have."
+  severity: HIGH

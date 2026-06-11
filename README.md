@@ -95,7 +95,7 @@ python3 -m pip install pyyaml          # the only runtime dependency
 export PYTHONPATH=core                 # or: pip install -e .
 
 python3 -m eaedk.cli db init           # apply migrations (single local SQLite file)
-python3 -m eaedk.cli db seed           # 6 templates, 14 boards, risk rules, 11 log signatures
+python3 -m eaedk.cli db seed           # 8 templates, 14 boards, risk rules, 15 log signatures
 python3 -m eaedk.cli eval run          # -> PASSED 11/11 (deterministic golden cases)
 
 # Optional LLM layer (off by default):
@@ -158,7 +158,7 @@ core/eaedk/
   orchestrator/       deterministic-first assembly of the fixed response schema
   onboard.py          interactive board wizard      project_init.py  interactive project setup
   repo.py             one place for DB access + record_fact() write-through
-packages/             6 templates, 14 seed boards, risk rules, log signatures, eval cases
+packages/             8 templates, 14 seed boards, risk rules, log signatures, eval cases
 docs/                 architecture review, MVP spec, truth-layer, log-engine, this README's diagram
 demo.sh               end-to-end STM32MP157 DDR demo
 ```

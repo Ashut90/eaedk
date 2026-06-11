@@ -450,6 +450,73 @@ def power_sequence(ctx):
                             f"{len(rails)} rails sequenced consistently", "HIGH", used)
 
 
+# --- secure boot chain (v1.8.0) — new HIGH rules, scoped to bootloader/ota. Each engages only
+#     on its own new input key, so existing eval cases (which never supply these) are unaffected.
+
+_KEY_STORAGE_OK = {"efuse", "otp", "tpm", "secure_element", "se", "rpmb", "hsm", "fuse"}
+
+
+@rule("SECURE_BOOT_SIGNATURE_VERIFY", ("bootloader", "ota"), ("secure_boot_sig_verify",), "HIGH")
+def secure_boot_signature_verify(ctx):
+    v = ctx.get("secure_boot_sig_verify")
+    used = {"secure_boot_sig_verify": v}
+    if v is None:
+        return ValidationResult("SECURE_BOOT_SIGNATURE_VERIFY", UNKNOWN,
+                                "image signature verification not declared", "HIGH", used)
+    if as_int(v):
+        return ValidationResult("SECURE_BOOT_SIGNATURE_VERIFY", PASS,
+                                "bootloader verifies the image signature before boot", "HIGH", used)
+    return ValidationResult("SECURE_BOOT_SIGNATURE_VERIFY", FAIL,
+                            "image signature verification is disabled — unsigned code can boot",
+                            "HIGH", used)
+
+
+@rule("SECURE_BOOT_KEY_STORAGE", ("bootloader", "ota"), ("secure_boot_key_storage",), "HIGH")
+def secure_boot_key_storage(ctx):
+    v = ctx.get("secure_boot_key_storage")
+    used = {"secure_boot_key_storage": v}
+    if v is None:
+        return ValidationResult("SECURE_BOOT_KEY_STORAGE", UNKNOWN,
+                                "key storage location not defined", "HIGH", used)
+    if isinstance(v, str) and v.strip().lower() in _KEY_STORAGE_OK:
+        return ValidationResult("SECURE_BOOT_KEY_STORAGE", PASS,
+                                f"verification key stored in immutable {v}", "HIGH", used)
+    return ValidationResult("SECURE_BOOT_KEY_STORAGE", UNKNOWN,
+                            f"unrecognised key storage {v!r} — confirm it is immutable "
+                            "(eFuse/OTP/TPM/secure element), not rewritable flash", "HIGH", used)
+
+
+@rule("SECURE_BOOT_ROLLBACK_COUNTER", ("bootloader", "ota"),
+      ("secure_boot_rollback_counter",), "HIGH")
+def secure_boot_rollback_counter(ctx):
+    v = ctx.get("secure_boot_rollback_counter")
+    used = {"secure_boot_rollback_counter": v}
+    if v is None:
+        return ValidationResult("SECURE_BOOT_ROLLBACK_COUNTER", UNKNOWN,
+                                "anti-rollback counter not declared", "HIGH", used)
+    if as_int(v):
+        return ValidationResult("SECURE_BOOT_ROLLBACK_COUNTER", PASS,
+                                "monotonic anti-rollback counter present", "HIGH", used)
+    return ValidationResult("SECURE_BOOT_ROLLBACK_COUNTER", FAIL,
+                            "no anti-rollback counter — a signed but vulnerable old image can be "
+                            "reflashed", "HIGH", used)
+
+
+@rule("SECURE_BOOT_DEBUG_LOCKED", ("bootloader", "ota"), ("secure_boot_debug_locked",), "HIGH")
+def secure_boot_debug_locked(ctx):
+    v = ctx.get("secure_boot_debug_locked")
+    used = {"secure_boot_debug_locked": v}
+    if v is None:
+        return ValidationResult("SECURE_BOOT_DEBUG_LOCKED", UNKNOWN,
+                                "production debug-lock state not declared", "HIGH", used)
+    if as_int(v):
+        return ValidationResult("SECURE_BOOT_DEBUG_LOCKED", PASS,
+                                "debug interface (SWD/JTAG) locked in the production build", "HIGH", used)
+    return ValidationResult("SECURE_BOOT_DEBUG_LOCKED", FAIL,
+                            "debug interface open in production — allows firmware/key extraction",
+                            "HIGH", used)
+
+
 # Per-rule teach (mentor layer): what the field is, units, where to find it, the consequence.
 # Attached to any non-PASS result so a beginner is never left with a bare key name.
 RULE_TEACH: dict[str, str] = {
@@ -512,6 +579,22 @@ RULE_TEACH: dict[str, str] = {
     "REGISTER_MAP_PRESENT":
         "A driver needs the peripheral's register map, human-verified from the datasheet. Add "
         "register facts (ingest the datasheet, then confirm) before writing register code.",
+    "SECURE_BOOT_SIGNATURE_VERIFY":
+        "The bootloader must verify the application's signature before running it. Set "
+        "secure_boot_sig_verify=1 once the bootloader checks an RSA/ECDSA signature (or hash "
+        "against a trusted key). Without it, any unsigned image boots.",
+    "SECURE_BOOT_KEY_STORAGE":
+        "The verification key must live in immutable storage. Set secure_boot_key_storage to "
+        "where the public key / hash is held (efuse, otp, tpm, secure_element). A key in "
+        "rewritable flash can be swapped, defeating secure boot.",
+    "SECURE_BOOT_ROLLBACK_COUNTER":
+        "A monotonic anti-rollback counter stops an attacker reflashing an older, signed-but-"
+        "vulnerable image. Set secure_boot_rollback_counter=1 once the bootloader checks and "
+        "advances a version counter in OTP/eFuse.",
+    "SECURE_BOOT_DEBUG_LOCKED":
+        "Production builds must lock the debug interface (SWD/JTAG / RDP level 2) so firmware "
+        "and keys can't be read out. Set secure_boot_debug_locked=1 once the production image "
+        "blows the debug-disable fuse / sets readout protection.",
 }
 
 

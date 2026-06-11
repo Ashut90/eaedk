@@ -579,7 +579,13 @@ def cmd_mentor(args):
     if board is None:
         _unknown_board(conn, args.board)
         sys.exit(2)
-    if args.ask:
+    if args.common_mistakes:
+        from .mentor import render_common_mistakes
+        print(render_common_mistakes(conn, args.board))
+    elif args.next_step is not None:
+        from .mentor import render_next_step
+        print(render_next_step(conn, args.board, args.next_step or None))
+    elif args.ask:
         from .mentor_llm import mentor_ask
         print(mentor_ask(conn, args.board, args.ask, use_llm=args.llm))
     elif args.explain:
@@ -757,6 +763,11 @@ def build_parser() -> argparse.ArgumentParser:
     mt.add_argument("--ask"); mt.add_argument("--explain")
     mt.add_argument("--review-code", dest="review_code", action="store_true")
     mt.add_argument("--project")
+    mt.add_argument("--common-mistakes", dest="common_mistakes", action="store_true",
+                    help="common first mistakes for this board's chip family")
+    mt.add_argument("--next", dest="next_step", nargs="?", const="", default=None,
+                    metavar="COMPLETED_STEP",
+                    help="the next project to build (optionally name the step you just finished)")
     _add_llm(mt); mt.set_defaults(func=cmd_mentor)
 
     ing = sub.add_parser("ingest")

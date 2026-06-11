@@ -45,6 +45,89 @@ def dropped_steps_for(conn: sqlite3.Connection, cap_names: set[str]) -> list[dic
     return out
 
 
+def family_of(soc_name: str | None) -> str | None:
+    """Map a board's SoC name to a first-mistakes chip family. Pure; None if unrecognised."""
+    s = (soc_name or "").upper()
+    if s.startswith("STM32"):
+        return "stm32"
+    if s == "RP2040":
+        return "rp2040"
+    if s.startswith("ESP32"):
+        return "esp32"
+    if s.startswith("ATMEGA") or s.startswith("ATTINY"):
+        return "avr"
+    return None
+
+
+def render_common_mistakes(conn: sqlite3.Connection, board_name: str) -> str | None:
+    """B3 (v1.8.0): the mistakes a beginner makes first on this board's chip family."""
+    board, soc = repo.load_board(conn, board_name)
+    if board is None:
+        return None
+    fam = family_of(soc["name"])
+    rows = repo.first_mistakes_for_family(conn, fam) if fam else []
+    L = [f"# Common first mistakes — {board_name}  ({soc['name']})", ""]
+    if not rows:
+        L.append("No common-mistakes list is seeded for this chip family yet.")
+        L.append("General rule: enable a peripheral's clock before using it, and match baud "
+                 "rates on both ends of a UART.")
+        return "\n".join(L) + "\n"
+    for r in rows:
+        L.append(f"• [{r['severity']}] {r['mistake']}")
+        L.append(f"      fix: {r['fix']}")
+        L.append("")
+    L.append("Board boots but nothing prints? See `eaedk mentor --board "
+             f"\"{board_name}\" --explain UART-debug`.")
+    return "\n".join(L) + "\n"
+
+
+def render_next_step(conn: sqlite3.Connection, board_name: str,
+                     completed_key: str | None = None) -> str | None:
+    """B4 (v1.8.0): hand-hold to the next project — what it introduces, the new concept, and
+    what to set up first. ``completed_key`` = the step just finished (None -> the first step)."""
+    board, soc = repo.load_board(conn, board_name)
+    if board is None:
+        return None
+    path = learning_path_for(conn, repo.board_capability_names(conn, board_name))
+    if not path:
+        return (f"# What's next — {board_name}\n\n"
+                "No learning steps are unlocked for this board yet. Run "
+                f"`eaedk mentor --board \"{board_name}\"` to see why.\n")
+    nxt = path[0]
+    if completed_key:
+        keys = [s["key"] for s in path]
+        if completed_key in keys:
+            i = keys.index(completed_key)
+            if i + 1 < len(path):
+                nxt = path[i + 1]
+            else:
+                return (f"# What's next — {board_name}\n\n🎉 You've finished the unlocked "
+                        f"learning path (last: {path[-1]['title']}). Add capabilities or a new "
+                        "board to unlock more, or start your own project.\n")
+
+    intro = repo.learning_step_intro(conn, nxt["key"])
+    L = [f"# What's next — {board_name}", "",
+         f"## Next project: {nxt['title']}  (step {nxt['step']})", ""]
+    if intro:
+        L.append(f"**What it introduces:** {intro['introduces']}")
+        if intro["concept"]:
+            anchor = repo.get_concept(conn, intro["concept"])
+            if anchor:
+                L.append(f"**New concept — {anchor['name']}:** {anchor['anchor'].splitlines()[0]}")
+                L.append(f"  (full explanation: `eaedk mentor --board \"{board_name}\" "
+                         f"--explain {anchor['name']}`)")
+    L.append(f"**Why now:** {nxt['why']}")
+    if nxt["before_you_start"]:
+        L.append("")
+        L.append("**Set this up before you start:**")
+        L.extend(f"  - {b}" for b in nxt["before_you_start"])
+    L.append("")
+    L.append(f"Ready? Run `eaedk project init` (pick {board_name}, goal '{nxt['goal_type']}').")
+    L.append(f"Finished it? Run `eaedk mentor --board \"{board_name}\" --next {nxt['key']}` "
+             "for the one after.")
+    return "\n".join(L) + "\n"
+
+
 def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None:
     board, soc = repo.load_board(conn, board_name)
     if board is None:
@@ -80,9 +163,18 @@ def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None
             L.append(f"  {s['step']}. {s['title']} — needs {caps_list} capability. "
                      f"Add it with `{cmd}`")
         L.append("")
+    # B1 (v1.8.0): the two failures every beginner hits right after flashing — surface the
+    # guided flows so they're never left staring at a dead board.
+    L.append("## Stuck after flashing?")
+    L.append(f"  Board boots but nothing on serial:  eaedk mentor --board \"{board_name}\" "
+             f"--explain UART-debug")
+    L.append(f"  No output at all / common pitfalls:  eaedk mentor --board \"{board_name}\" "
+             f"--common-mistakes")
+    L.append("")
     L.append(f"Ask me anything:  eaedk mentor --board \"{board_name}\" --ask \"what should I "
              f"build first\"")
     L.append(f"Explain a concept: eaedk mentor --board \"{board_name}\" --explain HardFault")
+    L.append(f"What's next:       eaedk mentor --board \"{board_name}\" --next")
     L.append(f"Start step 1:      eaedk project init   (pick {board_name}, goal "
              f"'bare-metal application')")
     return "\n".join(L) + "\n"

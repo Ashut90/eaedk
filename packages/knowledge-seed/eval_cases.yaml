@@ -174,3 +174,42 @@
     feasibility: feasible
     validations:
       POWER_SEQUENCE: PASS
+
+# --- secure boot chain (v1.8.0). New rules engage only on secure_boot_* keys, so they never
+#     touch the cases above. ---
+- name: secure_boot_chain_complete_passes
+  goal_type: bootloader
+  inputs:
+    board: "STM32H743"
+    secure_boot_sig_verify: true
+    secure_boot_key_storage: "efuse"
+    secure_boot_rollback_counter: true
+    secure_boot_debug_locked: true
+  expected:
+    feasibility: feasible
+    validations:
+      SECURE_BOOT_SIGNATURE_VERIFY: PASS
+      SECURE_BOOT_KEY_STORAGE: PASS
+      SECURE_BOOT_ROLLBACK_COUNTER: PASS
+      SECURE_BOOT_DEBUG_LOCKED: PASS
+
+- name: secure_boot_debug_open_fails
+  goal_type: bootloader
+  inputs:
+    board: "STM32H743"
+    secure_boot_debug_locked: false      # debug left open in production -> HIGH FAIL
+  expected:
+    feasibility: not_feasible
+    validations:
+      SECURE_BOOT_DEBUG_LOCKED: FAIL
+
+- name: secure_boot_key_storage_unrecognised_blocks
+  goal_type: ota
+  inputs:
+    board: "BeagleBone-Black"
+    secure_boot_key_storage: "sd_card"   # rewritable -> engaged UNKNOWN -> blocked
+  expected:
+    feasibility: blocked
+    validations:
+      SECURE_BOOT_KEY_STORAGE: UNKNOWN
+    unknowns_contains: ["key storage"]

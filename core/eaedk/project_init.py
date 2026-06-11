@@ -23,8 +23,13 @@ GOAL_LABELS = {
     "linux": "Linux bring-up",
     "ota": "Fail-safe OTA update",
     "driver": "Linux device driver",
+    "multicore": "Multi-core bring-up (heterogeneous cores)",
+    "low_power": "Low-power / sleep bring-up",
 }
-_GOAL_ORDER = ["bare_metal_app", "bootloader", "uboot", "linux", "ota", "driver"]
+# New goals (v1.8.0) are appended so the existing 1..6 ordering — and the "start here" default
+# at option 1 — are unchanged; only the Custom option's index shifts.
+_GOAL_ORDER = ["bare_metal_app", "bootloader", "uboot", "linux", "ota", "driver",
+               "multicore", "low_power"]
 
 
 def _select_board(ask: Ask, out: Out, boards) -> str | None:

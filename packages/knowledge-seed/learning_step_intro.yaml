@@ -1,0 +1,20 @@
+# Cross-links each learning step to the NEW concept it introduces, for `mentor --next`.
+# step_key matches learning_path.yaml keys; concept (optional) matches concepts.yaml names.
+- step_key: blink
+  introduces: "The full build → flash → run loop, and driving a single GPIO output pin."
+  concept: gpio
+- step_key: uart_logger
+  introduces: "Sending bytes off the chip over serial so you can SEE what your code is doing — the debugging tool you'll use in every project after this."
+  concept: uart
+- step_key: spi_sensor
+  introduces: "Talking to an external chip over a real bus: clock, data lines, and chip-select timing."
+  concept: spi
+- step_key: interrupt
+  introduces: "Letting hardware events pre-empt your main loop, via the vector table and the NVIC — the basis of responsive firmware."
+  concept: interrupt
+- step_key: bootloader
+  introduces: "Splitting flash into regions and jumping between programs — how firmware updates and recovery work."
+  concept: bootloader
+- step_key: rtos
+  introduces: "Running multiple tasks 'at once' with a scheduler, each with its own stack and priority."
+  concept: stack_overflow

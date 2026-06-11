@@ -42,8 +42,10 @@ def test_init_bootloader_clean_no_blockers(tmp_path):
 
 def test_init_custom_goal_is_templateless(tmp_path):
     conn = _seeded(tmp_path)
-    # custom is the last menu option (after 6 templates) -> index 7, then an identifier
-    name, out = _drive(conn, ["c1", "Nucleo-F411RE", "7", "secure_enclave_bringup"])
+    # Custom is the last menu option (after the 8 templated goals) -> index 9, then an identifier.
+    # (v1.8.0 added the multicore + low_power templates, shifting Custom from 7 to 9; the option
+    # itself is unchanged — still the templateless escape hatch at the end of the list.)
+    name, out = _drive(conn, ["c1", "Nucleo-F411RE", "9", "secure_enclave_bringup"])
     assert name == "c1"
     p = repo.get_project(conn, "c1")
     assert p["goal_type"] == "secure_enclave_bringup"

@@ -154,6 +154,17 @@ def _load_signatures(conn: sqlite3.Connection) -> list[dict]:
         "SELECT id, format, pattern_regex, cause, fix, severity FROM log_signatures").fetchall()]
 
 
+def _silent_boot_matches(sigs: list[dict]) -> list[SignatureMatch]:
+    """Synthesise a match from the seeded 'silent' signature for an empty capture. Content lives
+    in the seed YAML; the engine only detects emptiness and surfaces that curated row."""
+    sig = next((s for s in sigs if s["format"] == "silent"), None)
+    if sig is None:
+        return []
+    return [SignatureMatch(signature_id=sig["id"], format="silent", line_no=1,
+                           line="(no output captured)", cause=sig["cause"], fix=sig["fix"],
+                           severity=sig["severity"])]
+
+
 def _store_log_file(conn, project, path: str, text: str, fmt: str) -> int:
     now = datetime.now(timezone.utc).isoformat()
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -340,6 +351,13 @@ async def analyze_log_async(conn: sqlite3.Connection, path: str,
     fmt = detect_format(text)
     sigs = _load_signatures(conn)
     matches = match_signatures(text, fmt, sigs)
+    # B2 (v1.8.0): a truly empty capture (no output at all after flashing) is itself a
+    # diagnosis — synthesise a match from the seeded 'silent' signature. Non-empty
+    # unrecognised logs are unaffected (they still fall through to the --llm path).
+    if not matches and text.strip() == "":
+        matches = _silent_boot_matches(sigs)
+        if matches:
+            fmt = "silent"
 
     project = repo.get_project(conn, project_name) if project_name else None
     log_file_id = _store_log_file(conn, project, path, text, fmt)

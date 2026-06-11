@@ -1,0 +1,48 @@
+key: multicore_bringup
+name: Multi-Core Bring-up
+version: 1
+goal_type: multicore
+# Heterogeneous / multi-core SoCs (STM32MP157 A7+M4, RP2040 dual M0+, i.MX8M A53+M-core).
+# A guided checklist for the bring-up decisions a single-core flow never raises. Reuses the
+# existing POWER_SEQUENCE rule for rail ordering; the rest are documentation gates.
+items:
+  - key: core_boot_order
+    text: "Core boot order defined (which core runs first from reset, and how/when it releases the others)"
+    category: bringup
+    required_inputs: []
+    validation_rules: []
+  - key: secondary_core_release
+    text: "Secondary-core start address and release mechanism (hold-in-reset, IPC doorbell, or vendor API) documented"
+    category: bringup
+    required_inputs: []
+    validation_rules: []
+  - key: shared_memory_regions
+    text: "Shared-memory regions defined (base/size for each), cache/coherency policy, and non-cacheable mapping for IPC buffers"
+    category: memory_layout
+    required_inputs: []
+    validation_rules: []
+  - key: intercore_comms
+    text: "Inter-core communication channel chosen (OpenAMP/RPMsg, mailbox/HSEM, or shared ring buffer) and its memory placed in shared RAM"
+    category: communication
+    required_inputs: []
+    validation_rules: []
+  - key: peripheral_ownership
+    text: "Per-peripheral ownership assigned (which core owns each UART/SPI/I2C/timer) so two cores don't drive the same block"
+    category: hardware
+    required_inputs: []
+    validation_rules: []
+  - key: clock_reset_responsibility
+    text: "Clock and reset responsibility defined (which core configures the PLLs and peripheral clocks before the other uses them)"
+    category: bringup
+    required_inputs: []
+    validation_rules: []
+  - key: power_sequencing
+    text: "Power rail sequencing documented (power-on order from datasheet)"
+    category: hardware
+    required_inputs: [power_rails]
+    validation_rules: [POWER_SEQUENCE]
+  - key: shared_interrupt_routing
+    text: "Interrupt routing decided (which core services which IRQ; no two cores enabling the same line)"
+    category: bringup
+    required_inputs: []
+    validation_rules: []

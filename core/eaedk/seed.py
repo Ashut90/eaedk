@@ -21,6 +21,7 @@ _SEED_TABLES = [
     "risk_rules", "eval_cases", "log_signatures",
     "capabilities", "learning_steps", "concepts", "soc_defaults",
     "debug_probes", "soc_flash_profiles",
+    "first_mistakes", "learning_step_intro",
     "citations", "sources",
 ]
 
@@ -215,6 +216,24 @@ def _load_soc_flash_profiles(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+def _load_first_mistakes(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "first_mistakes.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO first_mistakes(family,mistake,fix,severity) VALUES (?,?,?,?)",
+            (r["family"], r["mistake"], r["fix"], r.get("severity", "HIGH")))
+    return len(rows)
+
+
+def _load_learning_step_intro(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "learning_step_intro.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO learning_step_intro(step_key,introduces,concept) VALUES (?,?,?)",
+            (r["step_key"], r["introduces"], r.get("concept")))
+    return len(rows)
+
+
 def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
     if _already_seeded(conn) and not force:
         raise RuntimeError("database already seeded; pass force=True to reseed")
@@ -233,5 +252,7 @@ def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
             "soc_defaults": _load_soc_defaults(conn),
             "debug_probes": _load_debug_probes(conn),
             "soc_flash_profiles": _load_soc_flash_profiles(conn),
+            "first_mistakes": _load_first_mistakes(conn),
+            "learning_step_intro": _load_learning_step_intro(conn),
         }
     return counts

@@ -68,3 +68,31 @@
   cause: "Cortex-M configurable fault (CFSR) — a specific usage/bus/memory-management fault bit was set."
   fix: "Read CFSR bits: IACCVIOL/DACCVIOL = bad instruction/data access, UNALIGNED = unaligned access, UNDEFINSTR = bad/corrupt instruction or function pointer, STKERR/MSTKERR = stack overflow on exception entry."
   severity: HIGH
+
+# --- Silent boot (format: silent) — synthesised by the engine for an EMPTY capture (no output
+#     at all after flashing). Sentinel pattern never matches real text; the engine looks this
+#     row up by format when the log is empty. ---
+- format: silent
+  pattern_regex: "__SILENT_BOOT__"
+  cause: "No output detected at all after flashing — the board never printed anything (silent boot failure)."
+  fix: "Common causes: (1) wrong boot-mode pins — on STM32 check BOOT0 is LOW for normal boot from flash; (2) flash write failed or wrong address — re-flash and verify; (3) clock not initialised so the UART can't run; (4) UART not initialised before the first print, or wrong baud (use 115200 8N1). Confirm the board has power and the LED/reset behaves, then re-check BOOT0 and the flash step first."
+  severity: HIGH
+
+# --- RTOS task analysis (format: mcu) — FreeRTOS/Zephyr task-level failures ---
+- format: mcu
+  pattern_regex: "configCHECK_FOR_STACK_OVERFLOW|vApplicationStackOverflowHook|[Ss]tack overflow in task|stack canary watchpoint triggered"
+  cause: "RTOS task stack overflow — a task used more stack than it was allocated and corrupted adjacent memory (FreeRTOS stack-overflow hook / Zephyr canary)."
+  fix: "Increase that task's stack depth; find the real high-water mark with uxTaskGetStackHighWaterMark() (FreeRTOS) or CONFIG_THREAD_STACK_INFO (Zephyr). Watch for large on-stack buffers and deep call chains in the named task."
+  severity: HIGH
+
+- format: mcu
+  pattern_regex: "[Tt]ask watchdog got triggered|task watchdog.*(expired|timeout)|watchdog.*CPU\\s*\\d.*(starv|block)|[Ee]sp_task_wdt.*timeout"
+  cause: "Task starvation — a task held the CPU (or blocked without yielding) long enough that a lower-priority task never ran and the task watchdog expired in its context."
+  fix: "Find the task named in the watchdog dump; ensure it yields (vTaskDelay / blocking calls) and isn't spinning. Check for a high-priority task that never sleeps, or priority inversion on a shared mutex."
+  severity: HIGH
+
+- format: mcu
+  pattern_regex: "[Dd]eadlock detected|circular (mutex|lock) dependency|tasks? .*waiting on each other|mutex.*deadlock|potential deadlock"
+  cause: "Deadlock — two (or more) tasks each hold a mutex the other needs, so neither can proceed; the system hangs with no crash."
+  fix: "Establish a global lock-ordering rule (always take mutexes in the same order), use timeouts on mutex takes to detect it, and keep critical sections short. Inspect which task holds which mutex at the hang."
+  severity: HIGH

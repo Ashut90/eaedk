@@ -181,6 +181,20 @@ def soc_flash_profile_for(conn: sqlite3.Connection, board_name: str) -> sqlite3.
         "WHERE b.name = ?", (board_name,)).fetchone()
 
 
+def first_mistakes_for_family(conn: sqlite3.Connection, family: str) -> list[sqlite3.Row]:
+    """Common beginner mistakes seeded for a chip family (stm32/rp2040/esp32/avr)."""
+    return conn.execute(
+        "SELECT family, mistake, fix, severity FROM first_mistakes WHERE family = ? "
+        "ORDER BY id", (family,)).fetchall()
+
+
+def learning_step_intro(conn: sqlite3.Connection, step_key: str) -> sqlite3.Row | None:
+    """The 'what this project introduces' cross-link for a learning step (mentor --next)."""
+    return conn.execute(
+        "SELECT step_key, introduces, concept FROM learning_step_intro WHERE step_key = ?",
+        (step_key,)).fetchone()
+
+
 def add_board_capability(conn: sqlite3.Connection, board_name: str, capability: str) -> bool:
     """Add a capability to a board (idempotent). Returns False if the board is unknown. Does
     NOT open a transaction — the caller controls it."""
