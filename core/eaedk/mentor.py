@@ -166,6 +166,7 @@ def think_before_code(conn: sqlite3.Connection, board_name: str, goal: str) -> l
 
     bf = repo.blink_facts(conn, board_name)        # board-specific answers from SQLite, if seeded
     if goal in ("bare_metal_app", "bootloader") or supports_linux(soc) is False:
+        clock_covered = False
         if bf and bf["led_pin"]:
             add("Which pin is your LED on?", f"{board_name}: {bf['led_pin']}.")
             if bf["led_domain"] or bf["clock_hint"]:
@@ -173,14 +174,18 @@ def think_before_code(conn: sqlite3.Connection, board_name: str, goal: str) -> l
                     f"{bf['led_domain'] or 'see the reference manual'} — "
                     f"{bf['clock_hint'] or 'enable its clock before use'}. "
                     "If you skip this, the pin silently does nothing — no error, just nothing.")
+                clock_covered = True       # don't ask the same RCC-enable question again below
         else:
             add("Which pin is your LED on?",
                 "It's the board's on-board user LED — check the board's pinout/schematic.")
         # Family-specific clock concern (the #1 beginner bug), derived from the SoC family.
         if fam == "stm32":
-            add("Which GPIO port is that pin on, and do you enable that port's clock first?",
-                "On STM32 every peripheral is OFF at reset — you must enable its clock in RCC "
-                "BEFORE you touch the pin, or it silently does nothing.")
+            # The seeded clock-domain question above already covers RCC enable for STM32 — only
+            # ask the generic version when we have no board-specific facts (no duplicate concept).
+            if not clock_covered:
+                add("Which GPIO port is that pin on, and do you enable that port's clock first?",
+                    "On STM32 every peripheral is OFF at reset — you must enable its clock in RCC "
+                    "BEFORE you touch the pin, or it silently does nothing.")
         elif fam == "rp2040":
             add("Is the second-stage bootloader (boot2) in place and your code linked for the "
                 "flash window?",

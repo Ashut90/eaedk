@@ -348,7 +348,10 @@ def cmd_project_status(args):
     if args.json:
         print(json.dumps(s, indent=2)); return
     print(f"Project: {s['project']}" + (f" ({board})" if board else ""))
-    print(f"Progress: {s['complete']}/{s['total']} items complete ({s['percent']}%)\n")
+    print(f"Progress: {s['complete']}/{s['total']} items complete ({s['percent']}%)")
+    if s.get("note"):
+        print(s["note"])
+    print()
     mark = {"COMPLETE": "✓", "IN_PROGRESS": "•", "NOT_STARTED": "✗"}
     for it in s["items"]:
         line = f"{mark.get(it['status'], '?')} {it['title']}"

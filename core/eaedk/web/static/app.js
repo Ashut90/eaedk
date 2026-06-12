@@ -150,6 +150,7 @@ async function renderProgress(containerId, project) {
         : `<div class="teach">Why it matters: ${escapeHtml(it.why_it_matters)}</div>`}</div>`;
   }).join("");
   el.innerHTML = `<div class="card"><b>Progress: ${s.complete}/${s.total} complete (${s.percent}%)</b>
+    ${s.note ? `<div class="kv" style="margin-top:4px">${escapeHtml(s.note)}</div>` : ""}
     <div style="margin:8px 0">${bar}</div>${rows}
     ${s.next ? `<div class="note" style="margin-top:10px"><b>Next:</b> ${escapeHtml(s.next.title)}
       — ${escapeHtml(s.next.why_it_matters)}</div>` : ""}</div>`;

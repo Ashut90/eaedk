@@ -19,6 +19,20 @@ from .validation.rules import RULE_TEACH
 # Plain-English "why it matters" for checklist items that have no validation rule of their own.
 # Beginner-clear, mid-level-true. Keyed by template item_key; falls back to the item text.
 _WHY_NO_RULE = {
+    # bare_metal_app items that have no validation rule of their own (v2.2.1).
+    "peripheral_confirmed":
+        "Without knowing which peripheral you're using, the template can't generate the right "
+        "register setup — you'll get code for the wrong pins.",
+    "clock_init":
+        "Every peripheral is off by default to save power. If you don't enable its clock first, "
+        "it silently does nothing — no error, just nothing.",
+    "main_loop":
+        "Embedded firmware never exits. The main loop is where your code runs forever — without "
+        "it, the CPU falls off the end of main and crashes.",
+    "build_and_flash":
+        "If your compiler targets the wrong architecture, the firmware runs on your PC but won't "
+        "run on the chip — or won't build at all.",
+    # bootloader items below.
     "clock_init_sequence":
         "If clocks aren't set up first, every peripheral you touch afterwards may silently do "
         "nothing — no error, just nothing.",
@@ -86,8 +100,12 @@ def project_status(conn: sqlite3.Connection, project: sqlite3.Row) -> dict:
     complete = sum(1 for i in items if i["status"] == _COMPLETE)
     pct = round(100 * complete / total) if total else 0
     nxt = next((i for i in items if i["status"] != _COMPLETE), None)
+    # v2.2.1: a beginner shouldn't feel they must do all of these to blink — most are filled in
+    # by the engine. Reassure them for the first-project goal.
+    note = ("Most of these are optional for a first blink — the engine fills in what it can. "
+            "Focus on the first incomplete item below.") if project["goal_type"] == "bare_metal_app" else ""
     return {
         "project": project["name"], "complete": complete, "total": total, "percent": pct,
-        "items": items,
+        "note": note, "items": items,
         "next": ({"title": nxt["title"], "why_it_matters": nxt["why_it_matters"]} if nxt else None),
     }

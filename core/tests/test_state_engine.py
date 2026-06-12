@@ -74,6 +74,32 @@ def test_llm_cannot_set_progress_db_constraint(tmp_path):
             (p["id"], row["template_item_id"], "COMPLETE", "made up", "LLM", "now"))
 
 
+def _blink(conn):
+    repo.create_project(conn, "blink", "bare_metal_app", "STM32F103-BluePill")
+    return repo.get_project(conn, "blink")
+
+
+def test_no_circular_why_text_for_bare_metal_items(tmp_path):
+    # v2.2.1 Fix 1: the bare_metal_app items that have no rule get real one-liners, never the
+    # circular "Complete this so EAEDK can verify: <title>" placeholder.
+    conn = _seeded(tmp_path)
+    s = project_status(conn, _blink(conn))
+    whys = " ".join(i["why_it_matters"] for i in s["items"])
+    assert "Complete this so EAEDK can verify" not in whys
+    peri = next(i for i in s["items"] if i["item_key"] == "peripheral_confirmed")
+    assert "register setup" in peri["why_it_matters"]            # concrete explanation
+    assert s["next"]["why_it_matters"] and "Complete this so" not in s["next"]["why_it_matters"]
+
+
+def test_bare_metal_status_has_reassurance_note(tmp_path):
+    # v2.2.1 Fix 3: a beginner is told most items are optional for a first blink.
+    conn = _seeded(tmp_path)
+    assert "optional for a first blink" in project_status(conn, _blink(conn))["note"]
+    # other goals don't get the blink note
+    repo.create_project(conn, "boot2", "bootloader", "STM32F103-BluePill")
+    assert project_status(conn, repo.get_project(conn, "boot2"))["note"] == ""
+
+
 def test_next_recommended_is_first_incomplete(tmp_path):
     conn = _seeded(tmp_path)
     s = project_status(conn, _boot(conn))
@@ -94,6 +120,18 @@ def test_think_before_code_shows_board_specific_pin(tmp_path):
     # a board without seeded blink facts falls back to the generic prompt (no crash)
     items2 = mentor.think_before_code(conn, "STM32H743", "bare_metal_app")
     assert any("LED" in i["question"] for i in items2)
+
+
+def test_think_before_code_no_duplicate_clock_question(tmp_path):
+    # v2.2.1 Fix 2: with seeded blink facts the RCC-enable concept is asked exactly once.
+    from eaedk import mentor
+    conn = _seeded(tmp_path)
+    qs = [i["question"] for i in mentor.think_before_code(conn, "STM32F103-BluePill",
+                                                          "bare_metal_app")]
+    assert sum("clock" in q.lower() and "first" in q.lower() for q in qs) == 1
+    # a board WITHOUT seeded facts still asks the generic clock question (not dropped entirely)
+    qs2 = [i["question"] for i in mentor.think_before_code(conn, "STM32H743", "bare_metal_app")]
+    assert any("clock" in q.lower() for q in qs2)
 
 
 # --- Piece 4: dual-path START_HERE (Wokwi first) ---------------------------
