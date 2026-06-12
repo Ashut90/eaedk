@@ -1,5 +1,34 @@
 # EAEDK — Embedded AI Engineering Development Kit
 
+## Getting started
+
+New here? Copy-paste these one at a time. By the last line you'll see your board's learning path.
+
+```bash
+# 1. Download EAEDK to your computer.
+git clone https://github.com/Ashut90/eaedk
+# 2. Go into the folder you just downloaded.
+cd eaedk
+# 3. Make a private workspace so this install can't affect the rest of your system.
+python3 -m venv .venv
+# 4. Switch into that workspace (your prompt will show "(.venv)").
+source .venv/bin/activate
+# 5. Install EAEDK. This creates the "eaedk" command you'll use from here on.
+pip install -e .
+# 6. Create EAEDK's local database (one small file on your computer).
+eaedk db init
+# 7. Load the built-in boards, templates, and knowledge into that database.
+eaedk db seed
+# 8. See the boards EAEDK already knows — pick the one you have.
+eaedk board list
+# 9. Ask EAEDK to mentor you on a board (here, the popular $2 STM32 "Blue Pill").
+eaedk mentor --board STM32F103-BluePill
+```
+
+That last command prints what the board can do, a learning path in order, and an exact
+copy-paste recipe for building your first program. Coming back later? Just `cd eaedk`,
+`source .venv/bin/activate`, and you're ready — steps 1–7 are one-time only.
+
 > ## The LLM cannot assert a hardware fact. It can only reason from what the database has verified.
 
 Every other AI coding tool will happily tell you the STM32F407 runs at 168 MHz, invent a DDR
@@ -90,13 +119,11 @@ specific unverified DDR timing, written back as a tracked risk, and resolved:
 
 ## Try it (offline)
 
-```bash
-python3 -m pip install pyyaml          # the only runtime dependency
-export PYTHONPATH=core                 # or: pip install -e .
+First-time setup is in [Getting started](#getting-started) above (`pip install -e .` → `eaedk db
+init` → `eaedk db seed`). Everything below assumes you've done that and your `(.venv)` is active.
 
-python3 -m eaedk.cli db init           # apply migrations (single local SQLite file)
-python3 -m eaedk.cli db seed           # 8 templates, 14 boards, risk rules, 15 log signatures
-python3 -m eaedk.cli eval run          # -> PASSED 11/11 (deterministic golden cases)
+```bash
+eaedk eval run                         # -> PASSED 14/14 (deterministic golden cases)
 
 # Optional LLM layer (off by default):
 ollama pull qwen2.5-coder:3b

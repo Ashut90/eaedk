@@ -236,7 +236,7 @@ def _load_learning_step_intro(conn: sqlite3.Connection) -> int:
 
 def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
     if _already_seeded(conn) and not force:
-        raise RuntimeError("database already seeded; pass force=True to reseed")
+        raise RuntimeError("Database already seeded. To reseed: `eaedk db seed --force`")
     with conn:
         if force:
             _clear(conn)

@@ -194,17 +194,15 @@ def cmd_project_new(args):
 
 
 def _unknown_board(conn, name: str) -> None:
-    """Fix 3: never a dead end — suggest a near-match, else show the path forward."""
+    """Never a dead end — always point at `board list`, plus a near-match when there is one."""
     matches = [m for m in repo.near_match_boards(conn, name) if m["flash_bytes"] is not None]
-    print(f"'{name}' isn't in the database.", file=sys.stderr)
+    print(f"Board not found: {name!r}.", file=sys.stderr)
     if matches:
         m = matches[0]
-        print(f"  Did you mean '{m['name']}' ({m['soc']}, {m['arch']})? It's already set up — "
-              f"use it directly.", file=sys.stderr)
-    else:
-        print("  Onboard it:   eaedk board add --interactive", file=sys.stderr)
-        print(f"  Or from a PDF: eaedk ingest --file <datasheet>.pdf --board \"{name}\"",
+        print(f"  Did you mean '{m['name']}'? It's already set up — use that exact name.",
               file=sys.stderr)
+    print("  Run `eaedk board list` to see all 14 available boards, or run "
+          "`eaedk board add --interactive` to add your own.", file=sys.stderr)
 
 
 def cmd_project_init(args):
@@ -630,6 +628,14 @@ def cmd_export(args):
     if args.json:
         print(json.dumps(res.__dict__, indent=2, default=str))
         return
+    if res.contaminated:
+        print(f"Stopped: the folder '{res.out_dir}' already contains files from a different "
+              f"project ({res.existing_label}). Mixing two projects' files would be confusing "
+              "and could mislead you when you build.", file=sys.stderr)
+        print(f"  Fix: pick a new folder, e.g.  eaedk export {args.name} --out {args.name}-fw",
+              file=sys.stderr)
+        print("  Or overwrite this folder:      add --force to your command", file=sys.stderr)
+        sys.exit(2)
     if res.refused:
         print(f"refused: project feasibility is {res.feasibility.upper()} — export needs a "
               "feasible project (or pass --force to emit a DRAFT). Blockers:", file=sys.stderr)

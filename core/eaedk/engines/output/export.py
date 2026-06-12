@@ -25,6 +25,30 @@ class ExportResult:
     written: list[str] = field(default_factory=list)
     out_dir: str = ""
     geometry_unknown: bool = False
+    contaminated: bool = False          # Fix 6: folder already holds a different project's files
+    existing_label: str = ""            # what the folder currently belongs to (for the message)
+
+
+_MARKER = ".eaedk-export"
+# Files that mark a folder as a previous EAEDK export, even without a marker (legacy/foreign dir).
+_EAEDK_SIGNATURE_FILES = ("BRINGUP_CHECKLIST.md", "START_HERE.md", "CMakeLists.txt")
+
+
+def _occupant(out: Path) -> str | None:
+    """If ``out`` already holds another project's export, return a label for it, else None.
+
+    Precise when a `.eaedk-export` marker is present (`project|board`); falls back to detecting
+    EAEDK-generated files for a legacy/foreign folder written before markers existed.
+    """
+    marker = out / _MARKER
+    if marker.exists():
+        try:
+            return marker.read_text(encoding="utf-8").strip() or "an earlier export"
+        except OSError:
+            return "an earlier export"
+    if out.is_dir() and any((out / f).exists() for f in _EAEDK_SIGNATURE_FILES):
+        return "an earlier export (no project marker)"
+    return None
 
 
 def gather(conn: sqlite3.Connection, project: sqlite3.Row) -> dict[str, Any]:
@@ -93,6 +117,14 @@ def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
 
     arch = data["soc"]["arch"] if data["soc"] else None
     out = Path(out_dir)
+    # Fix 6 (v1.9.2): never silently mix two projects' files in one folder. A marker matching
+    # THIS project is fine (re-export); a different project/board (or a foreign export) is refused
+    # unless --force.
+    label = f"{project['name']}|{data['board_name']}"
+    occupant = _occupant(out)
+    if occupant is not None and occupant != label and not force:
+        return ExportResult(feasibility=feas, contaminated=True, existing_label=occupant,
+                            out_dir=str(out))
     files: dict[str, str] = {}
 
     if only in (None, "checklist"):
@@ -100,18 +132,25 @@ def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
     if only in (None, "flash"):
         files["FLASH.md"] = gen.render_flash(data)
     if only in (None, "cmake"):
-        files["CMakeLists.txt"] = gen.render_cmake_lists(data)
-        files["cmake/toolchain.cmake"] = gen.render_toolchain_cmake(data)
-        if gen.is_mcu(arch):
-            files["linker/memory.ld"] = gen.render_linker(data)
-            # bare_metal_app gets working teach-commented code + a plain-language guide;
-            # other goals keep the minimal stub.
-            if data["project"]["goal_type"] == "bare_metal_app":
-                from . import codegen
-                files["src/main.c"] = codegen.render_main_c(data)
-                files["START_HERE.md"] = codegen.render_start_here(data)
-            else:
-                files["src/main.c"] = gen.render_main_c(data)
+        from . import codegen
+        if arch == "avr":
+            # Fix 5 (v1.9.2): AVR (Arduino) uses avr-gcc/avrdude, not the ARM CMake/linker flow.
+            # Emit a real blink+UART scaffold + a matching START_HERE so the mentor recipe's
+            # `cat START_HERE.md` succeeds for the most common beginner board.
+            files["src/main.c"] = codegen.render_avr_main_c(data)
+            files["START_HERE.md"] = codegen.render_avr_start_here(data)
+        else:
+            files["CMakeLists.txt"] = gen.render_cmake_lists(data)
+            files["cmake/toolchain.cmake"] = gen.render_toolchain_cmake(data)
+            if gen.is_mcu(arch):
+                files["linker/memory.ld"] = gen.render_linker(data)
+                # bare_metal_app gets working teach-commented code + a plain-language guide;
+                # other goals keep the minimal stub.
+                if data["project"]["goal_type"] == "bare_metal_app":
+                    files["src/main.c"] = codegen.render_main_c(data)
+                    files["START_HERE.md"] = codegen.render_start_here(data)
+                else:
+                    files["src/main.c"] = gen.render_main_c(data)
 
     written: list[str] = []
     for rel, content in files.items():
@@ -119,6 +158,10 @@ def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         written.append(str(path))
+    # Fix 6: stamp the folder so a later export for a different project is caught. Not counted
+    # in `written` (it's bookkeeping, not a deliverable).
+    if written:
+        (out / _MARKER).write_text(label, encoding="utf-8")
     # If geometry is missing, the linker is placeholders — flag it loudly (e.g. --force path).
     geometry_unknown = _geometry_unknown(data["board"]) and any(
         "linker" in w or "CMakeLists" in w for w in written)
