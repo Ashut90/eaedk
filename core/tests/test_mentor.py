@@ -41,6 +41,20 @@ def test_render_board_mentor_is_plain_language(tmp_path):
     assert "Blink an LED" in out and "why:" in out
 
 
+def test_mentor_footer_has_concrete_copy_paste_onramp(tmp_path):
+    # v1.9.1: the bottom of the mentor screen must spell out the exact next commands so a
+    # first-time CLI user knows the project name carries across, and that export comes next.
+    conn = _seeded(tmp_path)
+    out = mentor.render_board_mentor(conn, "STM32F103-BluePill")
+    assert "Start step 1 — run these in order:" in out
+    assert "eaedk project init" in out
+    assert "eaedk export blink --out ~/blink-fw" in out
+    assert "cat ~/blink-fw/START_HERE.md" in out
+    # the two things a first-timer doesn't know, made explicit
+    assert "you will use this same name in every command after this" in out
+    assert "type the number next to STM32F103-BluePill" in out
+
+
 # --- Part 2 ---------------------------------------------------------------
 
 def _export(conn, board, tmp_path, name="p"):

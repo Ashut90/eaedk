@@ -175,6 +175,20 @@ def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None
              f"build first\"")
     L.append(f"Explain a concept: eaedk mentor --board \"{board_name}\" --explain HardFault")
     L.append(f"What's next:       eaedk mentor --board \"{board_name}\" --next")
-    L.append(f"Start step 1:      eaedk project init   (pick {board_name}, goal "
-             f"'bare-metal application')")
+    L.append("")
+    # v1.9.1: a first-time CLI user doesn't know the project name carries across commands, or
+    # that export is the immediate next step. Spell out the exact sequence, with prompt hints.
+    L.append("Start step 1 — run these in order:")
+    L.append("")
+    L.append("  eaedk project init")
+    L.append("  # at \"Project name:\"  → type a short name, e.g. blink")
+    L.append("  #                       (you will use this same name in every command after this)")
+    L.append(f"  # at \"Select a board\" → type the number next to {board_name}")
+    L.append("  # at \"Goal [1-9]:\"    → press Enter  (picks \"bare-metal application — start here\")")
+    L.append("")
+    L.append("  eaedk export blink --out ~/blink-fw")
+    L.append("  # replace \"blink\" with whatever name you typed above")
+    L.append("")
+    L.append("  cat ~/blink-fw/START_HERE.md")
+    L.append("  # this tells you how to build and flash")
     return "\n".join(L) + "\n"
