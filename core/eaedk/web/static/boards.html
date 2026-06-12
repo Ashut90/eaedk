@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — Boards</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Board Explorer</h1>
+    <p class="sub">Every board EAEDK already knows. The dot shows how complete its data is —
+      <span class="dot green"></span> ready, <span class="dot yellow"></span> some values
+      unverified, <span class="dot red"></span> missing flash/RAM data. Click a board to see what
+      it can do and where to start.</p>
+
+    <div class="card" style="padding:0">
+      <table id="board-table">
+        <thead><tr><th></th><th>Board</th><th>Chip</th><th>Architecture</th>
+          <th>Flash</th><th>RAM</th><th>Data quality</th></tr></thead>
+        <tbody><tr><td colspan="7" class="kv">Loading boards…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div id="detail"></div>
+  </main>
+
+  <script>
+    async function loadBoards() {
+      showCommand("eaedk board list");
+      const env = await api("/api/boards");
+      const body = document.querySelector("#board-table tbody");
+      if (env.error) { body.innerHTML = `<tr><td colspan="7"></td></tr>`;
+        showError(document.getElementById("detail"), env); return; }
+      body.innerHTML = env.boards.map(b => `
+        <tr class="clickable" onclick="openBoard('${escapeHtml(b.name)}')">
+          <td>${dot(b.light)}</td>
+          <td><b>${escapeHtml(b.name)}</b></td>
+          <td class="mono">${escapeHtml(b.soc)}</td>
+          <td class="mono">${escapeHtml(b.arch)}</td>
+          <td class="mono">${fmtBytes(b.flash_bytes)}</td>
+          <td class="mono">${fmtBytes(b.ram_bytes)}</td>
+          <td>${badge(b.confidence || "—", b.light)}</td>
+        </tr>`).join("");
+    }
+
+    async function openBoard(name) {
+      showCommand(`eaedk mentor --board ${name}`);
+      const el = document.getElementById("detail");
+      el.innerHTML = `<p class="kv">Loading ${escapeHtml(name)}…</p>`;
+      const d = await api("/api/boards/" + encodeURIComponent(name));
+      if (d.error) { showError(el, d); return; }
+      const caps = d.capabilities.length
+        ? `<div class="grid cols">` + d.capabilities.map(c =>
+            `<div class="card"><b>${escapeHtml(c.capability.toUpperCase())}</b>
+             <div class="kv" style="margin-top:4px">${escapeHtml(c.summary || "")}</div></div>`).join("") + `</div>`
+        : `<p class="kv">No capabilities recorded for this board.</p>`;
+      const steps = d.learning_path.map(s => `
+        <div class="card">
+          <b>${s.step}. ${escapeHtml(s.title)}</b>
+          <div class="kv" style="margin:6px 0">${escapeHtml(s.why)}</div>
+          ${s.before_you_start.length ? `<details><summary>Before you write code</summary>
+            <ul>${s.before_you_start.map(b => `<li>${escapeHtml(b)}</li>`).join("")}</ul></details>` : ""}
+        </div>`).join("");
+      el.innerHTML = `
+        <h2>${escapeHtml(d.name)} &nbsp; ${badge(d.board.confidence || "—", d.light)}</h2>
+        <p class="sub">${escapeHtml(d.soc.name)} · ${escapeHtml(d.soc.arch)} ·
+          flash ${fmtBytes(d.board.flash_bytes)} · RAM ${fmtBytes(d.board.ram_bytes)}
+          &nbsp;<span class="kv">(${escapeHtml(d.light_reason)})</span></p>
+        <h2>What this board can do</h2>${caps}
+        <h2>Your learning path — do these in order</h2>${steps}`;
+      el.scrollIntoView({ block: "start" });
+    }
+
+    document.addEventListener("DOMContentLoaded", loadBoards);
+  </script>
+</body>
+</html>

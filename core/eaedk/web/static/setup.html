@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — New Project</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Start a New Project</h1>
+    <p class="sub">Give it a name, pick your board, and choose what you're building. EAEDK
+      creates the project and tells you right away whether it's ready.</p>
+
+    <div class="card">
+      <label for="name">Project name</label>
+      <input type="text" id="name" placeholder="e.g. blink" autocomplete="off">
+
+      <label for="board">Board (the one you have)</label>
+      <select id="board"><option value="">Loading boards…</option></select>
+
+      <label for="goal">What are you building?</label>
+      <select id="goal"><option value="">Loading…</option></select>
+
+      <button id="create">Create project</button>
+    </div>
+
+    <div id="result"></div>
+  </main>
+
+  <script>
+    async function init() {
+      showCommand("eaedk project init");
+      const boards = await api("/api/boards");
+      const bsel = document.getElementById("board");
+      bsel.innerHTML = boards.error ? `<option value="">(couldn't load)</option>`
+        : boards.boards.map(b => `<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)} — ${escapeHtml(b.soc)}</option>`).join("");
+      const goals = await api("/api/goals");
+      const gsel = document.getElementById("goal");
+      gsel.innerHTML = goals.error ? `<option value="">(couldn't load)</option>`
+        : goals.goals.map(g => `<option value="${escapeHtml(g.value)}">${escapeHtml(g.label)}</option>`).join("");
+      updateCmd();
+      ["name","board","goal"].forEach(id => document.getElementById(id).addEventListener("input", updateCmd));
+    }
+
+    function updateCmd() {
+      const n = document.getElementById("name").value.trim() || "<name>";
+      const b = document.getElementById("board").value || "<board>";
+      showCommand(`eaedk project init   # name: ${n}, board: ${b}`);
+    }
+
+    async function create() {
+      const name = document.getElementById("name").value.trim();
+      const board = document.getElementById("board").value;
+      const goal = document.getElementById("goal").value;
+      const el = document.getElementById("result");
+      el.innerHTML = `<p class="kv">Creating…</p>`;
+      const r = await api("/api/projects", { method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ name, board, goal }) });
+      if (r.error) { showError(el, r); return; }
+      const risks = r.risks.length
+        ? `<h2>Open risks</h2>` + r.risks.map(x => `
+            <div class="card"><div>${badge(x.severity, x.severity === "HIGH" ? "RED" : x.severity === "MEDIUM" ? "YELLOW" : "GREEN")}
+            &nbsp;<b>${escapeHtml(humanizeKeys(x.explanation))}</b></div>
+            ${x.mitigation ? `<div class="teach">${escapeHtml(humanizeKeys(x.mitigation))}</div>` : ""}</div>`).join("")
+        : `<p class="kv">No open risks flagged.</p>`;
+      el.innerHTML = `
+        <h2>Result</h2>
+        <div class="card"><div style="font-size:18px">${dot(r.light)}
+          &nbsp;<b>${escapeHtml(r.label)}</b></div>
+          <div class="kv" style="margin-top:6px">${escapeHtml(r.explain)}</div></div>
+        ${risks}
+        <div class="note">Next: go to <a href="validate.html">Validate</a> to see the full
+          checklist, or <a href="export.html">Export</a> to generate your build files.</div>`;
+      showCommand(`eaedk project init   # created '${name}'`);
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      document.getElementById("create").addEventListener("click", create);
+    });
+  </script>
+</body>
+</html>

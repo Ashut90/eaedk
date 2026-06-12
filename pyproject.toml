@@ -15,6 +15,9 @@ dependencies = [
 # Datasheet ingestion (`eaedk ingest`) needs a PDF reader. Optional and lazily imported —
 # the rest of EAEDK runs on PyYAML alone.
 ingest = ["pymupdf>=1.23"]
+# Web UI (`eaedk web`) — a thin FastAPI skin over the same engine the CLI uses. Optional and
+# lazily imported; the CLI runs without it.
+web = ["fastapi>=0.100", "uvicorn>=0.23"]
 
 [project.scripts]
 eaedk = "eaedk.cli:main"

@@ -29,6 +29,13 @@ That last command prints what the board can do, a learning path in order, and an
 copy-paste recipe for building your first program. Coming back later? Just `cd eaedk`,
 `source .venv/bin/activate`, and you're ready — steps 1–7 are one-time only.
 
+**Prefer a browser?** Install the optional Web UI and open it — same engine, point-and-click:
+
+```bash
+pip install -e '.[web]'   # one-time: adds the web interface
+eaedk web                 # opens at http://localhost:8080
+```
+
 > ## The LLM cannot assert a hardware fact. It can only reason from what the database has verified.
 
 Every other AI coding tool will happily tell you the STM32F407 runs at 168 MHz, invent a DDR

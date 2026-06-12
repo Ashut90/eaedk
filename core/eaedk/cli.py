@@ -668,6 +668,22 @@ def _offer_geometry(conn, project):
               "datasheet, or onboard real flash/RAM values.", file=sys.stderr)
 
 
+def cmd_web(args):
+    """Launch the Web UI — a thin FastAPI skin over the same engine the CLI uses."""
+    try:
+        import uvicorn  # noqa: F401
+        from .web.server import app
+    except ImportError:
+        print("The Web UI needs FastAPI + uvicorn, which aren't installed yet.", file=sys.stderr)
+        print("Install them with:  pip install -e '.[web]'", file=sys.stderr)
+        sys.exit(2)
+    url = f"http://{args.host if args.host != '0.0.0.0' else 'localhost'}:{args.port}"
+    print(f"EAEDK Web UI running at {url}")
+    print("Open that address in your browser. Press Ctrl+C here to stop the server.")
+    import uvicorn
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+
+
 def cmd_eval_run(args):
     conn = _conn(args)
     res = run_eval(conn, args.case)
@@ -795,6 +811,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     ev = sub.add_parser("eval").add_subparsers(dest="sub", required=True)
     er = ev.add_parser("run"); er.add_argument("--case"); er.set_defaults(func=cmd_eval_run)
+
+    wb = sub.add_parser("web", help="launch the Web UI (a browser interface to the same engine)")
+    wb.add_argument("--host", default="127.0.0.1")
+    wb.add_argument("--port", type=int, default=8080)
+    wb.set_defaults(func=cmd_web)
 
     tc = sub.add_parser("toolchain").add_subparsers(dest="sub", required=True)
     tc.add_parser("detect").set_defaults(func=cmd_toolchain_detect)

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — Log Analyzer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+  <style>
+    #drop { border: 2px dashed var(--line); border-radius: 8px; padding: 4px; }
+    #drop.over { border-color: var(--accent); background: var(--panel-2); }
+  </style>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Log Analyzer</h1>
+    <p class="sub">Paste a crash or boot log, or drag a log file onto the box. EAEDK matches it
+      against known failure patterns and tells you the likely cause and what to check.</p>
+
+    <div class="card">
+      <label for="project">Correlate with a project (optional)</label>
+      <select id="project"><option value="">No project — just analyze the log</option></select>
+
+      <label for="log">Log text</label>
+      <div id="drop"><textarea id="log" class="mono"
+        placeholder="Paste your log here, or drop a .log/.txt file onto this box…"></textarea></div>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
+        <input type="checkbox" id="ai" style="width:auto"> Also try AI triage if nothing matches
+        (needs the local model)</label>
+
+      <button id="run">Analyze</button>
+    </div>
+
+    <div id="result"></div>
+  </main>
+
+  <script>
+    async function init() {
+      showCommand("eaedk log analyze --file your.log");
+      const ps = await api("/api/projects");
+      const sel = document.getElementById("project");
+      if (!ps.error && ps.projects.length)
+        sel.innerHTML += ps.projects.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+
+      const drop = document.getElementById("drop"), ta = document.getElementById("log");
+      ["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+      ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+      drop.addEventListener("drop", async e => {
+        const file = e.dataTransfer.files[0]; if (!file) return;
+        ta.value = await file.text();
+      });
+    }
+
+    function sevStatus(s) { return (s||"").toUpperCase() === "HIGH" ? "RED" : "YELLOW"; }
+
+    async function run() {
+      const text = document.getElementById("log").value;
+      const project = document.getElementById("project").value || null;
+      const use_llm = document.getElementById("ai").checked;
+      const el = document.getElementById("result");
+      showCommand(`eaedk log analyze --file your.log${project ? ` --project ${project} --project-aware` : ""}${use_llm ? " --deep --llm" : ""}`);
+      el.innerHTML = `<p class="kv">Analyzing…</p>`;
+      const r = await api("/api/logs/analyze", { method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ text, project, use_llm }) });
+      if (r.error) { showError(el, r); return; }
+
+      let html = "";
+      if (r.write_backs && r.write_backs.length) {
+        html += `<div class="note"><b>Tracked risks added to your project:</b> ` +
+          r.write_backs.map(w => `${escapeHtml(humanizeRule(w.rule))} (${escapeHtml(w.severity)})`).join(", ") + `</div>`;
+      }
+      if (r.matches.length) {
+        html += `<h2>What EAEDK found</h2>` + r.matches.map(m => `
+          <div class="card">
+            <div>${badge(m.severity, sevStatus(m.severity))} &nbsp;<b>${escapeHtml(m.cause)}</b></div>
+            <div class="teach"><b>What to do:</b> ${escapeHtml(m.fix)}</div>
+            <details><summary>Show the matching log line</summary>
+              <pre class="code">line ${m.line_no}: ${escapeHtml(m.line)}</pre></details>
+          </div>`).join("");
+        if (r.next_action) html += `<div class="note"><b>Next:</b> <code>${escapeHtml(r.next_action)}</code></div>`;
+      } else if (r.triage && r.triage.available) {
+        const hyps = (r.triage.hypotheses || []).map(h =>
+          `<div class="card"><b>${escapeHtml(h.cause||"")}</b>
+           <div class="teach">Check: ${escapeHtml(h.suggested_check||"")}</div></div>`).join("");
+        html += `<h2>AI triage (no exact pattern matched)</h2>${hyps || "<p class='kv'>No structured result.</p>"}`;
+      } else {
+        html += `<div class="note">No known failure pattern matched these
+          ${r.n_lines} line(s). If you have the local AI model, tick "AI triage" above and try again.</div>`;
+      }
+      el.innerHTML = html;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      document.getElementById("run").addEventListener("click", run);
+    });
+  </script>
+</body>
+</html>

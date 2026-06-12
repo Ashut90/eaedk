@@ -395,6 +395,14 @@ def get_project(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM projects WHERE name=?", (name,)).fetchone()
 
 
+def list_projects(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """All projects (name, goal, status, board), most-recent first. Read-only accessor mirroring
+    ``list_boards`` — added so the Web UI can populate its project dropdowns without raw SQL."""
+    return conn.execute(
+        "SELECT p.name, p.goal_type, p.status, b.name AS board FROM projects p "
+        "LEFT JOIN boards b ON b.id = p.board_id ORDER BY p.updated_at DESC").fetchall()
+
+
 def active_project(conn: sqlite3.Connection) -> sqlite3.Row | None:
     """The most recently updated active project — the 'current' project for project-aware ops."""
     return conn.execute(

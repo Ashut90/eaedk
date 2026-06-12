@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — Mentor</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+  <style> .capicon { font-size: 22px; margin-right: 8px; } </style>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Mentor</h1>
+    <p class="sub">Pick your board and EAEDK acts like a senior engineer beside you: what the
+      board can do, what to build in what order, and the answer to any question you type.</p>
+
+    <div class="card">
+      <label for="board">Board</label>
+      <select id="board"><option value="">Loading boards…</option></select>
+    </div>
+
+    <div id="detail"></div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Ask the mentor</h2>
+      <label for="q">Your question</label>
+      <input type="text" id="q" placeholder="e.g. what should I build first?" autocomplete="off">
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
+        <input type="checkbox" id="ai" style="width:auto"> Use the AI model for a chattier answer
+        (optional, needs the local model)</label>
+      <button id="ask">Ask</button>
+      <div id="answer"></div>
+    </div>
+  </main>
+
+  <script>
+    const ICONS = { gpio:"🔌", uart:"🔤", spi:"🔗", i2c:"🧵", timer:"⏱️", usb:"🔵",
+                    wifi:"📶", bluetooth:"🟦", ethernet:"🌐", adc:"📈", can:"🚗" };
+
+    async function init() {
+      const boards = await api("/api/boards");
+      const sel = document.getElementById("board");
+      sel.innerHTML = boards.error ? `<option value="">(couldn't load)</option>`
+        : boards.boards.map(b => `<option value="${escapeHtml(b.name)}"${b.name==="STM32F103-BluePill"?" selected":""}>${escapeHtml(b.name)}</option>`).join("");
+      sel.addEventListener("change", loadBoard);
+      loadBoard();
+    }
+
+    async function loadBoard() {
+      const name = document.getElementById("board").value;
+      if (!name) return;
+      showCommand(`eaedk mentor --board ${name}`);
+      const el = document.getElementById("detail");
+      el.innerHTML = `<p class="kv">Loading…</p>`;
+      const d = await api("/api/boards/" + encodeURIComponent(name));
+      if (d.error) { showError(el, d); return; }
+      const caps = d.capabilities.map(c => {
+        const icon = ICONS[c.capability] || "•";
+        return `<div class="card"><span class="capicon">${icon}</span><b>${escapeHtml(c.capability.toUpperCase())}</b>
+          <div class="kv" style="margin-top:4px">${escapeHtml(c.summary||"")}</div></div>`;
+      }).join("");
+      const steps = d.learning_path.map(s => `
+        <div class="card"><b>${s.step}. ${escapeHtml(s.title)}</b>
+          <div class="kv" style="margin:6px 0">${escapeHtml(s.why)}</div>
+          ${s.before_you_start.length ? `<details><summary>Before you write code (${s.before_you_start.length})</summary>
+            <ul>${s.before_you_start.map(b=>`<li>${escapeHtml(b)}</li>`).join("")}</ul></details>` : ""}
+        </div>`).join("");
+      el.innerHTML = `<h2>What this board can do</h2><div class="grid cols">${caps}</div>
+        <h2>Your learning path</h2>${steps}`;
+    }
+
+    async function ask() {
+      const board = document.getElementById("board").value;
+      const question = document.getElementById("q").value.trim();
+      const use_llm = document.getElementById("ai").checked;
+      const el = document.getElementById("answer");
+      if (!question) { el.innerHTML = `<div class="note">Type a question first.</div>`; return; }
+      showCommand(`eaedk${use_llm ? " --llm" : ""} mentor --board ${board} --ask "${question}"`);
+      el.innerHTML = `<p class="kv">Thinking…</p>`;
+      const r = await api("/api/mentor/ask", { method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ board, question, use_llm }) });
+      if (r.error) { showError(el, r); return; }
+      el.innerHTML = `<div class="card" style="margin-top:12px"><pre class="code">${escapeHtml(r.answer)}</pre></div>`;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      document.getElementById("ask").addEventListener("click", ask);
+      document.getElementById("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,154 @@
+"""Golden tests for the Web UI (v2.0.0). The routes are thin wrappers over the same engine the
+CLI uses; these assert each page's API returns correct engine data and that errors come back as a
+plain-English {error, next} envelope — never a traceback or bare HTTP code.
+
+Skipped automatically if the optional `[web]` extra (FastAPI) isn't installed.
+"""
+import os
+
+import pytest
+
+pytest.importorskip("fastapi")
+from fastapi.testclient import TestClient   # noqa: E402
+
+from eaedk.store.db import connect           # noqa: E402
+from eaedk.store.migrate import migrate      # noqa: E402
+from eaedk.seed import seed_all              # noqa: E402
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    db = tmp_path / "web.db"
+    conn = connect(str(db))
+    migrate(conn)
+    seed_all(conn, force=True)
+    # The server reads default_db_path() (which honours EAEDK_DB) per request.
+    monkeypatch.setenv("EAEDK_DB", str(db))
+    from eaedk.web.server import app
+    return TestClient(app)
+
+
+# --- Page 1: Board Explorer ------------------------------------------------
+
+def test_boards_list_has_geometry_and_light(client):
+    boards = client.get("/api/boards").json()["boards"]
+    assert len(boards) == 14
+    bp = next(b for b in boards if b["name"] == "STM32F103-BluePill")
+    assert bp["flash_bytes"] == 65536 and bp["ram_bytes"] == 20480
+    assert bp["light"] == "GREEN"                      # HIGH confidence + full geometry
+
+
+def test_board_detail_has_caps_and_path(client):
+    d = client.get("/api/boards/STM32F103-BluePill").json()
+    assert "uart" in {c["capability"] for c in d["capabilities"]}
+    assert d["learning_path"][0]["title"] == "Blink an LED"
+
+
+def test_board_not_found_is_friendly(client):
+    r = client.get("/api/boards/NoSuchBoard").json()
+    assert "error" in r and "next" in r and "traceback" not in str(r).lower()
+
+
+# --- Page 2: Project Setup -------------------------------------------------
+
+def test_goals_have_plain_labels(client):
+    goals = client.get("/api/goals").json()["goals"]
+    first = goals[0]
+    assert first["value"] == "bare_metal_app" and "start here" in first["label"].lower()
+
+
+def test_create_project_returns_feasibility_light(client):
+    r = client.post("/api/projects", json={"name": "blink", "board": "STM32F103-BluePill",
+                                           "goal": "bare_metal_app"}).json()
+    assert r["light"] == "GREEN" and r["label"] == "Feasible"
+    assert "blink" in {p["name"] for p in client.get("/api/projects").json()["projects"]}
+
+
+def test_duplicate_and_empty_name_are_friendly(client):
+    client.post("/api/projects", json={"name": "p", "board": "STM32F103-BluePill",
+                                       "goal": "bare_metal_app"})
+    dup = client.post("/api/projects", json={"name": "p", "board": "STM32F103-BluePill",
+                                             "goal": "bare_metal_app"}).json()
+    assert "already exists" in dup["error"]
+    empty = client.post("/api/projects", json={"name": "", "board": "X", "goal": "y"}).json()
+    assert "name" in empty["error"].lower() and "next" in empty
+
+
+# --- Page 3: Validate ------------------------------------------------------
+
+def test_validate_returns_checks_with_teach(client):
+    client.post("/api/projects", json={"name": "v", "board": "STM32F103-BluePill",
+                                       "goal": "bare_metal_app"})
+    r = client.get("/api/validate/v").json()
+    assert any(c["status"] == "UNKNOWN" and c["teach"] for c in r["checks"])
+    assert any(c["gating"] for c in r["checks"]) and any(not c["gating"] for c in r["checks"])
+
+
+def test_validate_unknown_project_friendly(client):
+    r = client.get("/api/validate/nope").json()
+    assert "Project not found" in r["error"] and "next" in r
+
+
+# --- Page 4: Export --------------------------------------------------------
+
+def test_export_roundtrip_files_view_zip(client):
+    client.post("/api/projects", json={"name": "e", "board": "STM32F103-BluePill",
+                                       "goal": "bare_metal_app"})
+    r = client.post("/api/export/e").json()
+    assert "START_HERE.md" in r["files"] and "src/main.c" in r["files"]
+    f = client.get("/api/export/e/file", params={"path": "START_HERE.md"}).json()
+    assert "START HERE" in f["content"]
+    # path traversal is blocked
+    trav = client.get("/api/export/e/file", params={"path": "../../../etc/passwd"}).json()
+    assert "error" in trav
+    z = client.get("/api/export/e/download")
+    assert z.status_code == 200 and z.headers["content-type"] == "application/zip" and z.content
+
+
+def test_export_avr_board_has_start_here(client):
+    # The v1.9.2 AVR fix flows through the web export too.
+    client.post("/api/projects", json={"name": "uno", "board": "Arduino-Uno",
+                                       "goal": "bare_metal_app"})
+    r = client.post("/api/export/uno").json()
+    assert "START_HERE.md" in r["files"]
+    f = client.get("/api/export/uno/file", params={"path": "START_HERE.md"}).json()
+    assert "avr-gcc" in f["content"] and "arm-none-eabi" not in f["content"]
+
+
+# --- Page 5: Log Analyzer --------------------------------------------------
+
+def test_log_hardfault_matches(client):
+    log = "app: running\n[FAULT] HardFault_Handler: forced exception\nHFSR=0x40000000 PC=0x08000abc\n"
+    r = client.post("/api/logs/analyze", json={"text": log, "project": None}).json()
+    assert r["format"] == "mcu" and r["matches"]
+    assert "HardFault" in r["matches"][0]["cause"] and r["matches"][0]["severity"] == "HIGH"
+
+
+def test_log_empty_is_friendly(client):
+    r = client.post("/api/logs/analyze", json={"text": "   "}).json()
+    assert "no log" in r["error"].lower() and "next" in r
+
+
+# --- Page 6: Mentor --------------------------------------------------------
+
+def test_mentor_ask_offline_answer(client):
+    r = client.post("/api/mentor/ask", json={"board": "STM32F103-BluePill",
+                                             "question": "where do I start?", "use_llm": False}).json()
+    assert "STM32F103-BluePill" in r["answer"]
+
+
+def test_mentor_ask_empty_and_bad_board_friendly(client):
+    e1 = client.post("/api/mentor/ask", json={"board": "STM32F103-BluePill", "question": ""}).json()
+    assert "question" in e1["error"].lower()
+    e2 = client.post("/api/mentor/ask", json={"board": "Nope", "question": "hi"}).json()
+    assert "Board not found" in e2["error"]
+
+
+# --- static pages ----------------------------------------------------------
+
+def test_all_pages_served(client):
+    assert client.get("/", follow_redirects=False).status_code in (302, 307)
+    for page in ("boards", "setup", "validate", "export", "logs", "mentor"):
+        assert client.get(f"/static/{page}.html").status_code == 200
+    assert client.get("/static/style.css").status_code == 200
+    assert client.get("/static/app.js").status_code == 200

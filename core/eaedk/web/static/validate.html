@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — Validate</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Validate a Project</h1>
+    <p class="sub">EAEDK checks your project against its deterministic rules. Anything missing or
+      wrong is explained in plain English, with what to do about it.</p>
+
+    <div class="card">
+      <label for="project">Project</label>
+      <select id="project"><option value="">Loading projects…</option></select>
+      <button id="run">Run validation</button>
+    </div>
+
+    <div id="result"></div>
+  </main>
+
+  <script>
+    async function init() {
+      showCommand("eaedk validate <project>");
+      const ps = await api("/api/projects");
+      const sel = document.getElementById("project");
+      if (ps.error || !ps.projects.length) {
+        sel.innerHTML = `<option value="">(no projects yet)</option>`;
+        document.getElementById("result").innerHTML =
+          `<div class="note">No projects yet. Create one on the
+           <a href="setup.html">New Project</a> page first.</div>`;
+        return;
+      }
+      sel.innerHTML = ps.projects.map(p =>
+        `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)} — ${escapeHtml(p.board || "no board")}</option>`).join("");
+      sel.addEventListener("change", () => showCommand(`eaedk validate ${sel.value}`));
+      showCommand(`eaedk validate ${sel.value}`);
+    }
+
+    function rows(list) {
+      return list.map(c => `
+        <tr><td>${dot(c.status)}</td>
+          <td><b>${escapeHtml(humanizeRule(c.check))}</b></td>
+          <td>${badge(statusWord(c.status), c.status)}</td></tr>
+        ${c.status !== "PASS" && c.teach
+          ? `<tr><td></td><td colspan="2"><div class="teach">${escapeHtml(humanizeKeys(c.teach))}</div></td></tr>` : ""}`).join("");
+    }
+
+    async function run() {
+      const project = document.getElementById("project").value;
+      const el = document.getElementById("result");
+      if (!project) return;
+      showCommand(`eaedk validate ${project}`);
+      el.innerHTML = `<p class="kv">Running…</p>`;
+      const r = await api("/api/validate/" + encodeURIComponent(project));
+      if (r.error) { showError(el, r); return; }
+      const gating = r.checks.filter(c => c.gating);
+      const advisory = r.checks.filter(c => !c.gating);
+      el.innerHTML = `
+        <div class="card"><div style="font-size:18px">${dot(r.light)} &nbsp;<b>${escapeHtml(r.label)}</b></div>
+          <div class="kv" style="margin-top:6px">${escapeHtml(r.explain)}</div></div>
+        <h2>Checks that decide if you're ready</h2>
+        <div class="card" style="padding:0"><table><thead>
+          <tr><th></th><th>Check</th><th>Result</th></tr></thead>
+          <tbody>${rows(gating)}</tbody></table></div>
+        ${advisory.length ? `<h2>Advisory — good to know, won't block you</h2>
+          <div class="card" style="padding:0"><table><thead>
+          <tr><th></th><th>Check</th><th>Result</th></tr></thead>
+          <tbody>${rows(advisory)}</tbody></table></div>` : ""}
+        <div class="note">${escapeHtml(humanizeKeys(r.next_step))}</div>`;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      document.getElementById("run").addEventListener("click", run);
+    });
+  </script>
+</body>
+</html>
