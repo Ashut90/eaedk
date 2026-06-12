@@ -41,7 +41,7 @@ class AssessResponse:
         if self.feasibility == "feasible":
             if self.unknowns:
                 L.append("✅ **Your project is feasible and ready to export.** The items below "
-                         "are optional — you do not need them to blink an LED. "
+                         "are optional — you do not need them for a first build. "
                          "Next: `eaedk export`.")
             else:
                 L.append("✅ **Your project is feasible and ready to export.** "

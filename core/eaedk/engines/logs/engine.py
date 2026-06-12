@@ -345,7 +345,8 @@ def write_back(conn: sqlite3.Connection, project, triage: dict, path: str,
 async def analyze_log_async(conn: sqlite3.Connection, path: str,
                             project_name: str | None = None, use_llm: bool = False,
                             gateway: Gateway | None = None,
-                            project_aware: bool = False) -> LogAnalysisResult:
+                            project_aware: bool = False,
+                            deep: bool = False) -> LogAnalysisResult:
     text = await asyncio.to_thread(_read, path)
     lines = text.splitlines()
     fmt = detect_format(text)
@@ -364,9 +365,13 @@ async def analyze_log_async(conn: sqlite3.Connection, path: str,
 
     triage = None
     write_backs: list[dict[str, Any]] = []
+    # F6 (v1.9.0): normally a deterministic match short-circuits the LLM. With --deep, the triage
+    # ALSO runs so a generic downstream match can't hide the root-cause analysis. Default off ->
+    # behaviour is byte-for-byte unchanged when deep=False.
+    run_triage = use_llm and (not matches or deep)
     if matches:
         _store_match_analyses(conn, log_file_id, matches)
-    elif use_llm:
+    if run_triage:
         triage = await _llm_triage(conn, fmt, text, project, gateway or Gateway(),
                                    project_aware=project_aware)
         _store_triage(conn, log_file_id, triage)
@@ -381,7 +386,7 @@ async def analyze_log_async(conn: sqlite3.Connection, path: str,
 
 def analyze_log(conn: sqlite3.Connection, path: str, project_name: str | None = None,
                 use_llm: bool = False, gateway: Gateway | None = None,
-                project_aware: bool = False) -> LogAnalysisResult:
+                project_aware: bool = False, deep: bool = False) -> LogAnalysisResult:
     """Synchronous wrapper for the CLI."""
     return asyncio.run(analyze_log_async(conn, path, project_name, use_llm, gateway,
-                                         project_aware))
+                                         project_aware, deep))

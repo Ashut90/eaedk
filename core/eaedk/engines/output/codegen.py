@@ -227,6 +227,85 @@ def render_main_c(data: dict) -> str:
     return {"stm32f1": _stm32f1, "stm32f4": _stm32f4}.get(fam, _skeleton)(data)
 
 
+# --- v1.9.0 F3: goal-aware review artifact ---------------------------------
+
+def render_dtb_node(data: dict) -> str:
+    """Device-tree node skeleton for a Linux/driver bring-up. Cites a register base from a
+    verified fact when present; otherwise explicit <TODO ...> placeholders — never a guess."""
+    name = data["board_name"]
+    soc = data["soc"]["name"] if data["soc"] else "your SoC"
+    facts = data.get("facts", {})
+    # Use a verified i2c/peripheral base only if it's in the cited facts; else placeholder.
+    base = None
+    for k, v in facts.items():
+        if "i2c" in k.lower() and ("base" in k.lower() or "addr" in k.lower()):
+            base = v
+            break
+    soc_node = f"0x{base:08X}" if isinstance(base, int) else "<TODO peripheral base from RM>"
+    return f"""/*
+ * Device Tree node skeleton for {name} ({soc}).
+ * EAEDK never guesses an address — fill every <TODO ...> from the SoC reference manual / the
+ * vendor .dtsi. This adds a missing I2C peripheral's child node (the most common DTB gap).
+ */
+&i2c1 {{                                  /* the controller node (label from your SoC .dtsi) */
+    status = "okay";
+    clock-frequency = <100000>;          /* 100 kHz standard mode; 400000 for fast mode */
+    pinctrl-names = "default";
+
+    sensor@<TODO 7-bit addr> {{           /* e.g. sensor@68 */
+        compatible = "<TODO vendor,part>";          /* MUST match the driver's of_match_table */
+        reg = <0x<TODO 7-bit I2C address>>;         /* the device's bus address, not a memory base */
+        interrupt-parent = <&<TODO gpio/intc label>>;   /* required if the device has an IRQ line */
+        interrupts = <<TODO line> <TODO flags>>;
+    }};
+}};
+
+/* Controller register base (for cross-checking the node label against the SoC map):
+ *   {soc} i2c1 @ {soc_node}
+ * After editing: recompile the DTB, reboot, and re-run `eaedk log analyze --deep` on dmesg.
+ */
+"""
+
+
+def render_partition_review(data: dict) -> str:
+    """A readable map of the project's OTA partitions for the Critic to inspect. Overlap/fit are
+    confirmed deterministically by the grounded validation pass, not by this text."""
+    parts = (data.get("inputs") or {}).get("partitions")
+    name = data["board_name"]
+    L = [f"/* OTA partition table review — {name} */"]
+    if not isinstance(parts, list) or not parts:
+        L.append("/* No 'partitions' input provided. Set it with: eaedk input set <project> "
+                 "partitions '[{name,role,base,size}, ...]' so EAEDK can check overlap/fit. */")
+        return "\n".join(L) + "\n"
+    L.append("# role        base          size          end")
+    for p in parts:
+        try:
+            base, size = int(p.get("base")), int(p.get("size"))
+            L.append(f"# {str(p.get('role') or p.get('name')):<10} "
+                     f"0x{base:08X}    0x{size:08X}    0x{base + size:08X}")
+        except (TypeError, ValueError):
+            L.append(f"# {p}  (unparseable base/size)")
+    L.append("# Check: A/B slots must not overlap and must fit primary storage. "
+             "Run `eaedk validate <project>` for the deterministic verdict.")
+    return "\n".join(L) + "\n"
+
+
+# goal_type -> (artifact_kind, generator). Unlisted goals fall back to the bare-metal scaffold.
+_ARTIFACT_BY_GOAL = {
+    "linux": ("devicetree", render_dtb_node),
+    "driver": ("devicetree", render_dtb_node),
+    "ota": ("partition_table", render_partition_review),
+}
+
+
+def render_review_artifact(data: dict) -> tuple[str, str]:
+    """F3: pick the artifact appropriate to the project's goal_type. Returns (kind, content).
+    Bare-metal/bootloader keep the existing C scaffold byte-for-byte."""
+    goal = data["project"]["goal_type"] if data.get("project") else "bare_metal_app"
+    kind, gen = _ARTIFACT_BY_GOAL.get(goal, ("bare_metal_c", render_main_c))
+    return kind, gen(data)
+
+
 def render_start_here(data: dict) -> str:
     """Plain-language on-ramp for someone who has never seen a CMakeLists."""
     name = data["board_name"]

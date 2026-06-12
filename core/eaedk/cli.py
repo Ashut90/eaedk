@@ -470,7 +470,8 @@ def cmd_log_analyze(args):
         project_name = active["name"]
     if args.project_aware and not args.llm:
         print("[note] --project-aware enriches LLM triage; add --llm to engage it.")
-    res = analyze_log(conn, args.file, project_name, args.llm, project_aware=args.project_aware)
+    res = analyze_log(conn, args.file, project_name, args.llm,
+                      project_aware=args.project_aware, deep=args.deep)
     if args.json:
         print(json.dumps(res.to_dict(), indent=2, default=str))
     else:
@@ -601,7 +602,11 @@ def cmd_mentor(args):
             print(f"Actor-Critic needs the LLM ({res.reason}). The deterministic scaffold is "
                   "already in your export (`eaedk export`).")
             return
-        print(f"Actor-Critic review of '{args.project}' ({res.epochs} epoch(s)):")
+        _ARTIFACT_LABEL = {"bare_metal_c": "bare-metal C scaffold",
+                           "devicetree": "device-tree node skeleton",
+                           "partition_table": "OTA partition table"}
+        print(f"Actor-Critic review of '{args.project}' ({res.epochs} epoch(s)) — reviewed: "
+              f"{_ARTIFACT_LABEL.get(res.artifact_kind, res.artifact_kind)}:")
         print("\nCONFIRMED by the Validation Engine (real problems):")
         for c in res.confirmed or [{"message": "(none)"}]:
             print(f"  - {c.get('kind','')}: {c.get('message','')}"
@@ -793,6 +798,9 @@ def build_parser() -> argparse.ArgumentParser:
     lg = sub.add_parser("log").add_subparsers(dest="sub", required=True)
     la = lg.add_parser("analyze")
     la.add_argument("--file", required=True); la.add_argument("--project")
+    la.add_argument("--deep", action="store_true",
+                    help="also run LLM triage even when a deterministic signature matched "
+                         "(so a generic match can't hide the root cause)")
     la.add_argument("--project-aware", dest="project_aware", action="store_true",
                     help="enrich LLM triage with project validation gaps + unverified facts")
     _add_llm(la); la.set_defaults(func=cmd_log_analyze)
