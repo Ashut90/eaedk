@@ -64,6 +64,113 @@ def mentor_ask(conn: sqlite3.Connection, board_name: str, question: str,
     return f"{body}\n\n{filtered}\n[mentor] {removed} uncited hardware claim(s) removed."
 
 
+_CHAT_SYSTEM = (
+    "You are EAEDK's mentor for someone with ZERO firmware experience, talking about ONE specific "
+    "board. Reason ONLY from the CONTEXT (board facts, capabilities, learning path, concept "
+    "anchor). Every reply MUST have three parts, in plain English with no unexplained jargon: "
+    "(1) a short answer (a few sentences); (2) one concrete example or 'Try this:' action tied to "
+    "THIS board and the user's first project; (3) end with ONE follow-up question the user can "
+    "answer. NEVER say 'I don't know' without offering what to try next. NEVER give a definition "
+    "without an example. NEVER invent an address, register, clock frequency, or timing value — "
+    "use only numbers that appear in the CONTEXT.")
+
+
+def _detect_concept(conn: sqlite3.Connection, text: str):
+    """Return the concept row whose name appears in the user's text, else None. Punctuation is
+    normalised to spaces so 'what is a hardfault?' still matches 'hardfault'."""
+    import re as _re
+    low = " " + _re.sub(r"[^a-z0-9]+", " ", (text or "").lower()) + " "
+    for row in repo.list_concepts(conn):
+        name = _re.sub(r"[^a-z0-9]+", " ", row["name"].lower()).strip()
+        if f" {name} " in low or f" {name}s " in low:
+            return row
+    return None
+
+
+def _board_try_this(family: str | None) -> str:
+    """A concrete, board-family-appropriate experiment for the user's first project. No numbers
+    that the post-filter would strip — kept conceptual so it always survives."""
+    if family == "stm32":
+        return ("In your blink project, find the line that enables your LED pin's GPIO clock "
+                "(the RCC line) and comment it out. Build it, run it in Wokwi, and watch the LED "
+                "do nothing — that's exactly why enabling the clock first matters.")
+    if family == "avr":
+        return ("In your blink project, set F_CPU to the wrong value and watch your delay timing "
+                "break — it shows how the clock setting drives everything.")
+    if family == "esp32":
+        return ("In your blink project, try a Wi-Fi call before nvs_flash_init() and watch it "
+                "fail — it shows why init order matters on the ESP32.")
+    if family == "rp2040":
+        return ("In your blink project, look at how the second-stage bootloader (boot2) is placed "
+                "before your code — remove it in your head and you'll see why nothing would run.")
+    return ("In your blink project, change the order of your init calls and see what breaks — "
+            "order is everything in bare-metal firmware.")
+
+
+def _followup_question(caps: list, path: list) -> str:
+    if any(c["capability"] == "uart" for c in caps):
+        return "Question: do you know which clock your UART runs on?"
+    if path:
+        return f"Question: are you ready to start with '{path[0]['title']}'?"
+    return "Question: what would you like to build first?"
+
+
+def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
+                use_llm: bool = False, gateway: Gateway | None = None) -> str:
+    """A 2-way mentor turn. ``messages`` is the conversation so far ([{role, content}, ...]).
+    Always returns an answer + a board-tied 'Try this' + a follow-up question (the contract holds
+    even offline). The post-filter runs on every LLM response."""
+    from .mentor import family_of
+    board, soc = repo.load_board(conn, board_name)
+    if board is None:
+        return ("I can't find that board. Pick one from the Boards list, then ask me again. "
+                "Try this: open the Boards tab and click a board to see what it can do. "
+                "Question: which board do you have?")
+    caps = mentor.capability_map(conn, board_name)
+    path = mentor.learning_path_for(conn, {c["capability"] for c in caps})
+    fam = family_of(soc["name"])
+    last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+    concept = _detect_concept(conn, last_user)
+    try_this = _board_try_this(fam)
+    question = _followup_question(caps, path)
+
+    # Deterministic backbone — a real answer even with no model, always ending in an action.
+    if concept is not None:
+        head = f"{concept['anchor']}"
+    elif path:
+        head = (f"Good question. For {board_name}, the place to start is '{path[0]['title']}' — "
+                f"{path[0]['why']}")
+    else:
+        head = f"For {board_name}, tell me what you want to do and I'll point you at the first step."
+    backbone = f"{head}\n\nTry this: {try_this}\n\n{question}"
+
+    gw = gateway or Gateway()
+    note = _llm_or_note(use_llm, gw)
+    if note is not None:
+        return backbone                              # offline: the structured deterministic answer
+
+    cap_lines = "\n".join(f"- {c['summary'] or c['capability']}" for c in caps)
+    path_lines = "\n".join(f"{s['step']}. {s['title']} — {s['why']}" for s in path)
+    history = "\n".join(f"{m.get('role','user').upper()}: {m.get('content','')}"
+                        for m in messages[-8:])
+    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\nCapabilities:\n{cap_lines}\n"
+              f"Learning path:\n{path_lines}\n"
+              + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
+              + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")
+    raw = gw.provider.generate(_CHAT_SYSTEM, prompt)
+    filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
+    answer = filtered.strip()
+    # Enforce the contract even if the model (or the post-filter) dropped a part.
+    if len(answer) < 20:
+        answer = backbone
+    else:
+        if "try this" not in answer.lower():
+            answer += f"\n\nTry this: {try_this}"
+        if not answer.rstrip().endswith("?") and "question:" not in answer.lower():
+            answer += f"\n\n{question}"
+    return answer
+
+
 def mentor_explain(conn: sqlite3.Connection, board_name: str, concept: str,
                    use_llm: bool = False, gateway: Gateway | None = None) -> str:
     soc, _caps, _path = _ctx(conn, board_name)

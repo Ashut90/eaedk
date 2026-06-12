@@ -5,6 +5,7 @@ const PAGES = [
   ["setup.html",    "New Project"],
   ["validate.html", "Validate"],
   ["export.html",   "Export"],
+  ["studio.html",   "Code Studio"],
   ["logs.html",     "Log Analyzer"],
   ["mentor.html",   "Mentor"],
 ];

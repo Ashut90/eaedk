@@ -51,6 +51,18 @@
       if (r.error) { showError(el, r); return; }
       const list = r.files.map(f =>
         `<li>📄 <a href="#" onclick="viewFile('${escapeHtml(f)}');return false;">${escapeHtml(f)}</a></li>`).join("");
+      const wokwi = r.wokwi_supported
+        ? `<div class="card"><h2 style="margin-top:0">🔬 Wokwi Simulation</h2>
+            <p class="kv">You can test this in a browser simulator before touching real hardware.</p>
+            <ol>
+              <li>Compile your firmware first:
+                <pre class="code">${escapeHtml(r.compile_command || "see START_HERE.md")}</pre></li>
+              <li>Open <b>wokwi.com</b> in your browser, start a new project, and drag these two files in:
+                <ul class="tree">${r.wokwi_files.map(f=>`<li>📄 ${escapeHtml(f)}</li>`).join("")}</ul></li>
+              <li>Press play — the on-board LED reacts to your firmware.</li>
+            </ol></div>`
+        : `<div class="note"><b>Wokwi simulation isn't available for this board.</b><br>
+            Wokwi natively simulates: ${escapeHtml((r.wokwi_supported_list||[]).join(", "))}.</div>`;
       el.innerHTML = `
         ${r.geometry_unknown ? `<div class="error"><b>Heads up: this board is missing flash/RAM data,
           so these files won't compile yet.</b><div class="next">→ Fill in the board's geometry,
@@ -61,7 +73,8 @@
             <a href="/api/export/${encodeURIComponent(project)}/download"><button class="ghost">⬇ Download all (.zip)</button></a>
           </div>
           <div class="card" id="viewer"><span class="kv">Click a file to view it here.</span></div>
-        </div>`;
+        </div>
+        ${wokwi}`;
     }
 
     async function viewFile(path) {

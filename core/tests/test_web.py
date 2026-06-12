@@ -148,7 +148,57 @@ def test_mentor_ask_empty_and_bad_board_friendly(client):
 
 def test_all_pages_served(client):
     assert client.get("/", follow_redirects=False).status_code in (302, 307)
-    for page in ("boards", "setup", "validate", "export", "logs", "mentor"):
+    for page in ("boards", "setup", "validate", "export", "studio", "logs", "mentor"):
         assert client.get(f"/static/{page}.html").status_code == 200
     assert client.get("/static/style.css").status_code == 200
     assert client.get("/static/app.js").status_code == 200
+
+
+# --- v2.1.0 additions ------------------------------------------------------
+
+def test_board_detail_includes_driver_path_for_linux_board(client):
+    d = client.get("/api/boards/BeagleBone-Black").json()
+    assert d["driver_path"] and d["driver_path"][0]["title"] == "Character device driver"
+    bp = client.get("/api/boards/STM32F103-BluePill").json()
+    assert bp["driver_path"] == []
+
+
+def test_web_export_includes_wokwi_for_supported_board(client):
+    client.post("/api/projects", json={"name": "w", "board": "STM32F103-BluePill",
+                                       "goal": "bare_metal_app"})
+    r = client.post("/api/export/w").json()
+    assert r["wokwi_supported"] is True
+    assert "wokwi/diagram.json" in r["wokwi_files"] and "wokwi/wokwi.toml" in r["wokwi_files"]
+    assert r["compile_command"]
+
+
+def test_web_export_wokwi_unsupported_board(client):
+    client.post("/api/projects", json={"name": "bbb", "board": "BeagleBone-Black",
+                                       "goal": "linux"})
+    r = client.post("/api/export/bbb").json()
+    assert r["wokwi_supported"] is False
+    assert "STM32F103-BluePill" in " ".join(r["wokwi_supported_list"])
+
+
+def test_studio_returns_template_and_checklist(client):
+    client.post("/api/projects", json={"name": "s", "board": "STM32F103-BluePill",
+                                       "goal": "bare_metal_app"})
+    d = client.get("/api/studio/s").json()
+    assert d["template"] and d["checklist"]
+    assert any("RCC" in c["hint"] for c in d["checklist"])
+
+
+def test_studio_review_returns_confirmed_advisory(client):
+    client.post("/api/projects", json={"name": "s2", "board": "STM32F103-BluePill",
+                                       "goal": "bare_metal_app"})
+    r = client.post("/api/studio/s2/review", json={"project": "s2", "code": "int main(){}"}).json()
+    assert "confirmed" in r and "advisory" in r       # keys always present
+
+
+def test_mentor_chat_route(client):
+    r = client.post("/api/mentor/chat", json={"board": "STM32F103-BluePill",
+        "messages": [{"role": "user", "content": "where do I start?"}], "use_llm": False}).json()
+    assert "Try this:" in r["answer"]
+    empty = client.post("/api/mentor/chat", json={"board": "STM32F103-BluePill",
+                                                  "messages": []}).json()
+    assert "error" in empty and "next" in empty

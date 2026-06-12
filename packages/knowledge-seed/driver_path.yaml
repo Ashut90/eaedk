@@ -1,0 +1,70 @@
+# Linux device-driver learning path — a first-class path for boards that run Linux (Cortex-A).
+# Loaded into the existing learning_steps table with goal_type: driver. It is shown as its own
+# "Driver development" section, never mixed into the bare-metal path. Order and reasons both
+# matter — each step teaches the prerequisite for the next. Kernel signatures are the documented
+# Linux kernel API (not invented); they go in before_you_start so a mid-level dev sees the shape.
+- step: 1
+  key: driver_chardev
+  title: "Character device driver"
+  goal_type: driver
+  requires: []
+  why: "Start here. It's the simplest Linux driver and teaches the core kernel pattern — register a /dev node, then handle open/read/write. Every later driver builds on these file operations."
+  before_you_start:
+    - "What it is: a driver that creates a /dev/yourdevice node user programs can read and write."
+    - "Kernel functions: alloc_chrdev_region(), cdev_init()/cdev_add(), struct file_operations { .open, .read, .write, .release }, class_create()/device_create()."
+    - "Build this: a /dev node that returns a fixed string when you `cat` it. Confirms your module loads, registers, and is reachable from user space."
+
+- step: 2
+  key: driver_platform
+  title: "Platform driver (device tree)"
+  goal_type: driver
+  requires: []
+  why: "Now learn how Linux *finds* hardware. A platform driver binds to a device-tree node by its compatible string — this is how every real on-chip peripheral (UART, I2C, SPI controllers) is matched to its driver."
+  before_you_start:
+    - "What it is: a driver that the kernel binds to a device-tree node automatically at boot."
+    - "Kernel functions: struct platform_driver { .probe, .remove, .driver.of_match_table }, module_platform_driver(), platform_get_resource(), devm_ioremap_resource()."
+    - "Build this: a driver whose probe() runs when its compatible string appears in the device tree. Print a message from probe() to prove the bind worked."
+
+- step: 3
+  key: driver_i2c
+  title: "I2C client driver"
+  goal_type: driver
+  requires: []
+  why: "Apply the platform/probe pattern to a real bus. I2C is the simplest sensor bus and is matched the same device-tree way, so it's the place to start reading actual hardware."
+  before_you_start:
+    - "What it is: a driver that reads a sensor on the I2C bus when the kernel matches it to a device-tree node."
+    - "Kernel functions: struct i2c_driver { .probe, .id_table, .driver.of_match_table }, module_i2c_driver(), i2c_smbus_read_byte_data(), i2c_master_recv()."
+    - "Build this: read one register (e.g. a WHO_AM_I/ID register) from a real I2C sensor and print the value."
+
+- step: 4
+  key: driver_spi
+  title: "SPI driver"
+  goal_type: driver
+  requires: []
+  why: "SPI is the faster, DMA-friendly cousin of I2C. With the client-driver pattern understood, learn full-duplex transfers — the foundation for displays, fast sensors, and external flash."
+  before_you_start:
+    - "What it is: a driver that talks to a device on the SPI bus with full-duplex transfers."
+    - "Kernel functions: struct spi_driver { .probe, .id_table }, module_spi_driver(), struct spi_transfer, spi_sync()/spi_async(), spi_message_init()."
+    - "Build this: read an ID register over SPI and print it. Then time a larger transfer to feel the speed difference vs I2C."
+
+- step: 5
+  key: driver_irq
+  title: "Interrupt-driven driver"
+  goal_type: driver
+  requires: []
+  why: "Polling wastes the CPU. Interrupts let the driver react the instant hardware has data or an event — the basis of every responsive, production driver. Learn this before DMA, which interrupts complete."
+  before_you_start:
+    - "What it is: a driver that runs a handler when the hardware raises an interrupt, instead of constantly checking."
+    - "Kernel functions: devm_request_irq()/request_threaded_irq(), irqreturn_t handler(int irq, void *dev), IRQF_TRIGGER_RISING/FALLING, the GPIO-to-IRQ mapping in the device tree (interrupts/interrupt-parent)."
+    - "Build this: a driver that logs a message each time a GPIO interrupt fires (e.g. a button press)."
+
+- step: 6
+  key: driver_dma
+  title: "DMA driver"
+  goal_type: driver
+  requires: []
+  why: "The final step. DMA moves blocks of data between memory and a peripheral without the CPU, and signals completion with an interrupt (step 5). This is how production drivers move data at full bus speed without burning CPU."
+  before_you_start:
+    - "What it is: a driver that hands a memory buffer to the DMA engine and is told (by interrupt) when the transfer is done."
+    - "Kernel functions: dma_alloc_coherent(), dma_map_single(), dmaengine_prep_slave_single(), dmaengine_submit(), dma_async_issue_pending(), a completion callback."
+    - "Build this: move a buffer to/from a peripheral over DMA and verify the data on the other side."

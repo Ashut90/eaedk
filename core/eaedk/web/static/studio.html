@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — Code Studio</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+  <style> #editor { min-height: 360px; } </style>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Code Studio</h1>
+    <p class="sub">Write your firmware with a deterministic reviewer watching. Start from the
+      template, edit it, then click Review — real problems are confirmed by the engine in RED;
+      AI suggestions appear in YELLOW.</p>
+
+    <div class="card">
+      <label for="project">Project</label>
+      <select id="project"><option value="">Loading projects…</option></select>
+    </div>
+
+    <div id="checklist"></div>
+    <div id="driver"></div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Your code</h2>
+      <textarea id="editor" class="mono" spellcheck="false"></textarea>
+      <button id="review">Review my code</button>
+    </div>
+
+    <div id="result"></div>
+  </main>
+
+  <script>
+    async function init() {
+      const ps = await api("/api/projects");
+      const sel = document.getElementById("project");
+      if (ps.error || !ps.projects.length) {
+        sel.innerHTML = `<option value="">(no projects yet)</option>`;
+        document.getElementById("checklist").innerHTML =
+          `<div class="note">No projects yet. Create one on the <a href="setup.html">New Project</a> page.</div>`;
+        return;
+      }
+      sel.innerHTML = ps.projects.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+      sel.addEventListener("change", loadStudio);
+      loadStudio();
+    }
+
+    async function loadStudio() {
+      const project = document.getElementById("project").value;
+      if (!project) return;
+      showCommand(`eaedk --llm mentor --board <board> --project ${project} --review-code`);
+      const d = await api("/api/studio/" + encodeURIComponent(project));
+      if (d.error) { showError(document.getElementById("checklist"), d); return; }
+      document.getElementById("editor").value = d.template || "";
+      const cl = d.checklist.length
+        ? `<div class="card"><h2 style="margin-top:0">Before you write — think about these</h2>` +
+          d.checklist.map(c => `<div class="teach">✓ <b>${escapeHtml(c.question)}</b><br>
+            <span class="kv">${escapeHtml(c.hint)}</span></div>`).join("") + `</div>`
+        : "";
+      document.getElementById("checklist").innerHTML = cl;
+      document.getElementById("driver").innerHTML = (d.driver_path && d.driver_path.length)
+        ? `<details class="card"><summary style="font-size:16px">🐧 Driver development path (${d.driver_path.length} steps)</summary>` +
+          d.driver_path.map(s => `<div class="teach"><b>${s.step}. ${escapeHtml(s.title)}</b><br>
+            <span class="kv">${escapeHtml(s.why)}</span></div>`).join("") + `</details>`
+        : "";
+    }
+
+    async function review() {
+      const project = document.getElementById("project").value;
+      const code = document.getElementById("editor").value;
+      const el = document.getElementById("result");
+      if (!project) return;
+      showCommand(`eaedk --llm mentor --board <board> --project ${project} --review-code`);
+      el.innerHTML = `<p class="kv">Reviewing…</p>`;
+      const r = await api(`/api/studio/${encodeURIComponent(project)}/review`, { method: "POST",
+        headers: {"Content-Type":"application/json"}, body: JSON.stringify({ project, code }) });
+      if (r.error) { showError(el, r); return; }
+      const confirmed = r.confirmed.length
+        ? r.confirmed.map(c => `<div class="card" style="border-color:var(--red)">
+            <div>${badge("Problem", "RED")} &nbsp;<b>${escapeHtml(humanizeRule(c.check))}</b></div>
+            <div class="kv" style="margin:6px 0">${escapeHtml(humanizeKeys(c.what))}</div>
+            ${c.why ? `<div class="teach"><b>What to change:</b> ${escapeHtml(humanizeKeys(c.why))}</div>` : ""}
+          </div>`).join("")
+        : `<div class="note">✅ No real problems found by the engine.</div>`;
+      const advisory = r.advisory.length
+        ? `<h2>Advisory — AI suggestions (not proven)</h2>` + r.advisory.map(a => `
+            <div class="card" style="border-color:var(--yellow)">
+              <div>${badge("Suggestion", "YELLOW")} &nbsp;<b>${escapeHtml(a.check || "Suggestion")}</b></div>
+              <div class="kv" style="margin-top:6px">${escapeHtml(humanizeKeys(a.what))}
+                ${a.note ? "— " + escapeHtml(a.note) : ""}</div></div>`).join("")
+        : "";
+      el.innerHTML = `<h2>Confirmed by the engine — fix these</h2>${confirmed}${advisory}
+        ${r.ai_note ? `<div class="note">${escapeHtml(r.ai_note)}</div>` : ""}`;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      document.getElementById("review").addEventListener("click", review);
+    });
+  </script>
+</body>
+</html>

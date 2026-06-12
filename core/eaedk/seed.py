@@ -167,7 +167,10 @@ def _load_capabilities(conn: sqlite3.Connection) -> int:
 
 
 def _load_learning_steps(conn: sqlite3.Connection) -> int:
-    rows = _load_yaml(seed_dir() / "learning_path.yaml") or []
+    # The bare-metal path and the Linux driver path both live in learning_steps (distinguished by
+    # goal_type); the driver path is a separate seed file (v2.1.0), loaded the same way.
+    rows = (_load_yaml(seed_dir() / "learning_path.yaml") or []) + \
+           (_load_yaml(seed_dir() / "driver_path.yaml") or [])
     for r in rows:
         conn.execute(
             "INSERT INTO learning_steps(step,key,title,goal_type,requires_json,why,"

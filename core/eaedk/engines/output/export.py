@@ -108,7 +108,8 @@ def _geometry_unknown(board) -> bool:
 
 
 def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
-                   force: bool = False, only: str | None = None) -> ExportResult:
+                   force: bool = False, only: str | None = None,
+                   wokwi: bool = False) -> ExportResult:
     data = gather(conn, project)
     feas = data["resp"].feasibility
     if feas != "feasible" and not force:
@@ -151,6 +152,11 @@ def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
                     files["START_HERE.md"] = codegen.render_start_here(data)
                 else:
                     files["src/main.c"] = gen.render_main_c(data)
+
+    # v2.1.0: optional Wokwi simulation files (default off; normal export unchanged).
+    if wokwi and only is None:
+        from .wokwi import wokwi_files
+        files.update(wokwi_files(data["board_name"], data["soc"], data["project"]["name"]))
 
     written: list[str] = []
     for rel, content in files.items():

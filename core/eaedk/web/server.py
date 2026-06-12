@@ -104,6 +104,7 @@ def api_board_detail(name: str):
                            "before_you_start": s["before_you_start"]} for s in path],
         "dropped": [{"step": d["step"], "title": d["title"], "missing": d["missing"]}
                     for d in dropped],
+        "driver_path": mentor.driver_path(conn, name),   # v2.1.0: empty unless the board runs Linux
     }
 
 
@@ -205,8 +206,9 @@ def api_export(project: str):
     p = repo.get_project(conn, project)
     if p is None:
         return _err(f"Project not found: {project!r}.", "Pick a project from the dropdown.")
+    from ..engines.output.wokwi import WOKWI_BOARDS, supported_boards
     out = _export_dir(project)
-    res = export_project(conn, p, str(out))
+    res = export_project(conn, p, str(out), wokwi=True)   # the web always offers simulation files
     if res.refused:
         return _err("This project isn't ready to export yet.",
                     "Open the Validate page to see what's missing, fill it in, then export again. "
@@ -214,8 +216,34 @@ def api_export(project: str):
     if res.contaminated:
         return _err("That export folder already holds a different project's files.",
                     "This shouldn't normally happen from the web app — restart `eaedk web`.")
-    return {"project": project, "out_dir": str(out), "files": _tree(out),
-            "geometry_unknown": res.geometry_unknown}
+    files = _tree(out)
+    board_name = repo.project_board_name(conn, p)
+    return {"project": project, "out_dir": str(out), "files": files,
+            "geometry_unknown": res.geometry_unknown,
+            "wokwi_supported": board_name in WOKWI_BOARDS,
+            "wokwi_files": [f for f in files if f.startswith("wokwi/")],
+            "wokwi_supported_list": supported_boards(),
+            "compile_command": _compile_command(out)}
+
+
+def _compile_command(out: Path) -> str:
+    """The first build command from START_HERE.md (so the Wokwi panel can show 'compile first')."""
+    sh = out / "START_HERE.md"
+    if not sh.exists():
+        return ""
+    in_build = False
+    for line in sh.read_text(encoding="utf-8").splitlines():
+        if line.strip().startswith("## Build"):
+            in_build = True
+            continue
+        if in_build:
+            s = line.strip()
+            if s.startswith("```") or s == "" or s.startswith("#"):
+                continue
+            if s.startswith("##"):
+                break
+            return s
+    return ""
 
 
 @app.get("/api/export/{project}/file")
@@ -292,6 +320,75 @@ async def api_mentor_ask(request: Request):
         return _err(f"Board not found: {board!r}.", "Pick a board from the dropdown at the top.")
     answer = mentor_ask(conn, board, question, use_llm=use_llm)
     return {"board": board, "question": question, "answer": answer}
+
+
+@app.post("/api/mentor/chat")
+async def api_mentor_chat(request: Request):
+    from ..mentor_llm import mentor_chat
+    body = await request.json()
+    board = body.get("board") or ""
+    messages = body.get("messages") or []
+    use_llm = bool(body.get("use_llm"))
+    if not any(m.get("role") == "user" and (m.get("content") or "").strip() for m in messages):
+        return _err("Type a message first.", "Ask the mentor anything about your board.")
+    conn = _conn()
+    if repo.load_board(conn, board)[0] is None:
+        return _err(f"Board not found: {board!r}.", "Pick a board from the dropdown at the top.")
+    return {"board": board, "answer": mentor_chat(conn, board, messages, use_llm=use_llm)}
+
+
+# --- Page 7: Code Studio (surfaces the existing Actor-Critic loop) ----------
+
+@app.get("/api/studio/{project}")
+def api_studio(project: str):
+    from ..engines.output import export
+    from ..engines.output import codegen
+    conn = _conn()
+    p = repo.get_project(conn, project)
+    if p is None:
+        return _err(f"Project not found: {project!r}.", "Create a project on the New Project page.")
+    board_name = repo.project_board_name(conn, p)
+    goal = p["goal_type"]
+    data = export.gather(conn, p)
+    data["inputs"] = repo.load_inputs(conn, p["id"])[0]
+    artifact_kind, template = codegen.render_review_artifact(data)
+    return {
+        "project": project, "board": board_name, "goal": goal, "artifact_kind": artifact_kind,
+        "template": template,
+        "checklist": mentor.think_before_code(conn, board_name, goal) if board_name else [],
+        "driver_path": mentor.driver_path(conn, board_name) if board_name else [],
+    }
+
+
+@app.post("/api/studio/{project}/review")
+async def api_studio_review(request: Request):
+    from .. import actor_critic
+    body = await request.json()
+    project = body.get("project") or ""
+    code = body.get("code")
+    conn = _conn()
+    p = repo.get_project(conn, project)
+    if p is None:
+        return _err(f"Project not found: {project!r}.", "Pick a project and try again.")
+
+    def _issue(c):
+        return {"check": c.get("kind", ""), "what": c.get("message", ""),
+                "why": c.get("teach") or c.get("verified") or "", "note": c.get("note", "")}
+
+    res = actor_critic.run_actor_critic(conn, p, code=code)
+    if res.available:
+        confirmed, advisory = res.confirmed, res.advisory
+        ai_note = ""
+    else:
+        # The deterministic CONFIRMED issues don't need the model — show them regardless.
+        confirmed = actor_critic.grounded_confirmations(conn, p)
+        advisory = []
+        ai_note = ("The deterministic checks below are complete. For extra AI suggestions, "
+                   "install the local model (Ollama) — but you don't need it to fix what's listed.")
+    return {"project": project,
+            "confirmed": [_issue(c) for c in confirmed],
+            "advisory": [_issue(a) for a in advisory],
+            "ai_note": ai_note}
 
 
 # --- static (mounted last so /api and / win) -------------------------------

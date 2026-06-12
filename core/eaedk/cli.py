@@ -572,13 +572,36 @@ def cmd_ingest(args):
         print(f"  #{c['id']} [{c['confidence']}/{c['method']}] {c['key']} = {c['value']} (p.{c['page']})")
 
 
+def _mentor_chat_repl(conn, board: str, use_llm: bool) -> None:
+    """A crash-safe terminal chat with the mentor (v2.1.0). Ctrl-D / blank line exits."""
+    from .mentor_llm import mentor_chat
+    print(f"Mentor chat for {board}. Ask anything; press Enter on an empty line (or Ctrl-D) to "
+          "exit.\n")
+    messages: list[dict] = []
+    while True:
+        try:
+            q = input("you> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nBye — come back any time.")
+            return
+        if not q:
+            print("Bye — come back any time.")
+            return
+        messages.append({"role": "user", "content": q})
+        answer = mentor_chat(conn, board, messages, use_llm=use_llm)
+        messages.append({"role": "assistant", "content": answer})
+        print(f"\nmentor> {answer}\n")
+
+
 def cmd_mentor(args):
     conn = _conn(args)
     board, _soc = repo.load_board(conn, args.board)
     if board is None:
         _unknown_board(conn, args.board)
         sys.exit(2)
-    if args.common_mistakes:
+    if getattr(args, "chat", False):
+        _mentor_chat_repl(conn, args.board, use_llm=args.llm)
+    elif args.common_mistakes:
         from .mentor import render_common_mistakes
         print(render_common_mistakes(conn, args.board))
     elif args.next_step is not None:
@@ -624,7 +647,8 @@ def cmd_export(args):
     p = _require_project(conn, args.name)
     from .engines.output import export_project
     out_dir = args.out or f"{args.name}-bringup"
-    res = export_project(conn, p, out_dir, force=args.force, only=args.only)
+    res = export_project(conn, p, out_dir, force=args.force, only=args.only,
+                         wokwi=getattr(args, "wokwi", False))
     if args.json:
         print(json.dumps(res.__dict__, indent=2, default=str))
         return
@@ -788,6 +812,8 @@ def build_parser() -> argparse.ArgumentParser:
     mt = sub.add_parser("mentor")
     mt.add_argument("--board", required=True)
     mt.add_argument("--ask"); mt.add_argument("--explain")
+    mt.add_argument("--chat", action="store_true",
+                    help="open a back-and-forth mentor conversation in the terminal")
     mt.add_argument("--review-code", dest="review_code", action="store_true")
     mt.add_argument("--project")
     mt.add_argument("--common-mistakes", dest="common_mistakes", action="store_true",
@@ -807,6 +833,8 @@ def build_parser() -> argparse.ArgumentParser:
     ex = sub.add_parser("export"); ex.add_argument("name"); ex.add_argument("--out")
     ex.add_argument("--force", action="store_true")
     ex.add_argument("--only", choices=["checklist", "cmake", "flash"])
+    ex.add_argument("--wokwi", action="store_true",
+                    help="also generate Wokwi simulator files (diagram.json + wokwi.toml)")
     ex.set_defaults(func=cmd_export)
 
     ev = sub.add_parser("eval").add_subparsers(dest="sub", required=True)

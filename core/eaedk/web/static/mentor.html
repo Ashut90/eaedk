@@ -22,14 +22,14 @@
     <div id="detail"></div>
 
     <div class="card">
-      <h2 style="margin-top:0">Ask the mentor</h2>
-      <label for="q">Your question</label>
-      <input type="text" id="q" placeholder="e.g. what should I build first?" autocomplete="off">
+      <h2 style="margin-top:0">Chat with the mentor</h2>
+      <div id="chat" style="max-height:420px;overflow:auto"></div>
+      <label for="q">Your message</label>
+      <input type="text" id="q" placeholder="e.g. what is a clock? / where do I start?" autocomplete="off">
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
-        <input type="checkbox" id="ai" style="width:auto"> Use the AI model for a chattier answer
+        <input type="checkbox" id="ai" style="width:auto"> Use the AI model for chattier answers
         (optional, needs the local model)</label>
-      <button id="ask">Ask</button>
-      <div id="answer"></div>
+      <button id="ask">Send</button>
     </div>
   </main>
 
@@ -65,24 +65,56 @@
           ${s.before_you_start.length ? `<details><summary>Before you write code (${s.before_you_start.length})</summary>
             <ul>${s.before_you_start.map(b=>`<li>${escapeHtml(b)}</li>`).join("")}</ul></details>` : ""}
         </div>`).join("");
+      let driver = "";
+      if (d.driver_path && d.driver_path.length) {
+        const dsteps = d.driver_path.map(s => `
+          <div class="card"><b>${s.step}. ${escapeHtml(s.title)}</b>
+            <div class="kv" style="margin:6px 0">${escapeHtml(s.why)}</div>
+            <details><summary>What it is, kernel functions, what to build</summary>
+              <ul>${s.before_you_start.map(b=>`<li>${escapeHtml(b)}</li>`).join("")}</ul></details>
+          </div>`).join("");
+        driver = `<details style="margin-top:18px"><summary style="font-size:17px">
+          🐧 Driver Development (this board runs Linux) — ${d.driver_path.length} steps</summary>
+          <p class="kv" style="margin:8px 0">Once Linux boots, this is the order to learn writing
+          kernel drivers.</p>${dsteps}</details>`;
+      }
       el.innerHTML = `<h2>What this board can do</h2><div class="grid cols">${caps}</div>
-        <h2>Your learning path</h2>${steps}`;
+        <h2>Your learning path</h2>${steps}${driver}`;
+    }
+
+    let HISTORY = [];   // conversation persists within this browser session
+
+    function renderChat() {
+      document.getElementById("chat").innerHTML = HISTORY.map(m => `
+        <div class="card" style="border-color:${m.role==='user'?'var(--line)':'var(--accent)'}">
+          <b class="kv">${m.role === "user" ? "You" : "Mentor"}</b>
+          <pre class="code" style="border:none;background:transparent;padding:6px 0">${escapeHtml(m.content)}</pre>
+        </div>`).join("");
+      const box = document.getElementById("chat"); box.scrollTop = box.scrollHeight;
     }
 
     async function ask() {
       const board = document.getElementById("board").value;
-      const question = document.getElementById("q").value.trim();
+      const q = document.getElementById("q").value.trim();
       const use_llm = document.getElementById("ai").checked;
-      const el = document.getElementById("answer");
-      if (!question) { el.innerHTML = `<div class="note">Type a question first.</div>`; return; }
-      showCommand(`eaedk${use_llm ? " --llm" : ""} mentor --board ${board} --ask "${question}"`);
-      el.innerHTML = `<p class="kv">Thinking…</p>`;
-      const r = await api("/api/mentor/ask", { method: "POST",
+      if (!q) return;
+      showCommand(`eaedk${use_llm ? " --llm" : ""} mentor --board ${board} --chat`);
+      HISTORY.push({ role: "user", content: q });
+      renderChat();
+      document.getElementById("q").value = "";
+      HISTORY.push({ role: "assistant", content: "…thinking" });
+      renderChat();
+      const r = await api("/api/mentor/chat", { method: "POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ board, question, use_llm }) });
-      if (r.error) { showError(el, r); return; }
-      el.innerHTML = `<div class="card" style="margin-top:12px"><pre class="code">${escapeHtml(r.answer)}</pre></div>`;
+        body: JSON.stringify({ board, messages: HISTORY.filter(m=>m.content!=="…thinking"), use_llm }) });
+      HISTORY.pop();   // remove the "thinking" placeholder
+      HISTORY.push({ role: "assistant", content: r.error ? `${r.error}\n→ ${r.next||""}` : r.answer });
+      renderChat();
     }
+
+    // start a fresh conversation when the board changes
+    document.getElementById("board") && document.getElementById("board")
+      .addEventListener("change", () => { HISTORY = []; renderChat(); });
 
     document.addEventListener("DOMContentLoaded", () => {
       init();

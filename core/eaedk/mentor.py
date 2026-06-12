@@ -20,9 +20,12 @@ def capability_map(conn: sqlite3.Connection, board_name: str) -> list[dict]:
 
 
 def learning_path_for(conn: sqlite3.Connection, cap_names: set[str]) -> list[dict]:
-    """Steps whose required capabilities the board actually has, in order."""
+    """Steps whose required capabilities the board actually has, in order. The Linux driver path
+    (goal_type='driver') is its own section and is excluded here."""
     out = []
     for s in repo.learning_steps(conn):
+        if s["goal_type"] == "driver":
+            continue
         if set(json.loads(s["requires_json"])) <= cap_names:
             out.append({"step": s["step"], "key": s["key"], "title": s["title"],
                         "goal_type": s["goal_type"], "why": s["why"],
@@ -34,15 +37,33 @@ def dropped_steps_for(conn: sqlite3.Connection, cap_names: set[str]) -> list[dic
     """Steps filtered OUT of the path, with the capabilities they're missing (Fix 6).
 
     A beginner must learn *why* a step is hidden and how to unlock it — never a silent drop.
+    The driver path is shown in its own section, so it's not listed here.
     """
     out = []
     for s in repo.learning_steps(conn):
+        if s["goal_type"] == "driver":
+            continue
         required = set(json.loads(s["requires_json"]))
         missing = required - cap_names
         if missing:
             out.append({"step": s["step"], "title": s["title"],
                         "missing": sorted(missing)})
     return out
+
+
+def supports_linux(soc: dict | None) -> bool:
+    """A board runs Linux when its SoC is an application processor (Cortex-A). Deterministic."""
+    return "cortex-a" in ((soc or {}).get("arch") or "").lower()
+
+
+def driver_path(conn: sqlite3.Connection, board_name: str) -> list[dict]:
+    """The Linux device-driver learning path — only for boards that run Linux, else []."""
+    board, soc = repo.load_board(conn, board_name)
+    if board is None or not supports_linux(soc):
+        return []
+    return [{"step": s["step"], "key": s["key"], "title": s["title"], "why": s["why"],
+             "before_you_start": json.loads(s["before_you_start_json"])}
+            for s in repo.driver_learning_steps(conn)]
 
 
 def family_of(soc_name: str | None) -> str | None:
@@ -128,6 +149,68 @@ def render_next_step(conn: sqlite3.Connection, board_name: str,
     return "\n".join(L) + "\n"
 
 
+def think_before_code(conn: sqlite3.Connection, board_name: str, goal: str) -> list[dict]:
+    """Beginner questions to think through BEFORE writing code, generated from the board's
+    verified facts (SoC family, geometry, capabilities) + goal — deterministic, not LLM, not
+    hardcoded per board. Each item is {question, hint}. Honest: where a fact isn't in the DB,
+    the hint points the user at where to find it rather than asserting it."""
+    board, soc = repo.load_board(conn, board_name)
+    if board is None:
+        return []
+    fam = family_of(soc["name"])
+    caps = {c["capability"] for c in capability_map(conn, board_name)}
+    items: list[dict] = []
+
+    def add(q: str, hint: str):
+        items.append({"question": q, "hint": hint})
+
+    if goal in ("bare_metal_app", "bootloader") or supports_linux(soc) is False:
+        add("Which pin is your LED on?",
+            "It's the board's on-board user LED — check the board's pinout/schematic.")
+        # Family-specific clock concern (the #1 beginner bug), derived from the SoC family.
+        if fam == "stm32":
+            add("Which GPIO port is that pin on, and do you enable that port's clock first?",
+                "On STM32 every peripheral is OFF at reset — you must enable its clock in RCC "
+                "BEFORE you touch the pin, or it silently does nothing.")
+        elif fam == "rp2040":
+            add("Is the second-stage bootloader (boot2) in place and your code linked for the "
+                "flash window?",
+                f"RP2040 runs code from external flash mapped at "
+                f"{('0x%08X' % board['flash_base']) if board.get('flash_base') is not None else '0x10000000'}; "
+                "without boot2 it never reaches your code.")
+        elif fam == "esp32":
+            add("Is your partition table valid and NVS initialised before Wi-Fi/BLE?",
+                "ESP32 reboot-loops on a bad partition table; Wi-Fi/NVS calls fail if "
+                "nvs_flash_init() didn't run first.")
+        elif fam == "avr":
+            add("Is F_CPU set to your real clock, and your fuses set to match?",
+                "If F_CPU and the fuse clock source disagree, every delay and baud rate is wrong.")
+        else:
+            add("Does your code enable the peripheral's clock before using it?",
+                "On most MCUs peripherals are off at reset — enable the clock first.")
+        add("What order do your init functions run in?",
+            "Clocks first, then the pin/peripheral config, then your loop — order matters.")
+        add("What happens if the CPU reaches your code before the clock is stable?",
+            "Reads can return 0 or the chip can fault; make sure clock setup completes first.")
+        if board.get("flash_base") is not None:
+            add("Is your interrupt vector table at the start of flash?",
+                f"On this board flash starts at 0x%08X — the vector table must sit there or the "
+                "first interrupt faults." % board["flash_base"])
+        if "uart" in caps:
+            add("Which UART/serial peripheral and TX pin will you print on, and is its clock on?",
+                "You'll want serial printing to debug everything after blink — set it up early.")
+
+    if goal == "driver":
+        add("What is your device's compatible string, and does it match the driver's "
+            "of_match_table?", "Linux binds a driver to a device-tree node by this exact string.")
+        add("Does your device-tree node declare the right interrupt-parent and reg?",
+            "A missing interrupt-parent or wrong reg base means probe() never runs correctly.")
+        add("Will you start with a character device to learn the kernel API first?",
+            "See the Driver development path — build a /dev node before touching real hardware.")
+
+    return items
+
+
 def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None:
     board, soc = repo.load_board(conn, board_name)
     if board is None:
@@ -163,6 +246,17 @@ def render_board_mentor(conn: sqlite3.Connection, board_name: str) -> str | None
             L.append(f"  {s['step']}. {s['title']} — needs {caps_list} capability. "
                      f"Add it with `{cmd}`")
         L.append("")
+    # v2.1.0: Linux boards (Cortex-A) get a first-class device-driver path as its own section.
+    dpath = driver_path(conn, board_name)
+    if dpath:
+        L.append("## Driver development path (this board runs Linux)")
+        L.append("  Once Linux boots, this is the order to learn writing kernel drivers:")
+        for s in dpath:
+            L.append(f"  {s['step']}. {s['title']}")
+            L.append(f"       why: {s['why']}")
+            for b in s["before_you_start"]:
+                L.append(f"         - {b}")
+            L.append("")
     # B1 (v1.8.0): the two failures every beginner hits right after flashing — surface the
     # guided flows so they're never left staring at a dead board.
     L.append("## Stuck after flashing?")

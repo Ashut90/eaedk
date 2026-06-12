@@ -251,6 +251,13 @@ def learning_steps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "FROM learning_steps ORDER BY step").fetchall()
 
 
+def driver_learning_steps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """The Linux device-driver learning path (goal_type='driver'), in order. Read-only accessor."""
+    return conn.execute(
+        "SELECT step, key, title, why, before_you_start_json FROM learning_steps "
+        "WHERE goal_type = 'driver' ORDER BY step").fetchall()
+
+
 def get_concept(conn: sqlite3.Connection, name: str) -> sqlite3.Row | None:
     return conn.execute("SELECT name, anchor FROM concepts WHERE name = ?",
                         (name.lower(),)).fetchone()

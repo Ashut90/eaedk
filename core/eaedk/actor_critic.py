@@ -143,11 +143,14 @@ def _actor(gw: Gateway, confirmed: list[dict], board_name: str,
 
 
 def run_actor_critic(conn: sqlite3.Connection, project: sqlite3.Row,
-                     gateway: Gateway | None = None, max_epochs: int = 2) -> ActorCriticResult:
+                     gateway: Gateway | None = None, max_epochs: int = 2,
+                     code: str | None = None) -> ActorCriticResult:
     data = export.gather(conn, project)
     inputs, _conf = repo.load_inputs(conn, project["id"])        # F1/F2: the engineer's real inputs
     data["inputs"] = inputs                                      # F3: artifacts may read them
-    artifact_kind, scaffold = codegen.render_review_artifact(data)   # F3: goal-aware artifact
+    artifact_kind, gen_scaffold = codegen.render_review_artifact(data)   # F3: goal-aware artifact
+    # v2.1.0: Code Studio passes the user's edited code to review; default reviews the scaffold.
+    scaffold = code if code is not None else gen_scaffold
     board_name = data["board_name"]
     board, soc = data["board"], data["soc"]
     gw = gateway or Gateway()
