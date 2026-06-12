@@ -1,0 +1,30 @@
+# On-board LED + clock-enable facts per board, for the think-before-code checklist. Public,
+# well-known facts from each board's schematic/reference manual — curated like the board seeds.
+- board_name: STM32F103-BluePill
+  led_pin: "PC13 (the on-board LED)"
+  led_domain: "GPIOC, on the APB2 bus"
+  clock_hint: "enable it with  RCC->APB2ENR |= RCC_APB2ENR_IOPCEN"
+- board_name: Nucleo-F411RE
+  led_pin: "PA5 (green LED LD2)"
+  led_domain: "GPIOA, on the AHB1 bus"
+  clock_hint: "enable it with  RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN"
+- board_name: Nucleo-F103RB
+  led_pin: "PA5 (green LED LD2)"
+  led_domain: "GPIOA, on the APB2 bus"
+  clock_hint: "enable it with  RCC->APB2ENR |= RCC_APB2ENR_IOPAEN"
+- board_name: Arduino-Uno
+  led_pin: "pin 13 (PB5, the on-board LED)"
+  led_domain: "PORTB — on AVR the ports have no separate clock to enable"
+  clock_hint: "set it as an output with  DDRB |= (1 << DDB5)"
+- board_name: Arduino-Mega
+  led_pin: "pin 13 (PB7, the on-board LED)"
+  led_domain: "PORTB — on AVR the ports have no separate clock to enable"
+  clock_hint: "set it as an output with  DDRB |= (1 << DDB7)"
+- board_name: Raspberry-Pi-Pico
+  led_pin: "GP25 (the on-board LED)"
+  led_domain: "the SIO/IO bank — enable the pad and set it to SIO output"
+  clock_hint: "the SDK's gpio_init(25) + gpio_set_dir(25, GPIO_OUT) handles the setup"
+- board_name: ESP32-DevKitC
+  led_pin: "GPIO2 (the common on-board LED pin)"
+  led_domain: "the GPIO matrix"
+  clock_hint: "gpio_set_direction(GPIO_NUM_2, GPIO_MODE_OUTPUT) configures it"

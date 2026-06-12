@@ -115,11 +115,29 @@ def _followup_question(caps: list, path: list) -> str:
     return "Question: what would you like to build first?"
 
 
+_PROGRESS_Q = ("how am i doing", "what's next", "whats next", "what next", "my progress",
+               "where am i", "am i done", "how far")
+
+
+def _progress_summary(conn, project_name: str | None):
+    """The State Engine's next-incomplete item for this project (or None). Deterministic."""
+    if not project_name:
+        return None
+    p = repo.get_project(conn, project_name)
+    if p is None:
+        return None
+    from .engines.state import project_status
+    s = project_status(conn, p)
+    return s
+
+
 def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
-                use_llm: bool = False, gateway: Gateway | None = None) -> str:
+                use_llm: bool = False, gateway: Gateway | None = None,
+                project: str | None = None, has_hardware: bool = False) -> str:
     """A 2-way mentor turn. ``messages`` is the conversation so far ([{role, content}, ...]).
     Always returns an answer + a board-tied 'Try this' + a follow-up question (the contract holds
-    even offline). The post-filter runs on every LLM response."""
+    even offline). The post-filter runs on every LLM response. ``project`` lets the mentor read the
+    State Engine for progress questions; ``has_hardware`` ties the example to Wokwi when False."""
     from .mentor import family_of
     board, soc = repo.load_board(conn, board_name)
     if board is None:
@@ -132,7 +150,23 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
     concept = _detect_concept(conn, last_user)
     try_this = _board_try_this(fam)
+    if not has_hardware:        # a Wokwi-only user — point the experiment at the simulator
+        try_this = try_this.replace("run it in Wokwi", "run it in Wokwi").rstrip()
+        if "Wokwi" not in try_this:
+            try_this += " (run it in the Wokwi simulator — no hardware needed)."
     question = _followup_question(caps, path)
+    progress = _progress_summary(conn, project)
+
+    # "How am I doing / what's next" -> answer straight from the State Engine (never the LLM).
+    if progress and any(k in last_user.lower() for k in _PROGRESS_Q):
+        if progress["next"]:
+            head = (f"You're at {progress['complete']}/{progress['total']} "
+                    f"({progress['percent']}%). Your next task is '{progress['next']['title']}'. "
+                    f"Why it matters: {progress['next']['why_it_matters']}")
+        else:
+            head = (f"You're at {progress['complete']}/{progress['total']} — every item is "
+                    "complete. Nice work.")
+        return f"{head}\n\nTry this: {try_this}\n\n{question}"
 
     # Deterministic backbone — a real answer even with no model, always ending in an action.
     if concept is not None:
@@ -153,8 +187,14 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     path_lines = "\n".join(f"{s['step']}. {s['title']} — {s['why']}" for s in path)
     history = "\n".join(f"{m.get('role','user').upper()}: {m.get('content','')}"
                         for m in messages[-8:])
-    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\nCapabilities:\n{cap_lines}\n"
-              f"Learning path:\n{path_lines}\n"
+    hw = ("The user has a PHYSICAL board." if has_hardware
+          else "The user has NO physical board — they use the Wokwi simulator; tie 'Try this' to Wokwi.")
+    prog_line = ""
+    if progress and progress["next"]:
+        prog_line = (f"Project '{project}' progress: {progress['complete']}/{progress['total']} "
+                     f"done; next task: {progress['next']['title']}.\n")
+    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{prog_line}Capabilities:\n"
+              f"{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
               + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")
     raw = gw.provider.generate(_CHAT_SYSTEM, prompt)

@@ -324,6 +324,49 @@ def cmd_checklist_set(args):
     print(f"{args.item} -> {args.status}")
 
 
+def cmd_checklist_done(args):
+    """The USER completion path for the State Engine — you confirm an item is done."""
+    conn = _conn(args)
+    p = _require_project(conn, args.name)
+    row = next((r for r in repo.checklist(conn, p["id"]) if r["item_key"] == args.item), None)
+    if row is None:
+        print(f"Couldn't find a checklist item called {args.item!r} in project {args.name!r}.",
+              file=sys.stderr)
+        print(f"  See the item names with:  eaedk project status {args.name}", file=sys.stderr)
+        sys.exit(2)
+    repo.set_checklist_status(conn, p["id"], args.item, "done", "confirmed by engineer")
+    print(f"Marked '{row['text']}' complete (confirmed by you).")
+    print(f"See your progress:  eaedk project status {args.name}")
+
+
+def cmd_project_status(args):
+    conn = _conn(args)
+    p = _require_project(conn, args.name)
+    from .engines.state import project_status
+    board = repo.project_board_name(conn, p)
+    s = project_status(conn, p)
+    if args.json:
+        print(json.dumps(s, indent=2)); return
+    print(f"Project: {s['project']}" + (f" ({board})" if board else ""))
+    print(f"Progress: {s['complete']}/{s['total']} items complete ({s['percent']}%)\n")
+    mark = {"COMPLETE": "✓", "IN_PROGRESS": "•", "NOT_STARTED": "✗"}
+    for it in s["items"]:
+        line = f"{mark.get(it['status'], '?')} {it['title']}"
+        if it["status"] == "COMPLETE":
+            src = {"VALIDATION_ENGINE": "verified by the engine", "USER": "confirmed by you",
+                   "LOG_TRIAGE": "resolved from a log"}.get(it["verified_by"], "complete")
+            print(f"{line}  — {src}")
+        else:
+            label = "IN PROGRESS" if it["status"] == "IN_PROGRESS" else "NOT STARTED"
+            print(f"{line}  — {label}")
+            print(f"    Why it matters: {it['why_it_matters']}")
+    if s["next"]:
+        print(f"\nNext recommended task: {s['next']['title']}")
+        print(f"Why: {s['next']['why_it_matters']}")
+    else:
+        print("\nAll items complete — nice work.")
+
+
 # --- validate / risk -------------------------------------------------------
 
 def cmd_validate(args):
@@ -599,7 +642,19 @@ def cmd_mentor(args):
     if board is None:
         _unknown_board(conn, args.board)
         sys.exit(2)
-    if getattr(args, "chat", False):
+    if getattr(args, "think", False):
+        from .mentor import think_before_code
+        goal = "bare_metal_app"
+        if args.project:
+            p = repo.get_project(conn, args.project)
+            if p is not None:
+                goal = p["goal_type"]
+        items = think_before_code(conn, args.board, goal)
+        print(f"Before you write code for {args.board} ({goal}), can you answer these?\n")
+        for it in items:
+            print(f"  ✓ {it['question']}")
+            print(f"      → {it['hint']}\n")
+    elif getattr(args, "chat", False):
         _mentor_chat_repl(conn, args.board, use_llm=args.llm)
     elif args.common_mistakes:
         from .mentor import render_common_mistakes
@@ -777,6 +832,8 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_parser("list").set_defaults(func=cmd_project_list)
     ps = pr.add_parser("show"); ps.add_argument("name"); ps.set_defaults(func=cmd_project_show)
     pa = pr.add_parser("archive"); pa.add_argument("name"); pa.set_defaults(func=cmd_project_archive)
+    pst = pr.add_parser("status", help="progress derived from evidence (Validation Engine / you)")
+    pst.add_argument("name"); pst.set_defaults(func=cmd_project_status)
 
     inp = sub.add_parser("input").add_subparsers(dest="sub", required=True)
     iset = inp.add_parser("set")
@@ -791,6 +848,8 @@ def build_parser() -> argparse.ArgumentParser:
     cset.add_argument("name"); cset.add_argument("item")
     cset.add_argument("status", choices=["todo", "done", "na", "blocked"])
     cset.add_argument("--note"); cset.set_defaults(func=cmd_checklist_set)
+    cdn = cl.add_parser("done", help="mark a checklist item complete (you confirm it)")
+    cdn.add_argument("name"); cdn.add_argument("item"); cdn.set_defaults(func=cmd_checklist_done)
 
     v = sub.add_parser("validate"); v.add_argument("name"); v.add_argument("--rule")
     v.set_defaults(func=cmd_validate)
@@ -814,6 +873,8 @@ def build_parser() -> argparse.ArgumentParser:
     mt.add_argument("--ask"); mt.add_argument("--explain")
     mt.add_argument("--chat", action="store_true",
                     help="open a back-and-forth mentor conversation in the terminal")
+    mt.add_argument("--think", action="store_true",
+                    help="show the think-before-you-code checklist for this board + goal")
     mt.add_argument("--review-code", dest="review_code", action="store_true")
     mt.add_argument("--project")
     mt.add_argument("--common-mistakes", dest="common_mistakes", action="store_true",

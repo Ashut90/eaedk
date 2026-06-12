@@ -23,9 +23,17 @@
 
     <div class="card">
       <h2 style="margin-top:0">Chat with the mentor</h2>
-      <div id="chat" style="max-height:420px;overflow:auto"></div>
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:12px">
+        <div><label for="project">Project (so I can track your progress)</label>
+          <select id="project"><option value="">No project</option></select></div>
+        <div><label>Hardware</label>
+          <label style="display:flex;align-items:center;gap:8px">
+            <input type="checkbox" id="hw" style="width:auto"> I have a physical board
+            (otherwise I'll point you at Wokwi)</label></div>
+      </div>
+      <div id="chat" style="max-height:420px;overflow:auto;margin-top:10px"></div>
       <label for="q">Your message</label>
-      <input type="text" id="q" placeholder="e.g. what is a clock? / where do I start?" autocomplete="off">
+      <input type="text" id="q" placeholder="e.g. what is a clock? / how am I doing?" autocomplete="off">
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
         <input type="checkbox" id="ai" style="width:auto"> Use the AI model for chattier answers
         (optional, needs the local model)</label>
@@ -44,6 +52,11 @@
         : boards.boards.map(b => `<option value="${escapeHtml(b.name)}"${b.name==="STM32F103-BluePill"?" selected":""}>${escapeHtml(b.name)}</option>`).join("");
       sel.addEventListener("change", loadBoard);
       loadBoard();
+      const ps = await api("/api/projects");
+      if (!ps.error && ps.projects.length) {
+        document.getElementById("project").innerHTML = `<option value="">No project</option>` +
+          ps.projects.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+      }
     }
 
     async function loadBoard() {
@@ -104,9 +117,12 @@
       document.getElementById("q").value = "";
       HISTORY.push({ role: "assistant", content: "…thinking" });
       renderChat();
+      const project = document.getElementById("project").value || null;
+      const has_hardware = document.getElementById("hw").checked;
       const r = await api("/api/mentor/chat", { method: "POST",
         headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ board, messages: HISTORY.filter(m=>m.content!=="…thinking"), use_llm }) });
+        body: JSON.stringify({ board, messages: HISTORY.filter(m=>m.content!=="…thinking"),
+                               use_llm, project, has_hardware }) });
       HISTORY.pop();   // remove the "thinking" placeholder
       HISTORY.push({ role: "assistant", content: r.error ? `${r.error}\n→ ${r.next||""}` : r.answer });
       renderChat();

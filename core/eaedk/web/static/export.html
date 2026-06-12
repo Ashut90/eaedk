@@ -63,7 +63,12 @@
             </ol></div>`
         : `<div class="note"><b>Wokwi simulation isn't available for this board.</b><br>
             Wokwi natively simulates: ${escapeHtml((r.wokwi_supported_list||[]).join(", "))}.</div>`;
+      const banner = r.wokwi_supported
+        ? `<div class="note" style="border-color:var(--green)"><b>Don't have a physical board yet?</b>
+            → Use <b>Wokwi simulation</b> instead — no hardware needed. See the Wokwi Simulation
+            section below.</div>` : "";
       el.innerHTML = `
+        ${banner}
         ${r.geometry_unknown ? `<div class="error"><b>Heads up: this board is missing flash/RAM data,
           so these files won't compile yet.</b><div class="next">→ Fill in the board's geometry,
           then export again.</div></div>` : ""}

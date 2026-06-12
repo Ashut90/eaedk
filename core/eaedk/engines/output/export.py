@@ -140,6 +140,11 @@ def export_project(conn: sqlite3.Connection, project: sqlite3.Row, out_dir: str,
             # `cat START_HERE.md` succeeds for the most common beginner board.
             files["src/main.c"] = codegen.render_avr_main_c(data)
             files["START_HERE.md"] = codegen.render_avr_start_here(data)
+        elif (arch or "").startswith("xtensa") and data["project"]["goal_type"] == "bare_metal_app":
+            # v2.2.0: ESP32 (Xtensa) builds with ESP-IDF; emit an ESP-IDF blink + a Wokwi-first
+            # START_HERE so a no-hardware beginner can finish the journey in simulation.
+            files["src/main.c"] = codegen.render_esp32_main_c(data)
+            files["START_HERE.md"] = codegen.render_esp32_start_here(data)
         else:
             files["CMakeLists.txt"] = gen.render_cmake_lists(data)
             files["cmake/toolchain.cmake"] = gen.render_toolchain_cmake(data)

@@ -202,3 +202,35 @@ def test_mentor_chat_route(client):
     empty = client.post("/api/mentor/chat", json={"board": "STM32F103-BluePill",
                                                   "messages": []}).json()
     assert "error" in empty and "next" in empty
+
+
+# --- v2.2.0: State Engine progress + mark-complete + progress-aware chat -----
+
+def test_progress_api_derives_from_evidence(client):
+    client.post("/api/projects", json={"name": "pp", "board": "STM32F103-BluePill",
+                                       "goal": "bootloader"})
+    s = client.get("/api/progress/pp").json()
+    assert s["total"] > 0 and s["percent"] == 0          # nothing proven yet
+    assert all(i["light"] in ("GREEN", "YELLOW", "GREY") for i in s["items"])
+    assert s["next"] and s["next"]["why_it_matters"]
+
+
+def test_studio_mark_complete_feeds_state_engine(client):
+    client.post("/api/projects", json={"name": "mc", "board": "STM32F103-BluePill",
+                                       "goal": "bootloader"})
+    rev = client.post("/api/studio/mc/review", json={"project": "mc", "code": "int main(){}"}).json()
+    assert "can_complete" in rev
+    if rev["can_complete"]:
+        key = rev["can_complete"][0]["item_key"]
+        before = client.get("/api/progress/mc").json()["complete"]
+        done = client.post("/api/studio/mc/complete",
+                           json={"project": "mc", "item_key": key}).json()
+        assert done["complete"] == before + 1            # USER path completion recorded
+
+
+def test_chat_progress_question_reads_state_engine(client):
+    client.post("/api/projects", json={"name": "cp", "board": "STM32F103-BluePill",
+                                       "goal": "bootloader"})
+    r = client.post("/api/mentor/chat", json={"board": "STM32F103-BluePill", "project": "cp",
+        "messages": [{"role": "user", "content": "how am I doing?"}], "use_llm": False}).json()
+    assert "/" in r["answer"] and "next task" in r["answer"].lower()

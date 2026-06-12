@@ -21,7 +21,7 @@ _SEED_TABLES = [
     "risk_rules", "eval_cases", "log_signatures",
     "capabilities", "learning_steps", "concepts", "soc_defaults",
     "debug_probes", "soc_flash_profiles",
-    "first_mistakes", "learning_step_intro",
+    "first_mistakes", "learning_step_intro", "board_blink_facts",
     "citations", "sources",
 ]
 
@@ -228,6 +228,16 @@ def _load_first_mistakes(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+def _load_board_blink_facts(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "board_blink_facts.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO board_blink_facts(board_name,led_pin,led_domain,clock_hint) "
+            "VALUES (?,?,?,?)",
+            (r["board_name"], r.get("led_pin"), r.get("led_domain"), r.get("clock_hint")))
+    return len(rows)
+
+
 def _load_learning_step_intro(conn: sqlite3.Connection) -> int:
     rows = _load_yaml(seed_dir() / "learning_step_intro.yaml") or []
     for r in rows:
@@ -257,5 +267,6 @@ def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
             "soc_flash_profiles": _load_soc_flash_profiles(conn),
             "first_mistakes": _load_first_mistakes(conn),
             "learning_step_intro": _load_learning_step_intro(conn),
+            "board_blink_facts": _load_board_blink_facts(conn),
         }
     return counts

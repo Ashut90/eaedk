@@ -19,6 +19,9 @@
       <button id="run">Run validation</button>
     </div>
 
+    <h2>Project progress</h2>
+    <div id="progress"></div>
+
     <div id="result"></div>
   </main>
 
@@ -36,8 +39,12 @@
       }
       sel.innerHTML = ps.projects.map(p =>
         `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)} — ${escapeHtml(p.board || "no board")}</option>`).join("");
-      sel.addEventListener("change", () => showCommand(`eaedk validate ${sel.value}`));
+      sel.addEventListener("change", () => {
+        showCommand(`eaedk validate ${sel.value}`);
+        renderProgress("progress", sel.value);
+      });
       showCommand(`eaedk validate ${sel.value}`);
+      renderProgress("progress", sel.value);
     }
 
     function rows(list) {
@@ -71,6 +78,7 @@
           <tr><th></th><th>Check</th><th>Result</th></tr></thead>
           <tbody>${rows(advisory)}</tbody></table></div>` : ""}
         <div class="note">${escapeHtml(humanizeKeys(r.next_step))}</div>`;
+      renderProgress("progress", project);   // validation may have completed items
     }
 
     document.addEventListener("DOMContentLoaded", () => {

@@ -251,6 +251,13 @@ def learning_steps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "FROM learning_steps ORDER BY step").fetchall()
 
 
+def blink_facts(conn: sqlite3.Connection, board_name: str) -> sqlite3.Row | None:
+    """On-board LED pin + clock-enable hint for the think-before-code checklist (or None)."""
+    return conn.execute(
+        "SELECT led_pin, led_domain, clock_hint FROM board_blink_facts WHERE board_name = ?",
+        (board_name,)).fetchone()
+
+
 def driver_learning_steps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """The Linux device-driver learning path (goal_type='driver'), in order. Read-only accessor."""
     return conn.execute(
@@ -531,6 +538,31 @@ def items_for_rule(conn: sqlite3.Connection, project_id: int, rule_key: str) -> 
         if rule_key in json.loads(row["validation_rule_keys_json"]):
             out.append(row["item_key"])
     return out
+
+
+# --- engineering state engine (v2.2.0) -------------------------------------
+
+def checklist_with_item_ids(conn: sqlite3.Connection, project_id: int) -> list[sqlite3.Row]:
+    """Checklist rows including the template_item_id (needed to record progress evidence)."""
+    return conn.execute(
+        "SELECT ti.id AS template_item_id, ti.item_key, ti.text, ti.category, "
+        "ti.validation_rule_keys_json, pc.status, pc.note "
+        "FROM project_checklist pc JOIN template_items ti ON ti.id=pc.template_item_id "
+        "WHERE pc.project_id=? ORDER BY ti.ordinal", (project_id,)).fetchall()
+
+
+def record_progress(conn: sqlite3.Connection, project_id: int, template_item_id: int,
+                    status: str, evidence: str | None, verified_by: str | None) -> None:
+    """Upsert the derived progress evidence for one checklist item. Deterministic callers only
+    (validation engine / log triage / explicit user) — never the LLM."""
+    with conn:
+        conn.execute(
+            "INSERT INTO project_progress(project_id,template_item_id,status,evidence,"
+            "verified_by,updated_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(project_id,template_item_id) DO UPDATE SET "
+            "status=excluded.status, evidence=excluded.evidence, "
+            "verified_by=excluded.verified_by, updated_at=excluded.updated_at",
+            (project_id, template_item_id, status, evidence, verified_by, _now()))
 
 
 def get_risk(conn: sqlite3.Connection, risk_id: int) -> sqlite3.Row | None:

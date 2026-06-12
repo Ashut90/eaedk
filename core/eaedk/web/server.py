@@ -166,6 +166,24 @@ async def api_create_project(request: Request):
             **_feasibility_ui(d["feasibility"]), "risks": risks, "next_step": d["next_step"]}
 
 
+# --- Engineering State Engine (progress) -----------------------------------
+
+_PROGRESS_LIGHT = {"COMPLETE": "GREEN", "IN_PROGRESS": "YELLOW", "NOT_STARTED": "GREY"}
+
+
+@app.get("/api/progress/{project}")
+def api_progress(project: str):
+    from ..engines.state import project_status
+    conn = _conn()
+    p = repo.get_project(conn, project)
+    if p is None:
+        return _err(f"Project not found: {project!r}.", "Pick a project from the dropdown.")
+    s = project_status(conn, p)
+    for it in s["items"]:
+        it["light"] = _PROGRESS_LIGHT.get(it["status"], "GREY")
+    return s
+
+
 # --- Page 3: Validate ------------------------------------------------------
 
 @app.get("/api/validate/{project}")
@@ -331,10 +349,14 @@ async def api_mentor_chat(request: Request):
     use_llm = bool(body.get("use_llm"))
     if not any(m.get("role") == "user" and (m.get("content") or "").strip() for m in messages):
         return _err("Type a message first.", "Ask the mentor anything about your board.")
+    project = body.get("project") or None
+    has_hardware = bool(body.get("has_hardware"))
     conn = _conn()
     if repo.load_board(conn, board)[0] is None:
         return _err(f"Board not found: {board!r}.", "Pick a board from the dropdown at the top.")
-    return {"board": board, "answer": mentor_chat(conn, board, messages, use_llm=use_llm)}
+    answer = mentor_chat(conn, board, messages, use_llm=use_llm,
+                         project=project, has_hardware=has_hardware)
+    return {"board": board, "answer": answer}
 
 
 # --- Page 7: Code Studio (surfaces the existing Actor-Critic loop) ----------
@@ -385,10 +407,37 @@ async def api_studio_review(request: Request):
         advisory = []
         ai_note = ("The deterministic checks below are complete. For extra AI suggestions, "
                    "install the local model (Ollama) — but you don't need it to fix what's listed.")
+    # Piece 5 (v2.2.0): a clean review (no real problems) lets the engineer mark items complete
+    # via the State Engine's USER path. Offer the not-yet-complete items.
+    from ..engines.state import project_status
+    incomplete = []
+    if not confirmed:
+        s = project_status(conn, p)
+        incomplete = [{"item_key": i["item_key"], "title": i["title"]}
+                      for i in s["items"] if i["status"] != "COMPLETE"]
     return {"project": project,
             "confirmed": [_issue(c) for c in confirmed],
             "advisory": [_issue(a) for a in advisory],
-            "ai_note": ai_note}
+            "ai_note": ai_note, "can_complete": incomplete}
+
+
+@app.post("/api/studio/{project}/complete")
+async def api_studio_complete(request: Request):
+    body = await request.json()
+    project = body.get("project") or ""
+    item_key = body.get("item_key") or ""
+    conn = _conn()
+    p = repo.get_project(conn, project)
+    if p is None:
+        return _err(f"Project not found: {project!r}.", "Pick a project and try again.")
+    row = next((r for r in repo.checklist(conn, p["id"]) if r["item_key"] == item_key), None)
+    if row is None:
+        return _err("That checklist item doesn't exist.", "Reload the page and try again.")
+    repo.set_checklist_status(conn, p["id"], item_key, "done", "confirmed by engineer")
+    from ..engines.state import project_status
+    s = project_status(conn, p)
+    return {"project": project, "marked": row["text"], "percent": s["percent"],
+            "complete": s["complete"], "total": s["total"]}
 
 
 # --- static (mounted last so /api and / win) -------------------------------

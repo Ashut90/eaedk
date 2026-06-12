@@ -91,8 +91,28 @@
               <div class="kv" style="margin-top:6px">${escapeHtml(humanizeKeys(a.what))}
                 ${a.note ? "— " + escapeHtml(a.note) : ""}</div></div>`).join("")
         : "";
-      el.innerHTML = `<h2>Confirmed by the engine — fix these</h2>${confirmed}${advisory}
+      let complete = "";
+      if (r.can_complete && r.can_complete.length) {
+        complete = `<div class="card" style="border-color:var(--green)">
+          <b>✅ No real problems — ready to mark progress.</b>
+          <p class="kv">Confirm a checklist item you've finished (this records it as done by you):</p>` +
+          r.can_complete.map(i => `<button class="ghost" style="margin:4px"
+            onclick="markComplete('${escapeHtml(i.item_key)}','${escapeHtml(i.title)}')">✓ ${escapeHtml(i.title)}</button>`).join("") +
+          `<div id="markmsg"></div></div>`;
+      }
+      el.innerHTML = `<h2>Confirmed by the engine — fix these</h2>${confirmed}${advisory}${complete}
         ${r.ai_note ? `<div class="note">${escapeHtml(r.ai_note)}</div>` : ""}`;
+    }
+
+    async function markComplete(itemKey, title) {
+      const project = document.getElementById("project").value;
+      showCommand(`eaedk checklist done ${project} ${itemKey}`);
+      const r = await api(`/api/studio/${encodeURIComponent(project)}/complete`, { method: "POST",
+        headers: {"Content-Type":"application/json"}, body: JSON.stringify({ project, item_key: itemKey }) });
+      const msg = document.getElementById("markmsg");
+      if (r.error) { showError(msg, r); return; }
+      msg.innerHTML = `<div class="note" style="margin-top:10px">Marked “${escapeHtml(r.marked)}”
+        complete. Progress: ${r.complete}/${r.total} (${r.percent}%).</div>`;
     }
 
     document.addEventListener("DOMContentLoaded", () => {

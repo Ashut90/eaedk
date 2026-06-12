@@ -133,4 +133,26 @@ function statusWord(s) {
   return { PASS: "OK", FAIL: "Problem", UNKNOWN: "Missing info" }[(s||"").toUpperCase()] || s;
 }
 
+/* Engineering State Engine progress widget — GREEN complete / YELLOW in-progress / GREY not. */
+async function renderProgress(containerId, project) {
+  const el = document.getElementById(containerId);
+  if (!el || !project) return;
+  const s = await api("/api/progress/" + encodeURIComponent(project));
+  if (s.error) { el.innerHTML = ""; return; }
+  const bar = `<div style="background:var(--panel-2);border-radius:6px;height:14px;overflow:hidden">
+    <div style="height:100%;width:${s.percent}%;background:var(--green)"></div></div>`;
+  const rows = s.items.map(it => {
+    const m = { COMPLETE: "✓", IN_PROGRESS: "•", NOT_STARTED: "✗" }[it.status] || "•";
+    return `<div style="padding:6px 0;border-bottom:1px solid var(--line)">
+      ${dot(it.light)} <b>${m} ${escapeHtml(it.title)}</b>
+      ${it.status === "COMPLETE"
+        ? `<span class="kv"> — ${escapeHtml({VALIDATION_ENGINE:"verified by the engine",USER:"confirmed by you",LOG_TRIAGE:"resolved from a log"}[it.verified_by] || "complete")}</span>`
+        : `<div class="teach">Why it matters: ${escapeHtml(it.why_it_matters)}</div>`}</div>`;
+  }).join("");
+  el.innerHTML = `<div class="card"><b>Progress: ${s.complete}/${s.total} complete (${s.percent}%)</b>
+    <div style="margin:8px 0">${bar}</div>${rows}
+    ${s.next ? `<div class="note" style="margin-top:10px"><b>Next:</b> ${escapeHtml(s.next.title)}
+      — ${escapeHtml(s.next.why_it_matters)}</div>` : ""}</div>`;
+}
+
 document.addEventListener("DOMContentLoaded", () => { renderNav(); showCommand(null); });
