@@ -65,7 +65,11 @@ EAEDK is built around two deterministic gates the LLM cannot bypass:
    `[uncited claim removed — verify against TRM]`. Frequencies and timings are never in the
    DB, so the model can never sneak one through.
 
-See **[docs/architecture.md](docs/architecture.md)** for the trust-boundary diagram.
+![EAEDK trust boundary — the LLM sits outside two deterministic guardrails](docs/architecture-trust.png)
+
+See **[docs/architecture.md](docs/architecture.md)** for this diagram's source and a full read-through,
+and **[docs/architecture-flow.md](docs/architecture-flow.md)** for the complete software flow
+(system architecture + the datasheet-ingestion pipeline).
 
 ## The mentor layer (teach, not just flag)
 
