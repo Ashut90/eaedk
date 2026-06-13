@@ -80,6 +80,13 @@ th,td { border: 1px solid #c2ccd6; padding: 1.5mm 2.2mm; text-align: left; verti
 th { background: #14507a; color: #fff; font-family: "Helvetica",sans-serif; }
 tr:nth-child(even) td { background: #f1f5f9; }
 hr { border: 0; border-top: 1px solid #cdd9e3; margin: 7mm 0; }
+
+/* figures: a diagram followed by an italic caption paragraph */
+img { display: block; margin: 4mm auto 1mm; max-width: 100%; max-height: 215mm;
+      border: 1px solid #dbe2e8; border-radius: 4px; padding: 3mm; background: #fff;
+      page-break-inside: avoid; }
+img + em, p > em:only-child { display: block; text-align: center; font-size: 9pt;
+      color: #5b7488; margin: 0 6mm 5mm; line-height: 1.4; }
 </style></head><body>
 <section class="cover">
   <div class="brand">EAEDK</div>
@@ -255,6 +262,8 @@ hr { border: 0; border-top: 1px solid #cdd9e3; margin: 7mm 0; }
 <h3 id="two-guardrails-input-and-output">Two guardrails: input and output</h3>
 <p>Two deterministic gates fence the model in. The first is the <strong>Validation Engine</strong> (the input guard): 22 pure-function rules return PASS, FAIL, or UNKNOWN over typed board data — flash and RAM capacity, vector-table alignment, partition fitment, DDR-timing-verified, power sequencing, pin-mux conflicts, the secure-boot chain, and more. A host with no <code>arm-none-eabi-gcc</code> makes a Cortex-M project NOT FEASIBLE, with a one-line fix. UNKNOWN is a hard blocker, not a soft pass; infeasible designs are never recommended.</p>
 <p>The second is the <strong>Post-Filter</strong> (the output guard): every model response is scanned, and any hex address, memory size, clock frequency, or timing value not in the SQLite-cited allowlist is removed and replaced with a verification marker. Frequencies and timings are never stored in the database without explicit human verification, so the model can never slip an invented timing through.</p>
+<p><img alt="The two guardrails and the trust boundary" src="architecture-trust.png" /></p>
+<p><em>Figure 2.1 — The trust boundary. Deterministic engines (left) hold the truth; the local model (lower right) sits outside and reaches the engineer only through the Post-Filter. The Validation Engine gates what enters; the Post-Filter strips any uncited hardware value before it leaves.</em></p>
 <h3 id="facts-assumptions-and-unknowns">Facts, assumptions, and unknowns</h3>
 <p>Every response carries a fixed schema that separates three kinds of knowledge. <strong>Facts</strong> are HIGH-confidence parameters backed by citations. <strong>Assumptions</strong> are MEDIUM or LOW confidence, from incomplete verification or inference. <strong>Unknowns</strong> are required parameters not yet provided or verified. This taxonomy makes uncertainty explicit and actionable rather than hidden inside a model's uncalibrated confidence. When EAEDK does not know something it says so, when it assumes it labels the assumption, and when it has verified a fact it shows the citation.</p>
 <h3 id="the-mentor-layer-teach-not-just-flag">The mentor layer: teach, not just flag</h3>
@@ -287,24 +296,8 @@ demo.sh / demo-full.sh   end-to-end demonstrations
 </code></pre>
 <h3 id="the-trust-boundary">The trust boundary</h3>
 <p>Everything inside the boundary is deterministic: pure-function validation, a data-driven risk DSL, signature matching, and a SQLite store where every fact carries provenance (source, citation page, section, snippet). The model sits outside and reaches the user only through the two guardrails. The Validation Engine gates what goes in (feasibility before any recommendation); the Post-Filter gates what comes out (no uncited hardware claim). The orchestrator assembles the answer by running engines first, gathering facts and citations and confidences, then optionally calling the model with a constrained context.</p>
-<pre><code>        CLI (argparse)            Web UI (FastAPI)
-              \                       /
-               \   same engine calls /
-                v                    v
-   ============= TRUST BOUNDARY (deterministic) =============
-     orchestrator -&gt; validation | risk | toolchain | logs |
-                     output | ingest | state | mentor
-                              |
-                          repo.py  (only SQL)
-                              |
-                     SQLite  ~/.eaedk/eaedk.db
-   ==========================================================
-                              | cited allowlist
-            LLM gateway -&gt; Ollama (local, explain-only)
-                              | raw text
-                     POST-FILTER (strip uncited hw numbers)
-                              | safe, cited text -&gt; user
-</code></pre>
+<p><img alt="Complete EAEDK software architecture and data flow" src="print-architecture.png" /></p>
+<p><em>Figure 3.1 — The complete software flow. Two front doors (blue) call one deterministic engine core (green); every fact passes through <code>repo.py</code> (amber) into local SQLite. The model and the Post-Filter (red) sit outside the trust boundary — the model may explain, but every number it emits is stripped unless the database already cited it.</em></p>
 <h3 id="the-bring-up-chain">The bring-up chain</h3>
 <p>EAEDK implements a complete, auditable workflow — the bring-up chain — from onboarding (<code>board add</code> / <code>ingest</code>), to project creation (<code>project init</code>, automatic template selection and immediate assessment), to deterministic feasibility (<code>validate</code> and <code>risk</code>), to crash triage (<code>log analyze</code>), to closing tracked issues with provenance (<code>risk resolve</code>), to generating real build files (<code>export</code>). Every step writes through one fact layer with structured provenance; no raw SQL lives outside <code>repo.py</code>.</p>
 <h3 id="database-architecture">Database architecture</h3>
@@ -622,6 +615,8 @@ demo.sh / demo-full.sh   end-to-end demonstrations
 <p>The datasheet engine reads a manufacturer PDF and turns it into cited, reviewable facts. Its rule: extracted facts are <strong>staged</strong>, never trusted automatically.</p>
 <h3 id="the-ingestion-pipeline">The ingestion pipeline</h3>
 <p><code>eaedk ingest --file ds.pdf --board NAME --analyze</code> reads the PDF with PyMuPDF into pages, splits each into sentences, and extracts facts sentence-aware: every hex address is assigned to its <strong>nearest</strong> memory keyword (Flash, SRAM, RAM) by distance so a flash address is not mislabeled as RAM, sizes are converted to bytes (<code>512 KB</code> → 524288, <code>64 Kbytes</code> → 65536), and a maximum clock is read from "up to N MHz." Confidence is assigned by source: a value in a <strong>table</strong> (a short label + hex line) is HIGH; a value in <strong>prose</strong> (a full sentence) is MEDIUM, never upgraded to HIGH. Every extracted value lands in the <code>fact_candidates</code> table as <code>pending</code> — nothing reaches the trusted <code>facts</code> table without confirmation. If the board is new, an <code>--arch</code> skeleton is created first so the datasheet has something to analyze against.</p>
+<p><img alt="The datasheet intelligence pipeline" src="print-datasheet.png" /></p>
+<p><em>Figure 12.1 — The datasheet pipeline. An unknown board is auto-created from <code>--arch</code> (no dead end); the PDF is extracted into </em><em>staged</em><em> candidates (amber, "not yet truth"); the seven-section report and the confidence-rated query read those candidates; and only a human <code>--review</code>/<code>--confirm</code> promotes a candidate into the trusted <code>facts</code> table that feeds validate and export.</em></p>
 <h3 id="the-intelligence-report">The intelligence report</h3>
 <p><code>--analyze</code> prints a seven-section deterministic report (no model): (1) what was found, cited and confidence-rated; (2) what could not be found among the mandatory bring-up items, each with <em>why</em> it matters and <em>where in the datasheet to look</em>; (3) the priority order; (4) architecture-specific risk warnings; (5) the closest known board, scored deterministically — <strong>+40</strong> same architecture, <strong>+20</strong> flash within 2×, <strong>+20</strong> RAM within 2×, <strong>+10</strong> same vendor, <strong>+10</strong> two or more shared peripherals, banding to HIGH at ≥70, MEDIUM at 40–69, LOW below; (6) an honest can/cannot based on what was actually extracted; (7) the single most important next step.</p>
 <h3 id="the-query-engine">The query engine</h3>

@@ -67,6 +67,10 @@ Two deterministic gates fence the model in. The first is the **Validation Engine
 
 The second is the **Post-Filter** (the output guard): every model response is scanned, and any hex address, memory size, clock frequency, or timing value not in the SQLite-cited allowlist is removed and replaced with a verification marker. Frequencies and timings are never stored in the database without explicit human verification, so the model can never slip an invented timing through.
 
+![The two guardrails and the trust boundary](architecture-trust.png)
+
+*Figure 2.1 — The trust boundary. Deterministic engines (left) hold the truth; the local model (lower right) sits outside and reaches the engineer only through the Post-Filter. The Validation Engine gates what enters; the Post-Filter strips any uncited hardware value before it leaves.*
+
 ### Facts, assumptions, and unknowns
 
 Every response carries a fixed schema that separates three kinds of knowledge. **Facts** are HIGH-confidence parameters backed by citations. **Assumptions** are MEDIUM or LOW confidence, from incomplete verification or inference. **Unknowns** are required parameters not yet provided or verified. This taxonomy makes uncertainty explicit and actionable rather than hidden inside a model's uncalibrated confidence. When EAEDK does not know something it says so, when it assumes it labels the assumption, and when it has verified a fact it shows the citation.
@@ -113,25 +117,9 @@ demo.sh / demo-full.sh   end-to-end demonstrations
 
 Everything inside the boundary is deterministic: pure-function validation, a data-driven risk DSL, signature matching, and a SQLite store where every fact carries provenance (source, citation page, section, snippet). The model sits outside and reaches the user only through the two guardrails. The Validation Engine gates what goes in (feasibility before any recommendation); the Post-Filter gates what comes out (no uncited hardware claim). The orchestrator assembles the answer by running engines first, gathering facts and citations and confidences, then optionally calling the model with a constrained context.
 
-```
-        CLI (argparse)            Web UI (FastAPI)
-              \                       /
-               \   same engine calls /
-                v                    v
-   ============= TRUST BOUNDARY (deterministic) =============
-     orchestrator -> validation | risk | toolchain | logs |
-                     output | ingest | state | mentor
-                              |
-                          repo.py  (only SQL)
-                              |
-                     SQLite  ~/.eaedk/eaedk.db
-   ==========================================================
-                              | cited allowlist
-            LLM gateway -> Ollama (local, explain-only)
-                              | raw text
-                     POST-FILTER (strip uncited hw numbers)
-                              | safe, cited text -> user
-```
+![Complete EAEDK software architecture and data flow](print-architecture.png)
+
+*Figure 3.1 — The complete software flow. Two front doors (blue) call one deterministic engine core (green); every fact passes through `repo.py` (amber) into local SQLite. The model and the Post-Filter (red) sit outside the trust boundary — the model may explain, but every number it emits is stripped unless the database already cited it.*
 
 ### The bring-up chain
 
@@ -403,6 +391,10 @@ The datasheet engine reads a manufacturer PDF and turns it into cited, reviewabl
 ### The ingestion pipeline
 
 `eaedk ingest --file ds.pdf --board NAME --analyze` reads the PDF with PyMuPDF into pages, splits each into sentences, and extracts facts sentence-aware: every hex address is assigned to its **nearest** memory keyword (Flash, SRAM, RAM) by distance so a flash address is not mislabeled as RAM, sizes are converted to bytes (`512 KB` → 524288, `64 Kbytes` → 65536), and a maximum clock is read from "up to N MHz." Confidence is assigned by source: a value in a **table** (a short label + hex line) is HIGH; a value in **prose** (a full sentence) is MEDIUM, never upgraded to HIGH. Every extracted value lands in the `fact_candidates` table as `pending` — nothing reaches the trusted `facts` table without confirmation. If the board is new, an `--arch` skeleton is created first so the datasheet has something to analyze against.
+
+![The datasheet intelligence pipeline](print-datasheet.png)
+
+*Figure 12.1 — The datasheet pipeline. An unknown board is auto-created from `--arch` (no dead end); the PDF is extracted into **staged** candidates (amber, "not yet truth"); the seven-section report and the confidence-rated query read those candidates; and only a human `--review`/`--confirm` promotes a candidate into the trusted `facts` table that feeds validate and export.*
 
 ### The intelligence report
 

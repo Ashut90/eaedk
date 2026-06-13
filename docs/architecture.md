@@ -10,7 +10,7 @@ data-driven risk DSL, signature matching, and a SQLite store where every fact ca
 structured provenance (`source → citation → page/section/snippet`). The LLM sits **outside**
 that boundary and can only reach it through two guardrails:
 
-- **Validation Engine** (input guard) — 18 pure rules return `PASS / FAIL / UNKNOWN`. An
+- **Validation Engine** (input guard) — 22 pure rules return `PASS / FAIL / UNKNOWN`. An
   `UNKNOWN` is a hard blocker, not a soft pass; the orchestrator refuses to call a design
   feasible while a rule fails. Prevents infeasible architectures from ever being recommended.
 - **Post-Filter** (output guard) — builds an allowlist of *cited* numbers from the
@@ -36,7 +36,7 @@ flowchart TB
 
     subgraph TRUTH["DETERMINISTIC TRUTH BOUNDARY (offline, local SQLite)"]
         direction TB
-        VE["Validation Engine — GUARDRAIL<br/>18 pure rules to PASS / FAIL / UNKNOWN<br/>no infeasible designs"]:::guard
+        VE["Validation Engine — GUARDRAIL<br/>22 pure rules to PASS / FAIL / UNKNOWN<br/>no infeasible designs"]:::guard
         RE["Risk Engine<br/>data-driven, sandboxed DSL"]:::core
         SIG[("Log Signature DB<br/>deterministic match first")]:::db
         DB[("Truth DB<br/>engineering_facts • boards • templates • projects<br/>structured citations / provenance")]:::db

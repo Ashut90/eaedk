@@ -159,6 +159,13 @@ th,td { border: 1px solid #c2ccd6; padding: 1.5mm 2.2mm; text-align: left; verti
 th { background: #14507a; color: #fff; font-family: "Helvetica",sans-serif; }
 tr:nth-child(even) td { background: #f1f5f9; }
 hr { border: 0; border-top: 1px solid #cdd9e3; margin: 7mm 0; }
+
+/* figures: a diagram followed by an italic caption paragraph */
+img { display: block; margin: 4mm auto 1mm; max-width: 100%; max-height: 215mm;
+      border: 1px solid #dbe2e8; border-radius: 4px; padding: 3mm; background: #fff;
+      page-break-inside: avoid; }
+img + em, p > em:only-child { display: block; text-align: center; font-size: 9pt;
+      color: #5b7488; margin: 0 6mm 5mm; line-height: 1.4; }
 """
 # repair an accidental typo token in the leader color (keep CSS valid)
 CSS = CSS.replace("#5b7governi", "#4a6a86")
