@@ -18,7 +18,11 @@ that boundary and can only reach it through two guardrails:
   address, memory size, clock, or timing not in that set. Frequencies/timings are never in the
   DB, so any such claim is removed by design.
 
+> Static render (works in any viewer): ![EAEDK trust boundary](architecture-trust.png)
+> The live Mermaid source is below.
+
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'#ffffff','primaryColor':'#ffffff','lineColor':'#555555','fontSize':'14px','fontFamily':'sans-serif'}}}%%
 flowchart TB
     eng([Engineer]):::ext
 
@@ -53,12 +57,12 @@ flowchart TB
     PF <-->|"constrained context"| LLM
     PF -->|"filtered, cited prose"| ORCH
 
-    classDef ext fill:#eeeeee,stroke:#555555;
-    classDef cli fill:#e3f2fd,stroke:#1565c0;
-    classDef db fill:#e8f5e9,stroke:#2e7d32;
-    classDef core fill:#e8f5e9,stroke:#2e7d32;
-    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:3px;
-    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-width:2px,stroke-dasharray:6 4;
+    classDef ext fill:#eeeeee,stroke:#555555,color:#1a1a1a;
+    classDef cli fill:#e3f2fd,stroke:#1565c0,color:#0d3b66;
+    classDef db fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
+    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
+    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#7a3b00;
+    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-width:2px,stroke-dasharray:6 4,color:#7a1438;
 ```
 
 ## Reading the diagram
