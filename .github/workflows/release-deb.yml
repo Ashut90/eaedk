@@ -1,0 +1,90 @@
+name: Release .deb
+
+# Build the Ubuntu/Debian package and attach it to the GitHub Release whenever a v* tag is
+# pushed. The job refuses to release if the tag and pyproject version disagree, and it
+# smoke-tests the *built* package before publishing, so a broken artifact never ships.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write          # needed to create/update releases and upload assets
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + test tools
+        run: |
+          sudo apt-get update -qq
+          # dpkg-deb ships with dpkg (always present); fakeroot builds the .deb as root:root;
+          # imagemagick renders the icon (optional, degrades gracefully); python3-yaml is the
+          # one runtime dependency the smoke test exercises.
+          sudo apt-get install -y --no-install-recommends fakeroot imagemagick python3-yaml
+
+      - name: Check the tag matches pyproject version
+        run: |
+          PV="$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/')"
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ "$PV" != "$TAG" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match pyproject version ${PV}. Bump 'version' in pyproject.toml to ${TAG} (or retag)."
+            exit 1
+          fi
+          echo "VERSION=${PV}" >> "$GITHUB_ENV"
+
+      - name: Build the .deb
+        run: bash packaging/build-deb.sh
+
+      - name: Smoke-test the built package
+        run: |
+          set -e
+          ROOTFS="$(mktemp -d)"
+          dpkg-deb -x "dist/eaedk_${VERSION}_all.deb" "$ROOTFS"
+          TMPDB="$(mktemp -u).db"
+          run() { EAEDK_DATA_DIR="$ROOTFS/usr/share/eaedk/packages" \
+                  PYTHONPATH="$ROOTFS/usr/lib/eaedk" \
+                  python3 -m eaedk.cli --db "$TMPDB" "$@"; }
+          run db init
+          run db seed
+          run eval run                                   # exits non-zero if any golden case fails
+          run board list | grep -q STM32F103-BluePill    # data is present and reachable
+          echo "smoke test passed: package is functional after install"
+
+      - name: Publish to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          DEB="dist/eaedk_${VERSION}_all.deb"
+          SHA="$(sha256sum "$DEB" | cut -d' ' -f1)"
+          cat > /tmp/notes.md <<NOTES
+          **EAEDK ${GITHUB_REF_NAME}** — local-first, offline embedded-engineering validation and mentoring. Deterministic engines hold the truth; an optional local model may only explain.
+
+          ### Install on Ubuntu/Debian
+          \`\`\`bash
+          wget https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/eaedk_${VERSION}_all.deb
+          sudo apt install ./eaedk_${VERSION}_all.deb     # pulls python3-yaml automatically
+          eaedk db init && eaedk db seed                  # once per user
+          eaedk board list                                # confirm
+          \`\`\`
+          The full CLI needs only \`python3\` + \`python3-yaml\` and works offline. The browser UI (\`python3-fastapi\`, \`python3-uvicorn\`) and datasheet ingestion (\`python3-fitz\`) are pulled in only if you want them. Uninstall with \`sudo apt remove eaedk\`; your \`~/.eaedk/\` database is per-user and untouched.
+
+          This artifact was smoke-tested in CI before publishing: migrations apply, seed data loads, and \`eval run\` passes.
+
+          \`\`\`
+          SHA-256 (eaedk_${VERSION}_all.deb): ${SHA}
+          \`\`\`
+          NOTES
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "release exists — updating asset + notes"
+            gh release upload "${GITHUB_REF_NAME}" "$DEB" --clobber
+            gh release edit   "${GITHUB_REF_NAME}" --notes-file /tmp/notes.md
+          else
+            echo "creating release"
+            gh release create "${GITHUB_REF_NAME}" "$DEB" \
+              --title "EAEDK ${GITHUB_REF_NAME}" --notes-file /tmp/notes.md
+          fi
