@@ -135,6 +135,12 @@ async def api_ask(request: Request):
     return {"board": board, **answer_query(conn, board, question, use_llm=use_llm)}
 
 
+@app.get("/api/arch-choices")
+def api_arch_choices():
+    from ..engines.ingest.labels import ARCH_CHOICES
+    return {"choices": [{"label": label, "value": value} for label, value in ARCH_CHOICES]}
+
+
 @app.get("/api/report/{name}")
 def api_report(name: str):
     from ..engines.ingest.report import intelligence_report
@@ -152,11 +158,24 @@ async def api_ingest(request: Request):
     from ..engines.ingest import ingest_datasheet
     from ..engines.ingest.report import intelligence_report
     from ..engines.ingest.extract import Page
+    from ..engines.ingest.labels import normalize_arch
     body = await request.json()
-    board = body.get("board") or ""
+    board = (body.get("board") or "").strip()
     conn = _conn()
+    # Fix 1 (v2.3.1): the unknown-board on-ramp — create a skeleton from a new name + architecture.
+    new_board = (body.get("new_board") or "").strip()
+    if new_board:
+        if repo.load_board(conn, new_board)[0] is not None:
+            return _err(f"A board named {new_board!r} already exists.",
+                        "Pick it from the dropdown, or use a different name.")
+        if not body.get("arch"):
+            return _err("Please choose the architecture for the new board.",
+                        "Select it from the architecture dropdown, then Analyze.")
+        repo.create_skeleton_board(conn, new_board, normalize_arch(body["arch"]))
+        board = new_board
     if repo.load_board(conn, board)[0] is None:
-        return _err(f"Board not found: {board!r}.", "Pick a board from the dropdown first.")
+        return _err(f"Board not found: {board!r}.",
+                    "Pick a board, or choose '➕ New board' to add an unknown one.")
     try:
         if body.get("pdf_base64"):
             raw = base64.b64decode(body["pdf_base64"])

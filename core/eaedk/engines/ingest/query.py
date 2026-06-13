@@ -14,17 +14,21 @@ import sqlite3
 
 from ... import repo
 from ...llm.postfilter import build_board_allowlist, filter_text, numbers_in_text
+from .labels import label_for
 
-# topic -> (keywords, fact keys it maps to, implication shown after a found value).
+# topic -> (keywords, fact keys, implication, search-terms to suggest if not extracted).
 _TOPICS = [
     ("clock", ("clock", "frequency", "speed", "mhz", "hsi", "hse", "pll", "oscillator"),
      ["sysclk_max_hz"],
      "If you calculate your baud rate for the wrong clock, UART output will be garbage. "
-     "Always confirm your actual clock before setting baud rate."),
+     "Always confirm your actual clock before setting baud rate.",
+     "'clock tree', 'maximum frequency', 'HSI', 'SYSCLK'"),
     ("flash", ("flash", "program memory", "code size"), ["flash_bytes", "flash_base"],
-     "Your compiled image must fit in this — EAEDK checks it when you set the image size."),
+     "Your compiled image must fit in this — EAEDK checks it when you set the image size.",
+     "'Flash memory', 'program memory', 'memory map'"),
     ("ram", ("ram", "sram", "memory size", "stack", "heap"), ["ram_bytes", "ram_base"],
-     "Your stack + heap + statics must fit in this — EAEDK validates it for your project."),
+     "Your stack + heap + statics must fit in this — EAEDK validates it for your project.",
+     "'SRAM', 'RAM size', 'data memory'"),
 ]
 # mandatory items the deterministic extractor never produces -> always UNKNOWN with search help.
 _MANDATORY_UNKNOWN = {
@@ -97,7 +101,8 @@ def answer_query(conn: sqlite3.Connection, board_name: str, question: str,
                               f"{where}.\n\nDo not proceed until this is confirmed."}
 
     # 3) A topic that maps to a fact we actually hold -> HIGH, cited (Mode A).
-    for _name, kws, keys, implication in _TOPICS:
+    missed_search = None
+    for _name, kws, keys, implication, search_terms in _TOPICS:
         if any(k in q for k in kws):
             hit = next((facts[k] for k in keys if k in facts), None)
             if hit is not None:
@@ -109,14 +114,25 @@ def answer_query(conn: sqlite3.Connection, board_name: str, question: str,
                     cite = hit["source"]
                     lead = f"Based on {hit['source']}"
                 return {"confidence": hit["confidence"], "citation": cite,
-                        "answer": f"{lead}: {board_name}'s {key.replace('_', ' ')} is "
+                        "answer": f"{lead}: {board_name}'s {label_for(key).lower()} is "
                                   f"{_fmt(key, hit['value'])}.\n\n"
                                   f"Confidence: {hit['confidence']} — {hit['source']}.\n\n"
                                   f"What this means for your code: {implication}"}
-            # topic known but no verified value -> Mode B (verify), elaborated below.
+            # topic known but no verified value -> remember its search terms for Fix 3 below.
+            missed_search = search_terms
             break
 
-    # 4) Mode B — no verified fact. The LLM may elaborate; the post-filter strips uncited values.
+    # 4) Mode B — no verified fact. Fix 3: distinguish "no datasheet ingested" from "ingested but
+    # this value wasn't extracted". A datasheet was ingested if the board has any fact candidates.
+    ingested = bool(repo.list_fact_candidates(conn, board_name, status="pending")) or \
+        bool(repo.list_fact_candidates(conn, board_name, status="confirmed"))
+    if ingested:
+        terms = missed_search or "the value you're after"
+        return {"confidence": "LOW",
+                "answer": f"Your datasheet was ingested, but I couldn't extract this value "
+                          f"automatically — it may still be there in a format I missed.\n\n"
+                          f"Search your datasheet for: {terms}.\n\nThen confirm it with: "
+                          f"`eaedk ingest --board \"{board_name}\" --review`.\n\nConfidence: LOW."}
     base = (f"I don't have a verified value for that on {board_name} ({soc['arch']}).")
     gw = gateway or (None if not use_llm else __import__(
         "eaedk.llm.gateway", fromlist=["Gateway"]).Gateway())
@@ -137,7 +153,6 @@ def answer_query(conn: sqlite3.Connection, board_name: str, question: str,
                           "verified against your specific board.\n\nVerify this in your datasheet "
                           "before writing code that depends on it (baud rate, delays, timers)."}
     return {"confidence": "LOW",
-            "answer": f"{base}\n\nI can answer for sure about this board's architecture, flash, "
-                      "RAM, and clock once a datasheet is ingested.\n\nConfidence: LOW.\n\n"
-                      "Search your datasheet for the value, or run "
+            "answer": f"{base}\n\nNo datasheet has been ingested for this board yet.\n\n"
+                      "Confidence: LOW.\n\nIngest one so I can answer from it:\n"
                       f"`eaedk ingest --file <datasheet>.pdf --board \"{board_name}\" --analyze`."}

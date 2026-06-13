@@ -48,12 +48,48 @@ def describe_match(conn: sqlite3.Connection, match: dict) -> dict:
             "suggested_template": template}
 
 
+def _effective_geometry(conn: sqlite3.Connection, board_name: str, board: dict) -> tuple:
+    """The board's flash/RAM size for scoring, resolved from stored columns -> confirmed facts ->
+    pending extracted candidates. Returns (flash_bytes, ram_bytes, unconfirmed) where
+    ``unconfirmed`` is True if any value came from an as-yet-unconfirmed extracted candidate."""
+    flash, ram = board.get("flash_bytes"), board.get("ram_bytes")
+    unconfirmed = False
+    if flash is None or ram is None:
+        confirmed = repo.board_facts_map(conn, board_name)
+        pending = {c["fact_key"]: c["fact_value"]
+                   for c in repo.list_fact_candidates(conn, board_name, status="pending")}
+        for key, setter in (("flash_bytes", "flash"), ("ram_bytes", "ram")):
+            if locals()[setter] is None:
+                if key in confirmed:
+                    val = confirmed[key]
+                elif key in pending:
+                    val, unconfirmed = pending[key], True
+                else:
+                    continue
+                try:
+                    v = int(val)
+                except (TypeError, ValueError):
+                    continue
+                if setter == "flash":
+                    flash = v
+                else:
+                    ram = v
+    return flash, ram, unconfirmed
+
+
 def similar_with_guidance(conn: sqlite3.Connection, board_name: str, top: int = 3) -> list[dict]:
-    """Top matches for a board already in the DB, each with plain-English guidance."""
+    """Top matches for a board, each with plain-English guidance. Geometry for scoring comes from
+    stored columns or, for a freshly-ingested board, its pending extracted facts (Fix 4)."""
     board, soc = repo.load_board(conn, board_name)
     if board is None:
         return []
+    flash, ram, unconfirmed = _effective_geometry(conn, board_name, board)
     matches = repo.find_similar_boards(
-        conn, soc["arch"], board["flash_bytes"], board["ram_bytes"],
+        conn, soc["arch"], flash, ram,
         peripherals=repo.board_capability_names(conn, board_name), exclude=board_name, top=top)
-    return [describe_match(conn, m) for m in matches]
+    out = []
+    for m in matches:
+        d = describe_match(conn, m)
+        d["geometry_unconfirmed"] = unconfirmed   # the flash/RAM that fed scoring isn't confirmed yet
+        out.append(d)
+    return out

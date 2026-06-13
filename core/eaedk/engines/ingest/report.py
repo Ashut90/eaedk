@@ -11,6 +11,7 @@ import sqlite3
 
 from ... import repo
 from .arch_risks import risks_for_arch
+from .labels import label_for
 from .similarity import similar_with_guidance
 
 # Mandatory bring-up items. `needs` lists the extracted fact keys that satisfy it; an item with
@@ -84,7 +85,8 @@ def intelligence_report(conn: sqlite3.Connection, board_name: str) -> dict:
     found = []
     for key, c in best.items():
         cite = f"p.{c['page']}" + (f", §{c['section']}" if c["section"] else "")
-        found.append({"key": key, "label": key, "value": _fmt_value(key, c["fact_value"]),
+        found.append({"key": key, "label": label_for(key),
+                      "value": _fmt_value(key, c["fact_value"]),
                       "citation": cite, "confidence": c["confidence"]})
     found.sort(key=lambda f: f["key"])
 

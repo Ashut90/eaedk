@@ -426,6 +426,18 @@ def template_items(conn: sqlite3.Connection, template_id: int) -> list[sqlite3.R
 
 # --- projects --------------------------------------------------------------
 
+def create_skeleton_board(conn: sqlite3.Connection, name: str, arch: str,
+                          vendor: str | None = None) -> int:
+    """Create a minimal board (arch only, null geometry) so a datasheet can be analysed against an
+    otherwise-unknown board (v2.3.1). Reuses/creates a SoC named after the board."""
+    with conn:
+        soc = conn.execute("SELECT id FROM socs WHERE name=?", (name,)).fetchone()
+        sid = soc["id"] if soc else conn.execute(
+            "INSERT INTO socs(name,vendor,arch) VALUES (?,?,?)", (name, vendor, arch)).lastrowid
+        conn.execute("INSERT INTO boards(soc_id,name,confidence) VALUES (?,?,'LOW')", (sid, name))
+        return conn.execute("SELECT id FROM boards WHERE name=?", (name,)).fetchone()["id"]
+
+
 def create_project(conn: sqlite3.Connection, name: str, goal_type: str,
                    board_name: str | None, allow_missing_template: bool = False) -> int:
     """Create a project. A template is auto-selected by goal_type and its checklist seeded.

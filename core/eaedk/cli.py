@@ -625,6 +625,25 @@ def cmd_ingest(args):
     if not args.file or not args.board:
         print("error: ingest needs --file <pdf> --board <name> (or --review/--confirm/--reject)",
               file=sys.stderr); sys.exit(2)
+    # Fix 1 (v2.3.1): an unknown board is never a dead end — auto-create a skeleton from --arch
+    # (or prompt for the architecture), so the datasheet can be analysed against it.
+    if repo.load_board(conn, args.board)[0] is None:
+        from .engines.ingest.labels import normalize_arch, ARCH_CHOICES
+        arch = getattr(args, "arch", None)
+        if not arch:
+            print(f"'{args.board}' isn't in the database yet. What architecture is it?")
+            print("  " + ", ".join(label for label, _ in ARCH_CHOICES))
+            try:
+                arch = input("Architecture: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nNo architecture given — re-run with --arch <arch>. Nothing changed.",
+                      file=sys.stderr); sys.exit(2)
+            if not arch:
+                print("error: an architecture is required to create the board.", file=sys.stderr)
+                sys.exit(2)
+        repo.create_skeleton_board(conn, args.board, normalize_arch(arch))
+        print(f"created a new board '{args.board}' ({normalize_arch(arch)}) — analysing its "
+              "datasheet now.")
     try:
         res = ingest_datasheet(conn, args.file, args.board, use_llm=args.llm)
     except ValueError as e:
@@ -921,6 +940,7 @@ def build_parser() -> argparse.ArgumentParser:
     ing.add_argument("--confidence", choices=["HIGH", "MEDIUM", "LOW"])
     ing.add_argument("--analyze", action="store_true",
                      help="after ingest, print the full datasheet intelligence report")
+    ing.add_argument("--arch", help="architecture for a new (unknown) board, e.g. arm-cortex-m4")
     _add_llm(ing); ing.set_defaults(func=cmd_ingest)
 
     ex = sub.add_parser("export"); ex.add_argument("name"); ex.add_argument("--out")

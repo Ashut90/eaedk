@@ -33,16 +33,21 @@ class Candidate:
 
 
 _HEX8 = re.compile(r"\b(0x[0-9A-Fa-f]{6,8})\b")
-_SIZE_FLASH = re.compile(r"(\d+)\s*([KM])\s*bytes?\s+(?:of\s+)?(?:embedded\s+|on-chip\s+)?flash",
-                         re.IGNORECASE)
-_SIZE_RAM = re.compile(r"(\d+)\s*([KM])\s*bytes?\s+(?:of\s+)?(?:s?ram)\b", re.IGNORECASE)
+# size: a number + K/M/G + a byte unit (KB, Kbytes, KiB, Mbyte, ...). Case-insensitive.
+_SIZE = re.compile(r"\b(\d+)\s*([KMG])(?:i?B|bytes?)\b", re.IGNORECASE)
 _CLOCK = re.compile(r"up to\s*(\d+)\s*MHz|(\d+)\s*MHz\s*(?:max|maximum)", re.IGNORECASE)
-_CLOCK_CTX = re.compile(r"clock|frequency|sysclk|\bcpu\b|core", re.IGNORECASE)
+_CLOCK_CTX = re.compile(r"clock|frequency|sysclk|hclk|\bhsi\b|\bhse\b|\bpll\b|\bcpu\b|core",
+                        re.IGNORECASE)
+_FLASH_KW = re.compile(r"flash", re.IGNORECASE)
+_RAM_KW = re.compile(r"\bs?ram\b", re.IGNORECASE)
 _HEADING = re.compile(r"^\s*\d+(?:\.\d+)*\s+[A-Z]")
+_SENT = re.compile(r"(?<=[.;])\s+")
+_WORD = re.compile(r"[A-Za-z]+")
 
 
 def _bytes(num: str, unit: str) -> int:
-    return int(num) * (1024 if unit.upper() == "K" else 1024 * 1024)
+    f = {"K": 1024, "M": 1024 * 1024, "G": 1024 ** 3}[unit.upper()]
+    return int(num) * f
 
 
 def _is_heading(line: str) -> bool:
@@ -61,6 +66,55 @@ def _emit(cands: dict, c: Candidate) -> None:
         cands[c.fact_key] = c
 
 
+def _nearest_mem(text: str, lo: int, hi: int) -> str | None:
+    """Which memory ('flash'|'ram') keyword is closest to the span [lo,hi) in ``text``, by absolute
+    distance (before or after). None if neither appears. This stops a flash label earlier in the
+    sentence from claiming a value that actually sits next to 'SRAM'."""
+    mid = (lo + hi) / 2
+    best_mem, best_dist = None, None
+    for kw, mem in ((_FLASH_KW, "flash"), (_RAM_KW, "ram")):
+        for m in kw.finditer(text):
+            d = abs((m.start() + m.end()) / 2 - mid)
+            if best_dist is None or d < best_dist:
+                best_dist, best_mem = d, mem
+    return best_mem
+
+
+def _scan_sentence(cands: dict, sent: str, page: int, section: str | None) -> None:
+    has_flash, has_ram = bool(_FLASH_KW.search(sent)), bool(_RAM_KW.search(sent))
+    # A "table" line is mostly a label + hex (few words once the hex is removed) -> HIGH; prose -> MEDIUM.
+    nohex = _HEX8.sub("", sent)
+    is_table = bool(_HEX8.search(sent)) and len(_WORD.findall(nohex)) <= 3
+    method, conf = ("table", "HIGH") if is_table else ("text", "MEDIUM")
+
+    for m in _HEX8.finditer(sent):
+        mem = _nearest_mem(sent, m.start(), m.end())
+        if mem == "flash":
+            _emit(cands, Candidate("MEMORY", "memmap", "flash_base", m.group(1),
+                                   method, conf, page, section, sent))
+        elif mem == "ram":
+            _emit(cands, Candidate("MEMORY", "memmap", "ram_base", m.group(1),
+                                   method, conf, page, section, sent))
+
+    for sm in _SIZE.finditer(sent):
+        mem = _nearest_mem(sent, sm.start(), sm.end())
+        if mem == "flash" or (mem is None and has_flash and not has_ram):
+            _emit(cands, Candidate("MEMORY", "memmap", "flash_bytes",
+                                   str(_bytes(sm.group(1), sm.group(2))), "text", "MEDIUM",
+                                   page, section, sent))
+        elif mem == "ram" or (mem is None and has_ram and not has_flash):
+            _emit(cands, Candidate("MEMORY", "memmap", "ram_bytes",
+                                   str(_bytes(sm.group(1), sm.group(2))), "text", "MEDIUM",
+                                   page, section, sent))
+
+    if _CLOCK_CTX.search(sent):
+        mc = _CLOCK.search(sent)
+        if mc:
+            mhz = mc.group(1) or mc.group(2)
+            _emit(cands, Candidate("CLOCK", "clock", "sysclk_max_hz",
+                                   str(int(mhz) * 1_000_000), "text", "MEDIUM", page, section, sent))
+
+
 def extract_from_pages(pages: list[Page]) -> list[Candidate]:
     cands: dict[str, Candidate] = {}
     for page in pages:
@@ -72,39 +126,9 @@ def extract_from_pages(pages: list[Page]) -> list[Candidate]:
             if _is_heading(line):
                 section = line
                 continue
-            low = line.lower()
-
-            # structured memory-map lines: label + 0x........ -> HIGH (table-ish)
-            hx = _HEX8.search(line)
-            if hx:
-                addr = hx.group(1)
-                if "flash" in low:
-                    _emit(cands, Candidate("MEMORY", "memmap", "flash_base", addr,
-                                           "table", "HIGH", page.number, section, line))
-                if "sram" in low or re.search(r"\bram\b", low):
-                    _emit(cands, Candidate("MEMORY", "memmap", "ram_base", addr,
-                                           "table", "HIGH", page.number, section, line))
-
-            # prose sizes -> MEDIUM
-            m = _SIZE_FLASH.search(line)
-            if m:
-                _emit(cands, Candidate("MEMORY", "memmap", "flash_bytes",
-                                       str(_bytes(m.group(1), m.group(2))), "text", "MEDIUM",
-                                       page.number, section, line))
-            m = _SIZE_RAM.search(line)
-            if m:
-                _emit(cands, Candidate("MEMORY", "memmap", "ram_bytes",
-                                       str(_bytes(m.group(1), m.group(2))), "text", "MEDIUM",
-                                       page.number, section, line))
-
-            # clock ceiling, only on clock-context lines -> MEDIUM
-            if _CLOCK_CTX.search(line):
-                mc = _CLOCK.search(line)
-                if mc:
-                    mhz = mc.group(1) or mc.group(2)
-                    _emit(cands, Candidate("CLOCK", "clock", "sysclk_max_hz",
-                                           str(int(mhz) * 1_000_000), "text", "MEDIUM",
-                                           page.number, section, line))
+            for sent in _SENT.split(line):
+                if sent.strip():
+                    _scan_sentence(cands, sent.strip(), page.number, section)
     return list(cands.values())
 
 

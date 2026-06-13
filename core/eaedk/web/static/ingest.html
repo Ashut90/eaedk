@@ -18,6 +18,13 @@
       <label for="board">Which board is this datasheet for?</label>
       <select id="board"><option value="">Loading…</option></select>
 
+      <div id="newboard" style="display:none">
+        <label for="newname">New board name</label>
+        <input type="text" id="newname" placeholder="e.g. STM32F303RE" autocomplete="off">
+        <label for="arch">Architecture (which core?)</label>
+        <select id="arch"><option value="">Loading…</option></select>
+      </div>
+
       <label for="pdf">Datasheet PDF</label>
       <input type="file" id="pdf" accept="application/pdf">
 
@@ -41,8 +48,24 @@
     async function init() {
       showCommand("eaedk ingest --file <datasheet>.pdf --board <name> --analyze");
       const b = await api("/api/boards");
-      document.getElementById("board").innerHTML = b.error ? `<option>(couldn't load)</option>`
-        : b.boards.map(x => `<option value="${escapeHtml(x.name)}">${escapeHtml(x.name)} — ${escapeHtml(x.soc)}</option>`).join("");
+      const opts = b.error ? "" : b.boards.map(x =>
+        `<option value="${escapeHtml(x.name)}">${escapeHtml(x.name)} — ${escapeHtml(x.soc)}</option>`).join("");
+      document.getElementById("board").innerHTML =
+        `<option value="__new__">➕ New board (not in the list)</option>` + opts;
+      const a = await api("/api/arch-choices");
+      if (!a.error) document.getElementById("arch").innerHTML =
+        a.choices.map(c => `<option value="${escapeHtml(c.value)}">${escapeHtml(c.label)}</option>`).join("");
+      document.getElementById("board").addEventListener("change", e => {
+        document.getElementById("newboard").style.display = e.target.value === "__new__" ? "block" : "none";
+      });
+    }
+
+    function selectedBoardPayload() {
+      const sel = document.getElementById("board").value;
+      if (sel === "__new__")
+        return { new_board: document.getElementById("newname").value.trim(),
+                 arch: document.getElementById("arch").value };
+      return { board: sel };
     }
 
     function fileToBase64(file) {
@@ -53,20 +76,22 @@
       });
     }
 
+    let ANALYZED_BOARD = null;
+
     async function analyze() {
-      const board = document.getElementById("board").value;
       const file = document.getElementById("pdf").files[0];
       const text = document.getElementById("text").value.trim();
       const el = document.getElementById("report");
-      showCommand(`eaedk ingest --file <datasheet>.pdf --board ${board} --analyze`);
+      const payload = selectedBoardPayload();
+      showCommand(`eaedk ingest --file <datasheet>.pdf --board ${payload.board || payload.new_board} ${payload.arch ? "--arch " + payload.arch + " " : ""}--analyze`);
       el.innerHTML = `<p class="kv">Reading the datasheet…</p>`;
-      const payload = { board };
       if (file) payload.pdf_base64 = await fileToBase64(file);
       else if (text) payload.text = text;
       else { el.innerHTML = `<div class="note">Upload a PDF or paste some datasheet text first.</div>`; return; }
       const r = await api("/api/ingest", { method: "POST",
         headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload) });
       if (r.error) { showError(el, r); return; }
+      ANALYZED_BOARD = r.board;
       renderReport(el, r.report);
     }
 
@@ -105,9 +130,11 @@
     }
 
     async function ask() {
-      const board = document.getElementById("board").value;
+      const sel = document.getElementById("board").value;
+      const board = (sel === "__new__") ? ANALYZED_BOARD : sel;
       const question = document.getElementById("q").value.trim();
       const el = document.getElementById("answer");
+      if (!board) { el.innerHTML = `<div class="note">Analyze a datasheet first, then ask.</div>`; return; }
       if (!question) return;
       showCommand(`eaedk ask --board ${board} "${question}"`);
       el.innerHTML = `<p class="kv">Thinking…</p>`;

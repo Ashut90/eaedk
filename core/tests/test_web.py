@@ -263,3 +263,22 @@ def test_ingest_text_returns_report(client):
 
 def test_ingest_page_served(client):
     assert client.get("/static/ingest.html").status_code == 200
+
+
+# --- v2.3.1: unknown-board on-ramp from the Datasheet tab -------------------
+
+def test_arch_choices_route(client):
+    labels = [c["label"] for c in client.get("/api/arch-choices").json()["choices"]]
+    assert "Cortex-M4" in labels and "Xtensa-LX6" in labels and "AVR" in labels
+
+
+def test_ingest_new_board_onramp(client):
+    text = ("3.2 Memory mapping. The Flash memory base address is 0x08000000 with 512 Kbytes of "
+            "Flash. The SRAM base address is 0x20000000 with 64 Kbytes of SRAM. Up to 72 MHz.")
+    r = client.post("/api/ingest", json={"new_board": "GD32F303", "arch": "Cortex-M4",
+                                         "text": text}).json()
+    assert r["board"] == "GD32F303" and "report" in r           # auto-created, no dead end
+    assert {"flash_base", "ram_base"} <= {f["key"] for f in r["report"]["found"]}
+    # missing architecture for a new board -> friendly error, not a crash
+    e = client.post("/api/ingest", json={"new_board": "X", "text": text}).json()
+    assert "architecture" in e["error"].lower() and "next" in e
