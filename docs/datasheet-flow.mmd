@@ -1,0 +1,52 @@
+%% EAEDK — datasheet intelligence pipeline (v2.3.1)
+%% Render: mmdc -i docs/datasheet-flow.mmd -o docs/datasheet-flow.svg
+flowchart TB
+    classDef step fill:#143d2b,stroke:#3fb27f,color:#fff;
+    classDef data fill:#3d2f14,stroke:#d9a441,color:#fff;
+    classDef gate fill:#1e3a5f,stroke:#4a90d9,color:#fff;
+    classDef human fill:#4a1e4a,stroke:#c06bd9,color:#fff;
+    classDef conf fill:#3a2f14,stroke:#d9a441,color:#fff;
+
+    IN["eaedk ingest --file ds.pdf --board NAME [--arch A] --analyze<br/>(or Web · Datasheet tab)"]:::gate
+
+    ONRAMP{"board known?"}:::gate
+    SKEL["repo.create_skeleton_board(name, arch)<br/>null geometry · LOW confidence<br/>(Fix 1 — no 'Board not found' dead end)"]:::step
+    IN --> ONRAMP
+    ONRAMP -->|"no · arch given"| SKEL
+    ONRAMP -->|"no · arch missing"| PROMPT["prompt for architecture<br/>(CLI interactive / Web dropdown)"]:::gate
+    PROMPT --> SKEL
+    ONRAMP -->|yes| PDF
+    SKEL --> PDF
+
+    PDF["pdf.py · PyMuPDF<br/>PDF -> Page(text) list"]:::step
+    EXT["extract.py · sentence-aware (Fix 2)<br/>nearest Flash/RAM keyword · KB/MB->bytes<br/>HIGH=table · MEDIUM=prose (never upgraded)"]:::step
+    PDF --> EXT
+
+    CAND[("fact_candidates<br/>STAGED — not yet truth")]:::data
+    EXT --> CAND
+
+    subgraph REP["report.intelligence_report — 7 deterministic sections"]
+        direction TB
+        S1["1 Found (cited + confidence + labels · Fix 5)"]:::step
+        S2["2 Missing (why mandatory + where to look)"]:::step
+        S3["3 Priority order"]:::step
+        S4["4 Arch risks (arch_risks.yaml)"]:::step
+        S5["5 Closest known board<br/>similarity reads pending facts · Fix 4"]:::step
+        S6["6 Can / cannot do"]:::step
+        S7["7 Immediate next step"]:::step
+    end
+    CAND --> REP
+
+    QUERY{"eaedk ask — confidence rating"}:::conf
+    CAND --> QUERY
+    QUERY -- "fact cited" --> HIGH["HIGH · page/section + meaning"]:::conf
+    QUERY -- "mandatory missing" --> UNK["UNKNOWN · exact search terms + warning"]:::conf
+    QUERY -- "topic ingested, not extracted" --> NX["'ingested but not extracted —<br/>search SRAM, then --review' · Fix 3"]:::conf
+    QUERY -- "no datasheet" --> LOW["LOW · 'run ingest --analyze'"]:::conf
+
+    HUMAN["eaedk ingest --board NAME --review<br/>human confirms each candidate"]:::human
+    FACTS[("facts table = CONFIRMED truth<br/>engineering_facts VIEW")]:::data
+    REP --> HUMAN
+    CAND --> HUMAN
+    HUMAN -->|confirm| FACTS
+    FACTS -->|now feeds validate/export| OUT["ready for project validate / export"]:::gate

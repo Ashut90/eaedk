@@ -1,0 +1,79 @@
+%% EAEDK — complete software flow (v2.3.1)
+%% Render: mmdc -i docs/architecture-flow.mmd -o docs/architecture-flow.svg
+flowchart TB
+    classDef ui fill:#1e3a5f,stroke:#4a90d9,color:#fff;
+    classDef engine fill:#143d2b,stroke:#3fb27f,color:#fff;
+    classDef data fill:#3d2f14,stroke:#d9a441,color:#fff;
+    classDef llm fill:#4a1e1e,stroke:#d96b6b,color:#fff;
+    classDef filt fill:#5a1e1e,stroke:#ff6b6b,color:#fff,stroke-width:3px;
+    classDef boundary fill:none,stroke:#888,stroke-dasharray:6 4,color:#ccc;
+
+    %% ---- Users ----
+    U1([beginner · no board · Wokwi]):::ui
+    U2([engineer · real board]):::ui
+
+    %% ---- Interfaces ----
+    subgraph IF["Two front doors — call the SAME functions"]
+        direction LR
+        CLI["CLI<br/>cli.py · ~30 verbs"]:::ui
+        WEB["Web UI<br/>web/server.py · FastAPI<br/>8 static pages"]:::ui
+    end
+    U1 --> IF
+    U2 --> IF
+
+    %% ---- Trust boundary / engine core ----
+    subgraph CORE["DETERMINISTIC ENGINE CORE — holds the truth"]
+        direction TB
+        ORCH["orchestrator.py<br/>assess() / assess_project()"]:::engine
+        CTX["context.py<br/>build evaluation context"]:::engine
+        subgraph ENG["Engines (pure functions)"]
+            direction LR
+            VAL["Validation<br/>rules.py<br/>PASS/FAIL/UNKNOWN"]:::engine
+            RISK["Risk<br/>DSL rules"]:::engine
+            TOOL["Toolchain<br/>host env"]:::engine
+            LOG["Log<br/>signatures+triage"]:::engine
+            OUT["Output<br/>export·codegen·wokwi"]:::engine
+            ING["Ingest<br/>extract·report·query<br/>similarity·labels"]:::engine
+            STATE["State<br/>progress from evidence"]:::engine
+        end
+        MENT["mentor.py · actor_critic.py<br/>teach · 2-way chat · review"]:::engine
+        ORCH --> CTX --> ENG
+        ORCH --> STATE
+        MENT --> STATE
+    end
+    IF --> ORCH
+    IF --> ING
+    IF --> MENT
+
+    %% ---- Repo + data ----
+    REPO["repo.py<br/>the ONLY SQL layer"]:::data
+    ENG --> REPO
+    STATE --> REPO
+    MENT --> REPO
+    ING --> REPO
+
+    subgraph DATA["Local-first data"]
+        direction TB
+        DB[("SQLite<br/>~/.eaedk/eaedk.db")]:::data
+        MIG["store/migrate.py<br/>forward-only 0001..0012"]:::data
+        SEED["seed.py"]:::data
+        YAML["packages/*.yaml<br/>boards·templates·rules<br/>signatures·arch_risks"]:::data
+        MIG -->|schema| DB
+        YAML --> SEED -->|data| DB
+    end
+    REPO <--> DB
+
+    %% ---- LLM outside the boundary ----
+    subgraph OUTSIDE["OUTSIDE the trust boundary"]
+        direction TB
+        GATE["llm/gateway.py + ollama.py<br/>Ollama (local) · may EXPLAIN only"]:::llm
+        FILT["POST-FILTER · postfilter.py<br/>strip any hex/size/clock/timing<br/>NOT in cited allowlist"]:::filt
+        GATE -->|raw text| FILT
+    end
+    MENT -. "explain / draft" .-> GATE
+    LOG  -. "triage" .-> GATE
+    ING  -. "elaborate" .-> GATE
+    REPO -. "cited allowlist" .-> FILT
+    FILT -->|"safe, cited text"| IF
+
+    class IF,CORE,ENG,DATA,OUTSIDE boundary;
