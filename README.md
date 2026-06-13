@@ -50,6 +50,14 @@ stripped before you ever read it.
 That inversion — deterministic engines hold the truth, the LLM is a thin, replaceable
 convenience layer — is the whole product.
 
+## Architecture at a glance
+
+Two front doors (CLI + Web) call the same deterministic engine core; every fact flows through
+`repo.py` into local SQLite. The LLM sits **outside** the trust boundary and reaches the user
+only through the post-filter. Full walk-through in **[docs/architecture-flow.md](docs/architecture-flow.md)**.
+
+![EAEDK complete software architecture](docs/architecture-flow.svg)
+
 ## The two guardrails
 
 EAEDK is built around two deterministic gates the LLM cannot bypass:
