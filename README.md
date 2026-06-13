@@ -37,7 +37,7 @@ eaedk web                 # opens at http://localhost:8080
 ```
 
 **On Ubuntu/Debian, prefer a system package.** Build a native `.deb` and install it with `apt` —
-no virtualenv, no `PYTHONPATH`, the `eaedk` command on your `$PATH` system-wide:
+no virtualenv to activate, the `eaedk` command on your `$PATH` system-wide:
 
 ```bash
 packaging/build-deb.sh                          # -> dist/eaedk_0.1.0_all.deb

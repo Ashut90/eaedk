@@ -43,6 +43,40 @@ _MANDATORY_UNKNOWN = {
               '"power-on", "reset sequence", "startup" — usually electrical characteristics'),
 }
 
+# Design-feasibility topics: "can I build a fail-safe bootloader / OTA scheme on this board?"
+# These ask whether a *design* is possible, not what a hardware value is. They must be matched
+# BEFORE the mandatory-unknown scan, because "bootloader" contains "boot" and would otherwise be
+# misread as the BOOT0/BOOT1 programming pins. A bare "boot pins" question has none of these
+# terms and still falls through to the UNKNOWN below.
+_DESIGN_BOOTLOADER = ("bootloader", "ota", "over-the-air", "over the air", "fail-safe",
+                      "failsafe", "fail safe", "rollback", "firmware update", "dual bank",
+                      "dual-bank", "a/b update")
+
+
+def _bootloader_feasibility(board_name: str, soc: dict, board: dict | None) -> dict:
+    """The deterministic, honest answer to a bootloader/OTA feasibility question: it is feasible
+    on any MCU with flash; point at the template and the rules that validate the layout. Cites
+    only the board's own flash size (already in the allowlist); ends with an action."""
+    flash = board.get("flash_bytes") if board else None
+    room = f" With {flash // 1024}KB of flash there is room for it." if isinstance(flash, int) else ""
+    return {"confidence": "HIGH",
+            "answer": (
+                f"Yes — a fail-safe bootloader / OTA update scheme is feasible on {board_name} "
+                f"({soc['arch']}).{room}\n\n"
+                "The shape is a small bootloader plus your application, with either a recovery "
+                "image or two application slots (A/B) so a bad update rolls back instead of "
+                "bricking the device.\n\n"
+                "EAEDK does not write the bootloader for you, but it validates the layout "
+                "deterministically once you set the addresses:\n"
+                "  - BOOTLOADER_APP_NO_OVERLAP — the bootloader and application regions do not collide\n"
+                "  - PARTITION_AB_SYMMETRY — both update slots are the same size (either can hold a full image)\n"
+                "  - RECOVERY_PRESENT — a recovery or slot_b partition exists to fall back to\n"
+                "  - the secure-boot chain — signature check, immutable key storage, anti-rollback, debug lock\n\n"
+                f"Start it with:  eaedk project init  (pick {board_name}, goal 'ota' for fail-safe "
+                "OTA, or 'bootloader').\n\n"
+                "Confidence: HIGH that it is feasible on this board. The specific partition "
+                "addresses are your design choice; EAEDK checks them when you set them.")}
+
 
 def _fmt(key: str, value: str) -> str:
     try:
@@ -91,6 +125,12 @@ def answer_query(conn: sqlite3.Connection, board_name: str, question: str,
                           "Confidence: HIGH.\n\nWhat this means: this sets your compiler target "
                           "(the -mcpu / -march flags) and your startup code — get it wrong and the "
                           "firmware won't run on the chip."}
+
+    # 1b) Design-feasibility questions (bootloader / OTA / fail-safe update). Answered from the
+    # board's capability, not deflected to boot pins. Precedes the mandatory-unknown scan so
+    # "bootloader" is not misread as "boot".
+    if any(t in q for t in _DESIGN_BOOTLOADER):
+        return _bootloader_feasibility(board_name, soc, board)
 
     # 2) Mandatory-but-missing items -> UNKNOWN with search instructions.
     for kw, (label, why, where) in _MANDATORY_UNKNOWN.items():

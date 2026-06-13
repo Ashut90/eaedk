@@ -110,6 +110,24 @@ def test_query_message_when_no_datasheet(tmp_path):
     assert "No datasheet has been ingested" in res["answer"]
 
 
+# --- bootloader/OTA feasibility no longer mis-routes to "boot pins" ---------
+
+def test_query_bootloader_feasibility_not_boot_pins(tmp_path):
+    conn = _seeded(tmp_path)
+    res = answer_query(conn, "Nucleo-F411RE", "can a fail safe bootloader be done?")
+    assert res["confidence"] == "HIGH"
+    assert "feasible" in res["answer"].lower()
+    assert "RECOVERY_PRESENT" in res["answer"] and "PARTITION_AB_SYMMETRY" in res["answer"]
+    assert "programming mode" not in res["answer"]      # NOT the boot-pin UNKNOWN deflection
+
+
+def test_query_boot_pins_still_unknown(tmp_path):
+    # A genuine boot-pin question (no bootloader/ota keyword) must still return the UNKNOWN.
+    conn = _seeded(tmp_path)
+    res = answer_query(conn, "Nucleo-F411RE", "what are the boot pin settings?")
+    assert res["confidence"] == "UNKNOWN" and "BOOT0" in res["answer"]
+
+
 # --- Fix 1: unknown-board on-ramp ------------------------------------------
 
 def test_create_skeleton_board_and_normalize_arch(tmp_path):
