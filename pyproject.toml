@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eaedk"
-version = "0.1.0"
+version = "0.1.1"
 description = "Embedded AI Engineering Development Kit — local-first structured engineering reasoning for embedded bring-up"
 requires-python = ">=3.11"
 dependencies = [
