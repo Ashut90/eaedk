@@ -36,6 +36,20 @@ pip install -e '.[web]'   # one-time: adds the web interface
 eaedk web                 # opens at http://localhost:8080
 ```
 
+**On Ubuntu/Debian, prefer a system package.** Build a native `.deb` and install it with `apt` —
+no virtualenv, no `PYTHONPATH`, the `eaedk` command on your `$PATH` system-wide:
+
+```bash
+packaging/build-deb.sh                          # -> dist/eaedk_0.1.0_all.deb
+sudo apt install ./dist/eaedk_0.1.0_all.deb     # pulls python3-yaml automatically
+eaedk db init && eaedk db seed                  # once per user
+```
+
+The full CLI needs only `python3` + `python3-yaml` and works offline; the browser UI
+(`python3-fastapi`, `python3-uvicorn`) and datasheet ingestion (`python3-fitz`) are pulled in
+only if you want them. See [packaging/README.md](packaging/README.md) for details and the
+AppImage trade-offs.
+
 > ## The LLM cannot assert a hardware fact. It can only reason from what the database has verified.
 
 Every other AI coding tool will happily tell you the STM32F407 runs at 168 MHz, invent a DDR
