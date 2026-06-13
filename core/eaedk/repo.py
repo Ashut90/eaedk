@@ -221,6 +221,56 @@ def list_boards(conn: sqlite3.Connection, query: str | None = None) -> list[sqli
         "ORDER BY b.name").fetchall()
 
 
+def find_similar_boards(conn: sqlite3.Connection, arch: str | None, flash_bytes: int | None,
+                        ram_bytes: int | None, peripherals: set[str] | None = None,
+                        exclude: str | None = None, top: int = 3) -> list[dict]:
+    """Deterministic similarity scoring against every other board (v2.3.0). No LLM.
+
+    +40 same arch, +20 flash within 2x, +20 RAM within 2x, +10 same vendor family,
+    +10 shared peripheral set. Returns the top ``top`` as dicts with score, confidence band, and
+    a per-criterion breakdown.
+    """
+    peripherals = peripherals or set()
+    rows = conn.execute(
+        "SELECT b.name, b.flash_bytes, b.ram_bytes, s.name AS soc, s.arch, s.vendor "
+        "FROM boards b JOIN socs s ON s.id = b.soc_id").fetchall()
+    # the query board's vendor (for the +10 same-vendor criterion), when the query is a known board
+    q_vendor = next((r["vendor"] for r in rows if r["name"] == exclude), None)
+
+    def _within_2x(a, b):
+        return a is not None and b is not None and a > 0 and b > 0 and 0.5 <= a / b <= 2.0
+
+    scored = []
+    for r in rows:
+        if r["name"] == exclude:
+            continue
+        caps = board_capability_names(conn, r["name"])
+        detail, score = {}, 0
+        detail["arch"] = (arch is not None and r["arch"] == arch)
+        if detail["arch"]:
+            score += 40
+        detail["flash"] = _within_2x(flash_bytes, r["flash_bytes"])
+        if detail["flash"]:
+            score += 20
+        detail["ram"] = _within_2x(ram_bytes, r["ram_bytes"])
+        if detail["ram"]:
+            score += 20
+        detail["vendor"] = (q_vendor is not None and r["vendor"] == q_vendor)
+        if detail["vendor"]:
+            score += 10
+        shared = peripherals & caps
+        detail["peripherals"] = len(shared) >= 2
+        if detail["peripherals"]:
+            score += 10
+        conf = "HIGH" if score >= 70 else "MEDIUM" if score >= 40 else "LOW"
+        scored.append({"name": r["name"], "soc": r["soc"], "arch": r["arch"],
+                       "flash_bytes": r["flash_bytes"], "ram_bytes": r["ram_bytes"],
+                       "vendor": r["vendor"], "score": score, "confidence": conf,
+                       "shared_peripherals": sorted(shared), "match": detail})
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return [s for s in scored if s["score"] > 0][:top]
+
+
 # --- mentor layer ----------------------------------------------------------
 
 def board_capability_map(conn: sqlite3.Connection, board_name: str) -> list[sqlite3.Row]:

@@ -234,3 +234,32 @@ def test_chat_progress_question_reads_state_engine(client):
     r = client.post("/api/mentor/chat", json={"board": "STM32F103-BluePill", "project": "cp",
         "messages": [{"role": "user", "content": "how am I doing?"}], "use_llm": False}).json()
     assert "/" in r["answer"] and "next task" in r["answer"].lower()
+
+
+# --- v2.3.0: datasheet intelligence + query --------------------------------
+
+def test_ask_route_confidence(client):
+    hi = client.post("/api/ask", json={"board": "STM32F103-BluePill",
+                                       "question": "what is the flash size?"}).json()
+    assert hi["confidence"] == "HIGH" and "64KB" in hi["answer"]
+    unk = client.post("/api/ask", json={"board": "STM32F103-BluePill",
+                                        "question": "boot pins?"}).json()
+    assert unk["confidence"] == "UNKNOWN" and "BOOT0" in unk["answer"]
+
+
+def test_similar_route(client):
+    r = client.get("/api/similar/STM32F103-BluePill").json()
+    assert r["similar"][0]["name"] == "Nucleo-F103RB"
+
+
+def test_ingest_text_returns_report(client):
+    text = ("3.2 Memory map. The Flash memory base address is 0x08000000 with 512 Kbytes of "
+            "embedded Flash. SRAM base is 0x20000000 with 128 Kbytes of SRAM. Up to 168 MHz.")
+    r = client.post("/api/ingest", json={"board": "Nucleo-F411RE", "text": text}).json()
+    rep = r["report"]
+    assert {"found", "missing", "priority", "risks", "similar", "can", "cannot", "next_step"} <= set(rep)
+    assert any(m["label"].startswith("Boot") for m in rep["missing"])
+
+
+def test_ingest_page_served(client):
+    assert client.get("/static/ingest.html").status_code == 200

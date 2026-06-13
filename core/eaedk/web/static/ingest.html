@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — Datasheet</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Datasheet Intelligence</h1>
+    <p class="sub">Point EAEDK at a datasheet and it reads it for you: what's there (cited),
+      what's missing (and where to find it), the risks, the closest known board, and what it can
+      do with the data. You don't need to know what to look for.</p>
+
+    <div class="card">
+      <label for="board">Which board is this datasheet for?</label>
+      <select id="board"><option value="">Loading…</option></select>
+
+      <label for="pdf">Datasheet PDF</label>
+      <input type="file" id="pdf" accept="application/pdf">
+
+      <label for="text">…or paste datasheet text</label>
+      <textarea id="text" class="mono" placeholder="Paste a page or two of the datasheet here if you don't have the PDF handy…"></textarea>
+
+      <button id="analyze">Analyze datasheet</button>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">Ask anything about this board</h2>
+      <input type="text" id="q" placeholder="e.g. what is the default clock? / what are the boot pins?" autocomplete="off">
+      <button id="ask">Ask</button>
+      <div id="answer"></div>
+    </div>
+
+    <div id="report"></div>
+  </main>
+
+  <script>
+    async function init() {
+      showCommand("eaedk ingest --file <datasheet>.pdf --board <name> --analyze");
+      const b = await api("/api/boards");
+      document.getElementById("board").innerHTML = b.error ? `<option>(couldn't load)</option>`
+        : b.boards.map(x => `<option value="${escapeHtml(x.name)}">${escapeHtml(x.name)} — ${escapeHtml(x.soc)}</option>`).join("");
+    }
+
+    function fileToBase64(file) {
+      return new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result.split(",")[1]);
+        r.onerror = rej; r.readAsDataURL(file);
+      });
+    }
+
+    async function analyze() {
+      const board = document.getElementById("board").value;
+      const file = document.getElementById("pdf").files[0];
+      const text = document.getElementById("text").value.trim();
+      const el = document.getElementById("report");
+      showCommand(`eaedk ingest --file <datasheet>.pdf --board ${board} --analyze`);
+      el.innerHTML = `<p class="kv">Reading the datasheet…</p>`;
+      const payload = { board };
+      if (file) payload.pdf_base64 = await fileToBase64(file);
+      else if (text) payload.text = text;
+      else { el.innerHTML = `<div class="note">Upload a PDF or paste some datasheet text first.</div>`; return; }
+      const r = await api("/api/ingest", { method: "POST",
+        headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+      if (r.error) { showError(el, r); return; }
+      renderReport(el, r.report);
+    }
+
+    function renderReport(el, rep) {
+      const found = rep.found.length
+        ? rep.found.map(f => `<div>✓ <b>${escapeHtml(f.label)}</b>: <span class="mono">${escapeHtml(f.value)}</span>
+            <span class="kv">(${escapeHtml(f.citation)})</span> ${confBadge(f.confidence)}</div>`).join("")
+        : `<div class="kv">Nothing extractable was found — see what's missing below.</div>`;
+      const missing = rep.missing.map(m => `<div class="card" style="border-color:var(--red)">
+        <b>✗ ${escapeHtml(m.label)}</b>
+        <div class="teach"><b>Why mandatory:</b> ${escapeHtml(m.why)}</div>
+        <div class="teach"><b>Where to look:</b> ${escapeHtml(m.where)}</div></div>`).join("");
+      const priority = rep.priority.map(p => `<div>${p.found ? "✓" : "✗"} ${p.n}. ${escapeHtml(p.label)}
+        — ${confBadge(p.found ? "HIGH" : "UNKNOWN")} ${p.status}</div>`).join("");
+      const risks = rep.risks.map(rk => `<div class="card" style="border-color:var(--yellow)">
+        ${badge(rk.severity, rk.severity === "HIGH" ? "RED" : rk.severity === "MEDIUM" ? "YELLOW" : "GREEN")}
+        &nbsp;<b>${escapeHtml(rk.title)}</b><div class="kv" style="margin-top:4px">${escapeHtml(rk.explanation)}</div></div>`).join("");
+      const sim = rep.similar.length ? (() => { const m = rep.similar[0];
+        return `<div class="card"><b>${escapeHtml(m.name)}</b> — ${m.score}% match ${confBadge(m.confidence)}
+          <div class="teach"><b>Probably the same:</b> ${m.works_same.map(escapeHtml).join("; ")}</div>
+          <div class="teach"><b>You MUST verify:</b> ${m.must_verify.map(escapeHtml).join("; ")}</div>
+          <div class="kv">Suggested template: ${escapeHtml(m.suggested_template)}</div></div>`; })() : "";
+      const can = rep.can.map(c => `<div>✓ ${escapeHtml(c)}</div>`).join("");
+      const cannot = rep.cannot.map(c => `<div class="kv">✗ ${escapeHtml(c)}</div>`).join("");
+      el.innerHTML = `
+        <h2>1. What I found (cited)</h2><div class="card">${found}</div>
+        <h2>2. What I could not find (mandatory)</h2>${missing || '<div class="note">All mandatory items found.</div>'}
+        <h2>3. Priority order</h2><div class="card">${priority}</div>
+        <h2>4. Risk warnings</h2>${risks || '<div class="kv">No architecture-specific risks.</div>'}
+        <h2>5. Closest known board</h2>${sim || '<div class="kv">No match.</div>'}
+        <h2>6. What EAEDK can / cannot do</h2><div class="card">${can}<hr style="border-color:var(--line)">${cannot}</div>
+        <h2>7. Your immediate next step</h2>
+        <div class="note"><b>${escapeHtml(rep.next_step.action)}</b>
+          ${rep.next_step.why ? `<div>${escapeHtml(rep.next_step.why)}</div>` : ""}
+          ${rep.next_step.where ? `<div class="kv">${escapeHtml(rep.next_step.where)}</div>` : ""}</div>`;
+    }
+
+    async function ask() {
+      const board = document.getElementById("board").value;
+      const question = document.getElementById("q").value.trim();
+      const el = document.getElementById("answer");
+      if (!question) return;
+      showCommand(`eaedk ask --board ${board} "${question}"`);
+      el.innerHTML = `<p class="kv">Thinking…</p>`;
+      const r = await api("/api/ask", { method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ board, question, use_llm: false }) });
+      if (r.error) { showError(el, r); return; }
+      el.innerHTML = `<div class="card" style="margin-top:10px">${confBadge(r.confidence)}
+        <pre class="code" style="border:none;background:transparent;padding:8px 0">${escapeHtml(r.answer)}</pre></div>`;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      init();
+      document.getElementById("analyze").addEventListener("click", analyze);
+      document.getElementById("ask").addEventListener("click", ask);
+      document.getElementById("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,61 @@
+# Architecture-family bring-up risks (v2.3.0). Deterministic warnings surfaced in the datasheet
+# intelligence report (Section 4) when the board's SoC arch matches. `match` is a substring tested
+# against the lowercased arch (e.g. "arm-cortex-m4"). `requires_fact`, if present, suppresses the
+# warning once that fact key is confirmed for the board. Curated engineering knowledge, not LLM.
+- match: cortex-m4
+  title: "Cortex-M4 FPU not confirmed enabled"
+  severity: MEDIUM
+  explanation: "If your code uses floating point and the FPU is not enabled in startup, you get a HardFault. Enable the FPU (CPACR) in your startup code."
+- match: cortex-m4
+  title: "Flash latency (wait states) not confirmed for target clock"
+  severity: LOW
+  explanation: "At high clock speeds, flash wait states must be set BEFORE switching to full speed, or the CPU reads garbage instructions and crashes."
+  requires_fact: sysclk_max_hz
+- match: cortex-m4
+  title: "Vector table offset (VTOR) not confirmed"
+  severity: MEDIUM
+  explanation: "After a bootloader jumps to your app, interrupts vector to the wrong address unless VTOR points at your app's vector table."
+- match: cortex-m
+  title: "Watchdog default state unknown"
+  severity: HIGH
+  explanation: "If the independent watchdog (IWDG) is enabled at reset, you have roughly one second before the chip resets itself. Your first code must disable it or feed it immediately."
+- match: cortex-m
+  title: "Boot pins not confirmed"
+  severity: HIGH
+  explanation: "Without confirmed boot-pin state your programmer may not connect. On STM32, verify BOOT0 is LOW for normal boot from flash."
+- match: cortex-m0
+  title: "No hardware divide on Cortex-M0/M0+"
+  severity: LOW
+  explanation: "These cores have no hardware divide. A wrong -mcpu flag can emit a UDIV instruction the chip can't execute (a fault). Build with the exact -mcpu for your core."
+- match: cortex-a
+  title: "MMU not initialised"
+  severity: HIGH
+  explanation: "A Cortex-A application processor needs its MMU and caches set up before Linux can start; without it the kernel won't boot."
+- match: cortex-a
+  title: "Cache coherency between cores"
+  severity: MEDIUM
+  explanation: "On multi-core Cortex-A, memory shared between cores must use coherent/cache-managed regions or you get silent data corruption."
+- match: cortex-a
+  title: "Device tree (DTB) must match the hardware"
+  severity: HIGH
+  explanation: "If the DTB doesn't match the real peripherals, driver probe() calls fail and devices never appear."
+- match: xtensa
+  title: "Partition table overlap"
+  severity: HIGH
+  explanation: "On ESP32 an overlapping partition table silently corrupts flash. Validate the table before flashing."
+- match: xtensa
+  title: "NVS not initialised"
+  severity: MEDIUM
+  explanation: "Call nvs_flash_init() before Wi-Fi/BLE, or stored credentials are lost on reset and Wi-Fi fails to start."
+- match: xtensa
+  title: "Task watchdog must be fed on both cores"
+  severity: MEDIUM
+  explanation: "The ESP32 has two cores; a task that never yields trips the task watchdog and reboots the chip."
+- match: avr
+  title: "Fuse bits misconfigured"
+  severity: HIGH
+  explanation: "Wrong fuse bits (clock source, SPIEN) make the board appear dead and un-flashable. Double-check fuses before writing them."
+- match: avr
+  title: "F_CPU mismatch"
+  severity: HIGH
+  explanation: "If F_CPU in your code doesn't match the actual clock, every delay and baud rate is wrong and UART output is garbage."

@@ -69,8 +69,42 @@
           flash ${fmtBytes(d.board.flash_bytes)} · RAM ${fmtBytes(d.board.ram_bytes)}
           &nbsp;<span class="kv">(${escapeHtml(d.light_reason)})</span></p>
         <h2>What this board can do</h2>${caps}
+        <h2>Ask about this board</h2>
+        <div class="card">
+          <input type="text" id="askq" placeholder="e.g. what is the flash size? / what are the boot pins?" autocomplete="off">
+          <button id="askbtn">Ask</button>
+          <div id="askans"></div>
+        </div>
+        <h2>Similar boards</h2><div id="similar" class="kv">Loading…</div>
         <h2>Your learning path — do these in order</h2>${steps}`;
+      document.getElementById("askbtn").addEventListener("click", () => askBoard(name));
+      document.getElementById("askq").addEventListener("keydown", e => { if (e.key === "Enter") askBoard(name); });
+      loadSimilar(name);
       el.scrollIntoView({ block: "start" });
+    }
+
+    async function askBoard(name) {
+      const question = document.getElementById("askq").value.trim();
+      const ans = document.getElementById("askans");
+      if (!question) return;
+      showCommand(`eaedk ask --board ${name} "${question}"`);
+      ans.innerHTML = `<p class="kv">Thinking…</p>`;
+      const r = await api("/api/ask", { method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({ board: name, question, use_llm: false }) });
+      if (r.error) { showError(ans, r); return; }
+      ans.innerHTML = `<div style="margin-top:10px">${confBadge(r.confidence)}
+        <pre class="code" style="border:none;background:transparent;padding:8px 0">${escapeHtml(r.answer)}</pre></div>`;
+    }
+
+    async function loadSimilar(name) {
+      const el = document.getElementById("similar");
+      const r = await api("/api/similar/" + encodeURIComponent(name));
+      if (r.error || !r.similar.length) { el.innerHTML = "No close matches."; return; }
+      el.innerHTML = r.similar.map(m => `<div class="card">
+        <b>${escapeHtml(m.name)}</b> — ${m.score}% match ${confBadge(m.confidence)}
+        <div class="teach"><b>Probably the same:</b> ${m.works_same.map(escapeHtml).join("; ")}</div>
+        <div class="teach"><b>Verify:</b> ${m.must_verify.map(escapeHtml).join("; ")}</div>
+        </div>`).join("");
     }
 
     document.addEventListener("DOMContentLoaded", loadBoards);

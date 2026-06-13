@@ -6,9 +6,16 @@ const PAGES = [
   ["validate.html", "Validate"],
   ["export.html",   "Export"],
   ["studio.html",   "Code Studio"],
+  ["ingest.html",   "Datasheet"],
   ["logs.html",     "Log Analyzer"],
   ["mentor.html",   "Mentor"],
 ];
+
+/* HIGH/MEDIUM/LOW/UNKNOWN confidence -> badge class. */
+function confClass(c) {
+  return { HIGH: "green", MEDIUM: "yellow", LOW: "red", UNKNOWN: "grey" }[(c||"").toUpperCase()] || "grey";
+}
+function confBadge(c) { return `<span class="badge ${confClass(c)}">${escapeHtml(c||"?")}</span>`; }
 
 /* Render the top nav into <nav class="top">, marking the current page active. */
 function renderNav() {

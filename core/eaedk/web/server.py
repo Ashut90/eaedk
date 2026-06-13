@@ -108,6 +108,76 @@ def api_board_detail(name: str):
     }
 
 
+# --- Datasheet Intelligence + Query (v2.3.0) -------------------------------
+
+@app.get("/api/similar/{name}")
+def api_similar(name: str):
+    from ..engines.ingest.similarity import similar_with_guidance
+    conn = _conn()
+    if repo.load_board(conn, name)[0] is None:
+        return _err(f"Board not found: {name!r}.", "Pick a board from the Boards list.", status=404)
+    return {"board": name, "similar": similar_with_guidance(conn, name, top=3)}
+
+
+@app.post("/api/ask")
+async def api_ask(request: Request):
+    from ..engines.ingest.query import answer_query
+    body = await request.json()
+    board = body.get("board") or ""
+    question = (body.get("question") or "").strip()
+    use_llm = bool(body.get("use_llm"))
+    if not question:
+        return _err("Type a question first.", "Ask anything about the board, e.g. "
+                    "\"what is the default clock?\"")
+    conn = _conn()
+    if repo.load_board(conn, board)[0] is None:
+        return _err(f"Board not found: {board!r}.", "Pick a board first.")
+    return {"board": board, **answer_query(conn, board, question, use_llm=use_llm)}
+
+
+@app.get("/api/report/{name}")
+def api_report(name: str):
+    from ..engines.ingest.report import intelligence_report
+    conn = _conn()
+    if repo.load_board(conn, name)[0] is None:
+        return _err(f"Board not found: {name!r}.", "Pick a board first.")
+    return intelligence_report(conn, name)
+
+
+@app.post("/api/ingest")
+async def api_ingest(request: Request):
+    """Ingest a datasheet (PDF bytes or pasted text) and return the full 7-section report."""
+    import base64
+    import tempfile
+    from ..engines.ingest import ingest_datasheet
+    from ..engines.ingest.report import intelligence_report
+    from ..engines.ingest.extract import Page
+    body = await request.json()
+    board = body.get("board") or ""
+    conn = _conn()
+    if repo.load_board(conn, board)[0] is None:
+        return _err(f"Board not found: {board!r}.", "Pick a board from the dropdown first.")
+    try:
+        if body.get("pdf_base64"):
+            raw = base64.b64decode(body["pdf_base64"])
+            with tempfile.NamedTemporaryFile("wb", suffix=".pdf", delete=False) as f:
+                f.write(raw)
+                tmp = f.name
+            ingest_datasheet(conn, tmp, board)
+            Path(tmp).unlink(missing_ok=True)
+        elif body.get("text"):
+            # pasted datasheet text -> a single synthetic page (no PDF reader needed)
+            text = body["text"]
+            ingest_datasheet(conn, "pasted.txt", board, reader=lambda _p: [Page(1, text)])
+        else:
+            return _err("No datasheet provided.", "Upload a PDF or paste datasheet text, then "
+                        "click Analyze.")
+    except Exception as e:
+        return _err(f"Couldn't read that datasheet ({e}).",
+                    "Make sure it's a real PDF or plain text, then try again.")
+    return {"board": board, "report": intelligence_report(conn, board)}
+
+
 # --- Page 2: Project Setup -------------------------------------------------
 
 # Feasibility (engine) -> UI traffic light + plain-English label/explanation.

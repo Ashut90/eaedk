@@ -475,6 +475,26 @@ def _llm_section(conn, project, resp, kind: str, **kw) -> None:
 
 def cmd_ask(args):
     conn = _conn(args)
+    # v2.3.0: `eaedk ask --board <name> "question"` -> the Board Query Engine. The project form
+    # (`eaedk ask <project>`) is unchanged.
+    if args.board:
+        question = args.question or args.name
+        if not question:
+            print("error: ask --board <name> needs a question, e.g. "
+                  "eaedk ask --board X \"what is the default clock?\"", file=sys.stderr)
+            sys.exit(2)
+        if repo.load_board(conn, args.board)[0] is None:
+            _unknown_board(conn, args.board); sys.exit(2)
+        if getattr(args, "file", None):
+            from .engines.ingest import ingest_datasheet
+            try:
+                ingest_datasheet(conn, args.file, args.board, use_llm=args.llm)
+            except Exception as e:
+                print(f"error reading datasheet: {e}", file=sys.stderr); sys.exit(2)
+        from .engines.ingest.query import answer_query
+        res = answer_query(conn, args.board, question, use_llm=args.llm)
+        print(res["answer"])
+        return
     p = _require_project(conn, args.name)
     resp = assess_project(conn, p)
     print(resp.to_markdown())
@@ -616,6 +636,10 @@ def cmd_ingest(args):
           f"({counts}). Review with `eaedk ingest --board {args.board} --review`.")
     for c in res.candidates:
         print(f"  #{c['id']} [{c['confidence']}/{c['method']}] {c['key']} = {c['value']} (p.{c['page']})")
+    if getattr(args, "analyze", False):
+        from .engines.ingest.report import intelligence_report, render_report_text
+        print()
+        print(render_report_text(intelligence_report(conn, args.board)))
 
 
 def _mentor_chat_repl(conn, board: str, use_llm: bool) -> None:
@@ -866,7 +890,10 @@ def build_parser() -> argparse.ArgumentParser:
     da = dc.add_parser("add"); da.add_argument("name"); da.add_argument("--title", required=True)
     da.add_argument("--rationale"); da.add_argument("--alt"); da.set_defaults(func=cmd_decision_add)
 
-    ak = sub.add_parser("ask"); ak.add_argument("name"); ak.add_argument("question", nargs="?")
+    ak = sub.add_parser("ask"); ak.add_argument("name", nargs="?")
+    ak.add_argument("question", nargs="?")
+    ak.add_argument("--board", help="ask the Board Query Engine about a board (with confidence)")
+    ak.add_argument("--file", help="a datasheet PDF to ingest first, then answer from it")
     _add_llm(ak); ak.set_defaults(func=cmd_ask)
     ex = sub.add_parser("explain"); ex.add_argument("name"); ex.add_argument("--rule", required=True)
     _add_llm(ex); ex.set_defaults(func=cmd_explain)
@@ -892,6 +919,8 @@ def build_parser() -> argparse.ArgumentParser:
     ing.add_argument("--review", action="store_true")
     ing.add_argument("--confirm", type=int); ing.add_argument("--reject", type=int)
     ing.add_argument("--confidence", choices=["HIGH", "MEDIUM", "LOW"])
+    ing.add_argument("--analyze", action="store_true",
+                     help="after ingest, print the full datasheet intelligence report")
     _add_llm(ing); ing.set_defaults(func=cmd_ingest)
 
     ex = sub.add_parser("export"); ex.add_argument("name"); ex.add_argument("--out")
