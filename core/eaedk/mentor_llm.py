@@ -218,18 +218,22 @@ def _domain_reasoning(domain: str, caps: set, family: str | None, board_name: st
 
 # --- Role detection (v2.5.0): decide the behavioural mode in Python, before the model runs -------
 
+# Simulation-specific triggers: only THESE (with the Wokwi flag set) make the mentor the
+# Reverse Mentor. A Wokwi user's design or debug question still gets Architect / Peer (v2.5.1).
+_SIM_TRIGGERS = ("wokwi", "simulator", "virtual", "blocking", "boot pin", "boot0",
+                 "can't export", "cannot export", "won't export")
+
+
 def detect_mentor_role(user_message: str, page_context: dict) -> str:
-    """Pick the mentor's behavioural mode deterministically (docs/25). Priority:
-    SPONSOR -> REVERSE_MENTOR -> PEER_MENTOR -> SYSTEM_ARCHITECT (default)."""
+    """Pick the mentor's behavioural mode deterministically (docs/25, reordered in v2.5.1):
+    SPONSOR -> PEER_MENTOR -> SYSTEM_ARCHITECT -> REVERSE_MENTOR(sim trigger + flag) -> ARCHITECT.
+    The Wokwi flag informs the 'Try this' (point at the simulator) but no longer overrides the
+    reasoning role for ordinary questions."""
     msg = (user_message or "").lower()
 
     # Role C — deterministic only, never needs the model.
     if (page_context.get("page_type") or "") in ("validate", "export"):
         return "SPONSOR"
-
-    # Role D — Wokwi simulation path.
-    if page_context.get("wokwi_flag"):
-        return "REVERSE_MENTOR"
 
     # Role B — the user shared code or is debugging.
     code = page_context.get("current_code") or ""
@@ -238,13 +242,18 @@ def detect_mentor_role(user_message: str, page_context: dict) -> str:
     if len(code) > 50 or any(t in msg for t in peer_triggers):
         return "PEER_MENTOR"
 
-    # Role A — architectural / design / feasibility question (and the default).
+    # Role A — architectural / design / feasibility question.
     arch_triggers = ("should i use", "which board", "hal or", "bare metal", "where do i start",
                      "how do i design", "architecture", "which peripheral", "why would i",
                      "can i do", "is it possible", "what board", "robotics", "motor", "sensor",
                      "iot", "wifi", "bootloader", "fail-safe", "rtos", "driver")
     if any(t in msg for t in arch_triggers):
         return "SYSTEM_ARCHITECT"
+
+    # Role D — only for a simulation-specific question on the Wokwi path.
+    if page_context.get("wokwi_flag") and any(t in msg for t in _SIM_TRIGGERS):
+        return "REVERSE_MENTOR"
+
     return "SYSTEM_ARCHITECT"
 
 
@@ -303,9 +312,10 @@ _ARCH_GUARD = ("\nNote: the register names and AF numbers in the examples are ST
                "not given — name the datasheet table to confirm it instead.")
 
 
-def _role_ctx(board_name, soc, board, caps_set, project, step, current_code) -> dict:
+def _role_ctx(board_name, soc, board, caps_set, project, step, current_code,
+              family=None) -> dict:
     flash, ram = board.get("flash_bytes"), board.get("ram_bytes")
-    return {"board_name": board_name, "arch": soc["arch"],
+    return {"board_name": board_name, "arch": soc["arch"], "family": family,
             "peripherals": ", ".join(sorted(caps_set)) or "(none recorded)",
             "flash": f"{flash // 1024}KB" if isinstance(flash, int) else "unknown",
             "ram": f"{ram // 1024}KB" if isinstance(ram, int) else "unknown",
@@ -356,7 +366,7 @@ Never list all peripherals generically. Never suggest blinking an LED when the u
 something else. End with exactly one specific question.""" + _ARCH_GUARD
 
 
-_PEER_TEMPLATE = """You are a colleague sitting next to the engineer who fell into the same trap
+_PEER_HEAD = """You are a colleague sitting next to the engineer who fell into the same trap
 yesterday. You look at their code and find the ONE hardware consequence they have not considered. You
 never comment on style or unused variables.
 
@@ -366,37 +376,66 @@ Flash: {flash} | RAM: {ram}
 Current code:
 {current_code}
 
-STUDY THESE EXAMPLES:
+STUDY THESE EXAMPLES (they are for THIS board's chip family — reason from them):
+"""
 
+_PEER_TAIL = """
+Now review the user's code or question in exactly this style. Find the one hardware consequence they
+have not considered. Never comment on style. End with one specific question about their code.""" \
+    + _ARCH_GUARD
+
+# One BAD/GOOD pair per chip family — the model sees the family that matches the actual board.
+_PEER_EXAMPLES = {
+    "stm32": """
 EXAMPLE 1 — "my code compiles but nothing happens" (STM32)
 WRONG: "There could be several reasons. Check your connections and toolchain."
-RIGHT: "Three things cause this exact symptom on STM32, in the order I see them: 1) Clock not enabled —
-every peripheral is off by default; configuring UART registers before enabling its APB clock writes to
-dead hardware, no error, just silence. Did you enable the USART clock in RCC before any UART register
-access? 2) Wrong alternate function — PA9 can be USART1_TX (AF7) or TIM1_CH2 (AF1); on AF1 your pin is
-a timer output, not UART. Check the alternate-function table — which AF did you write to GPIOA->AFR?
-3) Wrong baud divisor — if BRR is computed for the wrong clock, the terminal sees garbage. Which of the
-three did you check first?"
+RIGHT: "Three things cause this on STM32, in order: 1) Clock not enabled — every peripheral is off by
+default; configuring UART registers before enabling its APB clock writes to dead hardware, no error,
+just silence. Did you enable the USART clock in RCC first? 2) Wrong alternate function — PA9 can be
+USART1_TX (AF7) or TIM1_CH2 (AF1); on AF1 the pin is a timer output, not UART. Which AF did you write
+to GPIOA->AFR? 3) Wrong baud divisor — if BRR is computed for the wrong clock, the terminal sees
+garbage. Which of the three did you check first?"
 
 EXAMPLE 2 — engineer submits UART init code
 WRONG: "Looks good. Add error handling and use const where appropriate."
 RIGHT: "You enabled the USART clock and set the pin modes — clean. One thing before you flash: which
-alternate-function number did you pass to that TX pin? If it's the timer AF instead of the UART AF, the
-code compiles, the compiler says nothing, but the pin is a timer output and your console is dead. Check
-the alternate-function table — what AF value did you actually write?"
-
-EXAMPLE 3 — "do I init GPIO before or after UART?"
-WRONG: "Init GPIO before UART as a best practice."
-RIGHT: "Order matters for a specific reason, not convention. You need the GPIO clock on before you can
-set the pin's alternate function, and the AF set before UART transmits, or your first bytes go out on
-an unconfigured pin. Sequence: enable GPIO clock, set the pin to AF mode, set the AF number, enable the
-UART clock, configure UART registers, enable UART. Swap the AF-set and the UART-clock-enable and you
-configure a peripheral with no clock yet — on some STM32 families that silently fails. Clocks first,
-then configuration."
-
-Now review the user's code or question in exactly this style. Find the one hardware consequence they
-have not considered. Never comment on style. End with one specific question about their code.""" \
-    + _ARCH_GUARD
+alternate-function number did you pass to the TX pin? If it's the timer AF instead of the UART AF, the
+code compiles, the board is silent, the console is dead. Check the alternate-function table — what AF
+value did you write?"
+""",
+    "avr": """
+EXAMPLE 1 — "my code compiles but nothing happens" (AVR / ATmega)
+WRONG: "Make sure the peripheral clock is enabled before you use the peripheral."
+RIGHT: "On AVR there is no peripheral clock to gate — the #1 cause is F_CPU and the fuse bits. If the
+F_CPU you define in code does not match the clock the fuses actually select (the internal 1MHz/8MHz
+oscillator vs an external 16MHz crystal), then _delay_ms() runs at the wrong speed AND your UART baud
+divisor (UBRR, computed from F_CPU) is wrong — the serial monitor shows garbage or nothing. Does your
+F_CPU match the clock the low fuse (CKSEL) selects? And is UBRR computed from that same F_CPU? Which
+did you check first — the fuse/clock, or the baud math?"
+""",
+    "esp32": """
+EXAMPLE 1 — "my code compiles but nothing happens" (ESP32)
+WRONG: "Check which alternate-function number you assigned to the pin."
+RIGHT: "On ESP32 the cause is rarely a pin function — it is usually that you blocked the WiFi core. The
+WiFi/BLE stack runs on Core 0; a long blocking loop on that core (a busy-wait, a long delay with no
+yield, a blocking read) starves the idle task, the task watchdog fires, and the chip reboots — it
+looks like 'nothing happens' but is a reboot loop. Are you blocking on Core 0? Pin the heavy task to
+Core 1 with xTaskCreatePinnedToCore, or break it up with vTaskDelay so the watchdog is fed. Second:
+did nvs_flash_init() run before any WiFi call — a bad NVS partition reboot-loops too. Which are you
+hitting — a blocked core, or NVS?"
+""",
+    "rp2040": """
+EXAMPLE 1 — "my code compiles but nothing happens" (RP2040)
+WRONG: "Enable the APB2 clock for the peripheral first."
+RIGHT: "RP2040 has no APB2 — that is an STM32 register. Two RP2040-specific traps cause silent failure:
+1) Multicore — if you launched code on core1 (multicore_launch_core1) and it touches a resource core0
+also uses without a lock or the inter-core FIFO, you get a race that hangs one core with no error.
+2) PIO — a PIO state machine needs its clock divider set, its program loaded, AND the state machine
+enabled (pio_sm_set_enabled); miss the enable and the PIO sits idle silently. Which are you using —
+multicore, or PIO? That tells us where the silence is."
+""",
+}
+_PEER_EXAMPLES["default"] = _PEER_EXAMPLES["stm32"]
 
 
 _REVERSE_TEMPLATE = """You are a mentor who knows the difference between what matters in a real circuit
@@ -435,7 +474,8 @@ def build_architect_prompt(ctx: dict) -> str:
 
 
 def build_peer_mentor_prompt(ctx: dict) -> str:
-    return _PEER_TEMPLATE.format(**ctx)
+    examples = _PEER_EXAMPLES.get(ctx.get("family") or "default", _PEER_EXAMPLES["default"])
+    return _PEER_HEAD.format(**ctx) + examples + _PEER_TAIL
 
 
 def build_reverse_mentor_prompt(ctx: dict) -> str:
@@ -572,7 +612,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
-        _role_ctx(board_name, soc, board, cap_set, project, step, current_code))
+        _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam))
     raw = gw.provider.generate(system, prompt)
     filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
