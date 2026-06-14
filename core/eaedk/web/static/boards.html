@@ -5,6 +5,7 @@
   <title>EAEDK — Boards</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
 </head>
 <body>
   <nav class="top"></nav>
@@ -27,6 +28,7 @@
   </main>
 
   <script>
+    let CURRENT_BOARD = null;   // the board the chat reasons about (last opened, or the first listed)
     async function loadBoards() {
       showCommand("eaedk board list");
       const env = await api("/api/boards");
@@ -43,9 +45,11 @@
           <td class="mono">${fmtBytes(b.ram_bytes)}</td>
           <td>${badge(b.confidence || "—", b.light)}</td>
         </tr>`).join("");
+      if (!CURRENT_BOARD && env.boards.length) CURRENT_BOARD = env.boards[0].name;
     }
 
     async function openBoard(name) {
+      CURRENT_BOARD = name;
       showCommand(`eaedk mentor --board ${name}`);
       const el = document.getElementById("detail");
       el.innerHTML = `<p class="kv">Loading ${escapeHtml(name)}…</p>`;
@@ -107,7 +111,12 @@
         </div>`).join("");
     }
 
-    document.addEventListener("DOMContentLoaded", loadBoards);
+    document.addEventListener("DOMContentLoaded", () => {
+      loadBoards();
+      mountChat({ page_type: "boards",
+        placeholder: "Ask about this board, or which board fits your project…",
+        getContext: () => ({ board_name: CURRENT_BOARD }) });
+    });
   </script>
 </body>
 </html>

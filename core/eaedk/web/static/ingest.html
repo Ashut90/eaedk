@@ -5,6 +5,7 @@
   <title>EAEDK — Datasheet</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
 </head>
 <body>
   <nav class="top"></nav>
@@ -150,6 +151,12 @@
       document.getElementById("analyze").addEventListener("click", analyze);
       document.getElementById("ask").addEventListener("click", ask);
       document.getElementById("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+      mountChat({ page_type: "datasheet",
+        placeholder: "Ask anything about this datasheet or this board…",
+        getContext: () => {
+          const sel = document.getElementById("board").value;
+          return { board_name: (sel === "__new__") ? ANALYZED_BOARD : sel };
+        } });
     });
   </script>
 </body>

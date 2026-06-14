@@ -5,6 +5,7 @@
   <title>EAEDK — Mentor</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
   <style> .capicon { font-size: 22px; margin-right: 8px; } </style>
 </head>
 <body>
@@ -136,6 +137,12 @@
       init();
       document.getElementById("ask").addEventListener("click", ask);
       document.getElementById("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+      mountChat({ page_type: "mentor",
+        placeholder: "Ask anything — what to build, why something works, how to think about a problem…",
+        getContext: () => ({
+          board_name: document.getElementById("board").value,
+          project_name: document.getElementById("project").value || null,
+          wokwi_flag: !document.getElementById("hw").checked }) });
     });
   </script>
 </body>

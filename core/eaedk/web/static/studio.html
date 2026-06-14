@@ -5,6 +5,7 @@
   <title>EAEDK — Code Studio</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
   <style> #editor { min-height: 360px; } </style>
 </head>
 <body>
@@ -33,6 +34,7 @@
   </main>
 
   <script>
+    let CURRENT_BOARD = null, LAST_REVIEW = null;   // for the chat context
     async function init() {
       const ps = await api("/api/projects");
       const sel = document.getElementById("project");
@@ -53,6 +55,7 @@
       showCommand(`eaedk --llm mentor --board <board> --project ${project} --review-code`);
       const d = await api("/api/studio/" + encodeURIComponent(project));
       if (d.error) { showError(document.getElementById("checklist"), d); return; }
+      CURRENT_BOARD = d.board || null;
       document.getElementById("editor").value = d.template || "";
       const cl = d.checklist.length
         ? `<div class="card"><h2 style="margin-top:0">Before you write — think about these</h2>` +
@@ -77,6 +80,7 @@
       const r = await api(`/api/studio/${encodeURIComponent(project)}/review`, { method: "POST",
         headers: {"Content-Type":"application/json"}, body: JSON.stringify({ project, code }) });
       if (r.error) { showError(el, r); return; }
+      LAST_REVIEW = r;
       const confirmed = r.confirmed.length
         ? r.confirmed.map(c => `<div class="card" style="border-color:var(--red)">
             <div>${badge("Problem", "RED")} &nbsp;<b>${escapeHtml(humanizeRule(c.check))}</b></div>
@@ -118,6 +122,13 @@
     document.addEventListener("DOMContentLoaded", () => {
       init();
       document.getElementById("review").addEventListener("click", review);
+      mountChat({ page_type: "studio",
+        placeholder: "Ask about your code, why something works, or what to consider next…",
+        getContext: () => ({
+          board_name: CURRENT_BOARD,
+          project_name: document.getElementById("project").value || null,
+          current_code: document.getElementById("editor").value,
+          review_results: LAST_REVIEW }) });
     });
   </script>
 </body>
