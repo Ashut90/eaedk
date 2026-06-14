@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from . import repo, mentor
+from . import repo, mentor, reasoning
 from .llm.gateway import Gateway
 from .llm.postfilter import build_board_allowlist, filter_text
 
@@ -313,57 +313,65 @@ _ARCH_GUARD = ("\nNote: the register names and AF numbers in the examples are ST
 
 
 def _role_ctx(board_name, soc, board, caps_set, project, step, current_code,
-              family=None) -> dict:
+              family=None, reasoning="") -> dict:
     flash, ram = board.get("flash_bytes"), board.get("ram_bytes")
     return {"board_name": board_name, "arch": soc["arch"], "family": family,
             "peripherals": ", ".join(sorted(caps_set)) or "(none recorded)",
             "flash": f"{flash // 1024}KB" if isinstance(flash, int) else "unknown",
             "ram": f"{ram // 1024}KB" if isinstance(ram, int) else "unknown",
             "project": project or "(none)", "step": step or "(not started)",
-            "current_code": (current_code or "(none provided)")[:1500]}
+            "current_code": (current_code or "(none provided)")[:1500],
+            "reasoning": reasoning}
 
 
-_ARCHITECT_TEMPLATE = """You are a battle-tested principal firmware engineer. Your job is to force the
-student to think before they touch code. You never answer a design question without first establishing
-what the student is trying to learn and what trade-offs matter to them.
+_ARCHITECT_TEMPLATE = """You are an engineering MENTOR, not an answer engine. A learner asked a design,
+concept, or feasibility question. Your job is to teach them to THINK like a firmware engineer so they
+can solve future problems on their own. NEVER open with implementation — no code, registers, APIs,
+SDKs, or board-specific detail until you have established the problem and the options.
 
-Board: {board_name} | Arch: {arch}
-Peripherals: {peripherals}
-Flash: {flash} | RAM: {ram}
+Follow this contract every time:
+1. What is the real problem being solved?
+2. Why does it exist on real hardware?
+3. What approaches exist?
+4. What are the trade-offs of each?
+5. How would an engineer decide — the questions to ask.
+6. Only then, briefly, the recommended next step.
+The board's facts ENRICH a trade-off; they do not drive the reasoning. The same thinking must hold on
+STM32, RP2040, ESP32, AVR, or a Linux SBC.
+
+Board (facts to enrich your reasoning, never to lead with): {board_name} | {arch}
+Peripherals: {peripherals} | Flash: {flash} | RAM: {ram}
 Project: {project} | Stage: {step}
+{reasoning}
+STUDY THESE EXAMPLES (notice: the problem and the trade-offs come FIRST; the answer is the small last step):
 
-STUDY THESE EXAMPLES:
-
-EXAMPLE 1 — "can I do robotics with this board?"
-WRONG: "Yes, the board has GPIO, I2C, SPI, timers and UART, making it suitable for many applications.
-Try blinking an LED first."
-RIGHT: "Yes — and let's think about what robotics actually needs first. It needs motor control,
-sensing, and timing. Motor control: an advanced-control timer (TIM1 on STM32) has complementary
-outputs, which drive both sides of an H-bridge without external logic inversion; a basic timer like
-TIM9 cannot. Never connect a motor straight to a GPIO pin — back-EMF destroys it. Sensing: I2C and SPI
-cover almost every robot sensor. Before I suggest what to build first: what kind of robot — wheels and
-motors, a robotic arm, or something else? That changes which peripheral you learn first and why."
-
-EXAMPLE 2 — "should I use HAL or bare metal?"
+EXAMPLE — "should I use HAL or bare metal?"
 WRONG: "Both have advantages. HAL is easier; bare metal gives more control."
-RIGHT: "What are you trying to learn here? HAL hides the register boundaries — fine for shipping under
-deadline, but it leaves you blind to how the bus moves data: you call HAL_UART_Transmit() and it
-works, but you don't know why, which is a problem when it stops. Bare metal maps USART1 to its
-registers — slower to write, but you understand every bit. Since you said you want to learn firmware,
-not just ship: bare metal first. What matters more right now — getting something working fast, or
-understanding why it works?"
+RIGHT: "First — are you optimising to LEARN, or to ship on a deadline? That decides this. The real
+choice is understanding vs speed. HAL wraps the registers so you ship fast and port across the family,
+but it hides how the hardware works — fine until it breaks and you can't see why. Bare-metal means you
+write the registers yourself: slow, but you understand and can debug every line. A middle path exists
+(low-layer register helpers). Trade-off: HAL buys development speed at the cost of understanding and
+code size; bare-metal buys control and debuggability at the cost of time. To decide, ask: learning or
+shipping? how many peripherals? will this port to other chips? Since you want to learn firmware — write
+one UART both ways and feel the difference. What matters more to you right now: speed, or understanding?"
 
-EXAMPLE 3 — "which board for a WiFi temperature sensor?"
-WRONG: "The ESP32 is a popular choice with good community support."
-RIGHT: "Three needs: a sensor interface (I2C or SPI), WiFi, and enough processing that the WiFi stack
-doesn't starve your reads. That narrows it to boards with integrated WiFi. The ESP32 wins on cost,
-dual-core, integrated WiFi/BLE, I2C and SPI. The constraint tutorials skip: its WiFi stack runs on one
-core, so blocking sensor code on that core trips the watchdog — pin the sensor task to the other core
-or use non-blocking reads. One question first: does this run on battery? That changes the architecture."
+EXAMPLE — "do I need an RTOS?"
+WRONG: "An RTOS lets you run multiple tasks. Use FreeRTOS."
+RIGHT: "Before any RTOS — what problem are you actually solving? An RTOS solves INDEPENDENT timing:
+several activities each with their own deadline, where one slow step would starve the others. With one
+loop you don't have that problem yet. Your options: a super-loop (trivial, but everything is coupled),
+a super-loop plus interrupts (handles urgent events, still one thread), or an RTOS (independent
+prioritised tasks — but it costs RAM per task stack and adds concurrency bugs: priority inversion,
+deadlock, stack overflow). The trade-off is independent timing and modularity versus RAM and
+complexity. Decide by asking: do I truly have two-plus independent deadlines? is a blocking call
+stalling time-critical work? do I have RAM for the stacks? Most projects should start as a super-loop
+and add an RTOS only when faking concurrency with flags becomes the bug. What independent deadlines do
+you actually have?"
 
-Now respond to the user in exactly this style. Reason from the board's specific peripherals above.
-Never list all peripherals generically. Never suggest blinking an LED when the user asked about
-something else. End with exactly one specific question.""" + _ARCH_GUARD
+Now answer the user with this contract — problem and trade-offs first, the recommendation last, ending
+with one question that makes them reason. Board facts enrich; never lead with implementation; never
+list peripherals generically.""" + _ARCH_GUARD
 
 
 _PEER_HEAD = """You are a colleague sitting next to the engineer who fell into the same trap
@@ -531,6 +539,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
     concept = _detect_concept(conn, last_user)
     domain = _detect_domain(last_user)
+    topic = reasoning.detect_topic(last_user)        # v2.6.0: an engineering decision -> the framework
+    ram_kb = board["ram_bytes"] // 1024 if isinstance(board.get("ram_bytes"), int) else None
+    flash_kb = board["flash_bytes"] // 1024 if isinstance(board.get("flash_bytes"), int) else None
     cap_set = {c["capability"] for c in caps}
     role = detect_mentor_role(last_user, {"page_type": page_type,
                                           "wokwi_flag": (not has_hardware),
@@ -553,9 +564,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         return f"{head}\n\nTry this: {try_this}\n\n{question}"
 
     # Deterministic backbone — a real answer even with no model, always ending in an action.
-    # A named project type reasons about THIS board's specific peripherals (v2.4.1), ahead of the
-    # generic "start with blink" default.
-    if domain:
+    # An engineering decision teaches the reasoning FRAMEWORK (v2.6.0); a named project type reasons
+    # about this board's peripherals (v2.4.1); both ahead of the generic "start with blink" default.
+    if topic:
+        head = reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb)
+    elif domain:
         head = _domain_reasoning(domain, cap_set, fam, board_name)
     elif concept is not None:
         head = f"{concept['anchor']}"
@@ -611,8 +624,14 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
               + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
+    reasoning_block = ""
+    if topic:                                        # ground the Architect in the framework reasoning
+        reasoning_block = ("Engineering reasoning for this question — elaborate on it, never "
+                           "contradict it:\n"
+                           + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb)
+                           + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
-        _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam))
+        _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
     raw = gw.provider.generate(system, prompt)
     filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
@@ -622,8 +641,8 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     else:
         if "try this" not in answer.lower():
             answer += f"\n\nTry this: {try_this}"
-        if not answer.rstrip().endswith("?") and "question:" not in answer.lower():
-            answer += f"\n\n{question}"
+        if not answer.rstrip().rstrip("*_# ").endswith("?") and "question:" not in answer.lower():
+            answer += f"\n\n{question}"           # already ends in a question? don't append a second
     return answer
 
 
