@@ -7,7 +7,8 @@ name: Release .deb
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*'      # release versions like v0.1.1 (matched against pyproject)
+      - '!v*-*'        # but NOT milestone tags like v2.4.0-mentor-complete
 
 permissions:
   contents: write          # needed to create/update releases and upload assets
