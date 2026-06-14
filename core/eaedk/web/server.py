@@ -504,7 +504,8 @@ async def api_chat(request: Request):
     extra = _chat_extra_context(conn, page, board, body)
     messages = [m for m in history if isinstance(m, dict)] + [{"role": "user", "content": user_message}]
     answer = mentor_chat(conn, board, messages, use_llm=use_llm, project=project,
-                         has_hardware=not wokwi, extra_context=extra)
+                         has_hardware=not wokwi, extra_context=extra,
+                         page_type=page, current_code=body.get("current_code") or "")
     return {"page_type": page, "board": board, "answer": answer}
 
 

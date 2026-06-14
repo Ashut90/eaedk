@@ -216,6 +216,237 @@ def _domain_reasoning(domain: str, caps: set, family: str | None, board_name: st
     return ""
 
 
+# --- Role detection (v2.5.0): decide the behavioural mode in Python, before the model runs -------
+
+def detect_mentor_role(user_message: str, page_context: dict) -> str:
+    """Pick the mentor's behavioural mode deterministically (docs/25). Priority:
+    SPONSOR -> REVERSE_MENTOR -> PEER_MENTOR -> SYSTEM_ARCHITECT (default)."""
+    msg = (user_message or "").lower()
+
+    # Role C — deterministic only, never needs the model.
+    if (page_context.get("page_type") or "") in ("validate", "export"):
+        return "SPONSOR"
+
+    # Role D — Wokwi simulation path.
+    if page_context.get("wokwi_flag"):
+        return "REVERSE_MENTOR"
+
+    # Role B — the user shared code or is debugging.
+    code = page_context.get("current_code") or ""
+    peer_triggers = ("my code", "compiles but", "doesn't work", "nothing happens", "not working",
+                     "wrong output", "review this", "check this", "what's wrong")
+    if len(code) > 50 or any(t in msg for t in peer_triggers):
+        return "PEER_MENTOR"
+
+    # Role A — architectural / design / feasibility question (and the default).
+    arch_triggers = ("should i use", "which board", "hal or", "bare metal", "where do i start",
+                     "how do i design", "architecture", "which peripheral", "why would i",
+                     "can i do", "is it possible", "what board", "robotics", "motor", "sensor",
+                     "iot", "wifi", "bootloader", "fail-safe", "rtos", "driver")
+    if any(t in msg for t in arch_triggers):
+        return "SYSTEM_ARCHITECT"
+    return "SYSTEM_ARCHITECT"
+
+
+# --- Domain-aware "Try this" (chosen in Python, not left to the model) ---------------------------
+
+DOMAIN_TRY_THIS = {
+    "robotics":   "Generate one PWM signal on {timer} and sweep the duty cycle 0-100% — that is motor "
+                  "speed control. Watch it in Wokwi before touching a real motor.",
+    "motor":      "Sweep a servo 0-180 degrees at 50Hz PWM — it proves your timer period and "
+                  "duty-cycle math are correct.",
+    "sensor":     "Write a blocking I2C read of one register and print the raw value over UART — "
+                  "before interpreting it, prove the bus is talking.",
+    "audio":      "Generate a square wave at 440Hz on a timer output — that is concert A. If you hear "
+                  "it, your timer and GPIO are working.",
+    "iot":        "Connect to Wi-Fi and print your IP over UART — before sending data, prove the stack "
+                  "initialises cleanly.",
+    "bootloader": "Write 4 bytes to flash, read them back, and compare — if they match, your flash "
+                  "driver works.",
+    "driver":     "Write to one register, read it back, and verify the value — before any protocol, "
+                  "prove register access works.",
+    "default":    "Enable the peripheral clock, configure one pin, and toggle it in a loop — before "
+                  "any protocol, prove the pin moves.",
+}
+
+_TRY_THIS_KEYWORDS = (
+    ("bootloader", ("bootloader", "fail-safe", "failsafe", "ota", "rollback")),
+    ("driver",     ("driver", "device tree", "of_match", "register map")),
+    ("motor",      ("servo",)),
+    ("robotics",   ("robot", "robotics", "motor", "wheel", "drone", "bldc", "stepper", "actuator")),
+    ("sensor",     ("sensor", "imu", "accelerometer", "gyro", "temperature", "humidity", "distance",
+                    "lidar", "proximity")),
+    ("audio",      ("audio", "sound", "speaker", "microphone", "music", "i2s")),
+    ("iot",        ("iot", "wifi", "wi-fi", "bluetooth", "ble", "mqtt", "internet of")),
+)
+
+
+def _select_try_this(text: str, family: str | None) -> str:
+    """The first experiment to run, matched to the project type the user named. Family-gated: the
+    robotics/motor experiment names TIM1 only on STM32, a generic timer output elsewhere. When no
+    project type is named, fall back to the board family's own experiment (F_CPU on AVR, RCC on
+    STM32, …) rather than a generic default."""
+    low = " " + (text or "").lower() + " "
+    key = next((k for k, kws in _TRY_THIS_KEYWORDS if any(w in low for w in kws)), None)
+    if key is None:
+        return _board_try_this(family)
+    t = DOMAIN_TRY_THIS[key]
+    if "{timer}" in t:
+        t = t.replace("{timer}", "TIM1" if family == "stm32" else "a timer output")
+    return t
+
+
+# --- One self-contained few-shot prompt per role (the model never decides which role to play) ----
+
+_ARCH_GUARD = ("\nNote: the register names and AF numbers in the examples are STM32 teaching values. "
+               "Reason for the board above; never assert a register, clock, or timing value you were "
+               "not given — name the datasheet table to confirm it instead.")
+
+
+def _role_ctx(board_name, soc, board, caps_set, project, step, current_code) -> dict:
+    flash, ram = board.get("flash_bytes"), board.get("ram_bytes")
+    return {"board_name": board_name, "arch": soc["arch"],
+            "peripherals": ", ".join(sorted(caps_set)) or "(none recorded)",
+            "flash": f"{flash // 1024}KB" if isinstance(flash, int) else "unknown",
+            "ram": f"{ram // 1024}KB" if isinstance(ram, int) else "unknown",
+            "project": project or "(none)", "step": step or "(not started)",
+            "current_code": (current_code or "(none provided)")[:1500]}
+
+
+_ARCHITECT_TEMPLATE = """You are a battle-tested principal firmware engineer. Your job is to force the
+student to think before they touch code. You never answer a design question without first establishing
+what the student is trying to learn and what trade-offs matter to them.
+
+Board: {board_name} | Arch: {arch}
+Peripherals: {peripherals}
+Flash: {flash} | RAM: {ram}
+Project: {project} | Stage: {step}
+
+STUDY THESE EXAMPLES:
+
+EXAMPLE 1 — "can I do robotics with this board?"
+WRONG: "Yes, the board has GPIO, I2C, SPI, timers and UART, making it suitable for many applications.
+Try blinking an LED first."
+RIGHT: "Yes — and let's think about what robotics actually needs first. It needs motor control,
+sensing, and timing. Motor control: an advanced-control timer (TIM1 on STM32) has complementary
+outputs, which drive both sides of an H-bridge without external logic inversion; a basic timer like
+TIM9 cannot. Never connect a motor straight to a GPIO pin — back-EMF destroys it. Sensing: I2C and SPI
+cover almost every robot sensor. Before I suggest what to build first: what kind of robot — wheels and
+motors, a robotic arm, or something else? That changes which peripheral you learn first and why."
+
+EXAMPLE 2 — "should I use HAL or bare metal?"
+WRONG: "Both have advantages. HAL is easier; bare metal gives more control."
+RIGHT: "What are you trying to learn here? HAL hides the register boundaries — fine for shipping under
+deadline, but it leaves you blind to how the bus moves data: you call HAL_UART_Transmit() and it
+works, but you don't know why, which is a problem when it stops. Bare metal maps USART1 to its
+registers — slower to write, but you understand every bit. Since you said you want to learn firmware,
+not just ship: bare metal first. What matters more right now — getting something working fast, or
+understanding why it works?"
+
+EXAMPLE 3 — "which board for a WiFi temperature sensor?"
+WRONG: "The ESP32 is a popular choice with good community support."
+RIGHT: "Three needs: a sensor interface (I2C or SPI), WiFi, and enough processing that the WiFi stack
+doesn't starve your reads. That narrows it to boards with integrated WiFi. The ESP32 wins on cost,
+dual-core, integrated WiFi/BLE, I2C and SPI. The constraint tutorials skip: its WiFi stack runs on one
+core, so blocking sensor code on that core trips the watchdog — pin the sensor task to the other core
+or use non-blocking reads. One question first: does this run on battery? That changes the architecture."
+
+Now respond to the user in exactly this style. Reason from the board's specific peripherals above.
+Never list all peripherals generically. Never suggest blinking an LED when the user asked about
+something else. End with exactly one specific question.""" + _ARCH_GUARD
+
+
+_PEER_TEMPLATE = """You are a colleague sitting next to the engineer who fell into the same trap
+yesterday. You look at their code and find the ONE hardware consequence they have not considered. You
+never comment on style or unused variables.
+
+Board: {board_name} | Arch: {arch}
+Peripherals: {peripherals}
+Flash: {flash} | RAM: {ram}
+Current code:
+{current_code}
+
+STUDY THESE EXAMPLES:
+
+EXAMPLE 1 — "my code compiles but nothing happens" (STM32)
+WRONG: "There could be several reasons. Check your connections and toolchain."
+RIGHT: "Three things cause this exact symptom on STM32, in the order I see them: 1) Clock not enabled —
+every peripheral is off by default; configuring UART registers before enabling its APB clock writes to
+dead hardware, no error, just silence. Did you enable the USART clock in RCC before any UART register
+access? 2) Wrong alternate function — PA9 can be USART1_TX (AF7) or TIM1_CH2 (AF1); on AF1 your pin is
+a timer output, not UART. Check the alternate-function table — which AF did you write to GPIOA->AFR?
+3) Wrong baud divisor — if BRR is computed for the wrong clock, the terminal sees garbage. Which of the
+three did you check first?"
+
+EXAMPLE 2 — engineer submits UART init code
+WRONG: "Looks good. Add error handling and use const where appropriate."
+RIGHT: "You enabled the USART clock and set the pin modes — clean. One thing before you flash: which
+alternate-function number did you pass to that TX pin? If it's the timer AF instead of the UART AF, the
+code compiles, the compiler says nothing, but the pin is a timer output and your console is dead. Check
+the alternate-function table — what AF value did you actually write?"
+
+EXAMPLE 3 — "do I init GPIO before or after UART?"
+WRONG: "Init GPIO before UART as a best practice."
+RIGHT: "Order matters for a specific reason, not convention. You need the GPIO clock on before you can
+set the pin's alternate function, and the AF set before UART transmits, or your first bytes go out on
+an unconfigured pin. Sequence: enable GPIO clock, set the pin to AF mode, set the AF number, enable the
+UART clock, configure UART registers, enable UART. Swap the AF-set and the UART-clock-enable and you
+configure a peripheral with no clock yet — on some STM32 families that silently fails. Clocks first,
+then configuration."
+
+Now review the user's code or question in exactly this style. Find the one hardware consequence they
+have not considered. Never comment on style. End with one specific question about their code.""" \
+    + _ARCH_GUARD
+
+
+_REVERSE_TEMPLATE = """You are a mentor who knows the difference between what matters in a real circuit
+and what the simulator handles for you. You never block a beginner from learning because the simulator
+skips a physical constraint they don't need yet.
+
+Board: {board_name} | Arch: {arch}
+Target: Wokwi simulation (not physical hardware)
+Peripherals: {peripherals}
+
+STUDY THESE EXAMPLES:
+
+EXAMPLE 1 — "the validator is blocking my bootloader export" (boot-pin UNKNOWN)
+WRONG: "You need to configure your boot pins before export."
+RIGHT: "In Wokwi you don't need to worry about boot pins — the simulator handles boot mode
+automatically. Boot-pin configuration only matters with a physical programmer on real hardware. For
+your simulation, proceed; the physical boot-pin warning is advisory here, not a blocker. When you move
+to a real board, that's when you confirm BOOT0 is LOW for normal boot and HIGH to enter the bootloader
+for flashing — a real-hardware concern, not Wokwi."
+
+EXAMPLE 2 — "I want to test my power sequencing in Wokwi"
+WRONG: "Wokwi supports power sequencing simulation."
+RIGHT: "Wokwi doesn't emulate power-rail sequencing — that's physical behaviour the simulator skips.
+What it emulates well: GPIO, UART, SPI, I2C, timers, interrupts — enough for most beginner and
+intermediate firmware. Power sequencing matters when multiple rails must come up in order to protect
+hardware — a real-PCB concern. For now, what are you actually trying to test? If it's code logic, Wokwi
+helps; if it's hardware power behaviour, you need a real board."
+
+Now respond knowing the user is on Wokwi. Never block learning with physical-hardware constraints the
+simulator doesn't need. Explain what Wokwi does and does not emulate when relevant, and end with one
+question.""" + _ARCH_GUARD
+
+
+def build_architect_prompt(ctx: dict) -> str:
+    return _ARCHITECT_TEMPLATE.format(**ctx)
+
+
+def build_peer_mentor_prompt(ctx: dict) -> str:
+    return _PEER_TEMPLATE.format(**ctx)
+
+
+def build_reverse_mentor_prompt(ctx: dict) -> str:
+    return _REVERSE_TEMPLATE.format(**ctx)
+
+
+_ROLE_BUILDERS = {"SYSTEM_ARCHITECT": build_architect_prompt,
+                  "PEER_MENTOR": build_peer_mentor_prompt,
+                  "REVERSE_MENTOR": build_reverse_mentor_prompt}
+
+
 def _followup_question(caps: list, path: list) -> str:
     if any(c["capability"] == "uart" for c in caps):
         return "Question: do you know which clock your UART runs on?"
@@ -243,7 +474,7 @@ def _progress_summary(conn, project_name: str | None):
 def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 use_llm: bool = False, gateway: Gateway | None = None,
                 project: str | None = None, has_hardware: bool = False,
-                extra_context: str = "") -> str:
+                extra_context: str = "", page_type: str = "", current_code: str = "") -> str:
     """A 2-way mentor turn. ``messages`` is the conversation so far ([{role, content}, ...]).
     Always returns an answer + a board-tied 'Try this' + a follow-up question (the contract holds
     even offline). The post-filter runs on every LLM response. ``project`` lets the mentor read the
@@ -261,11 +492,12 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     concept = _detect_concept(conn, last_user)
     domain = _detect_domain(last_user)
     cap_set = {c["capability"] for c in caps}
-    try_this = _board_try_this(fam)
-    if not has_hardware:        # a Wokwi-only user — point the experiment at the simulator
-        try_this = try_this.replace("run it in Wokwi", "run it in Wokwi").rstrip()
-        if "Wokwi" not in try_this:
-            try_this += " (run it in the Wokwi simulator — no hardware needed)."
+    role = detect_mentor_role(last_user, {"page_type": page_type,
+                                          "wokwi_flag": (not has_hardware),
+                                          "current_code": current_code})
+    try_this = _select_try_this(last_user, fam)        # Fix 4: domain-aware, family-gated
+    if not has_hardware and "wokwi" not in try_this.lower():
+        try_this += " (run it in the Wokwi simulator — no hardware needed)."
     question = _followup_question(caps, path)
     progress = _progress_summary(conn, project)
 
@@ -299,6 +531,13 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if note is not None:
         return backbone                              # offline: the structured deterministic answer
 
+    # Role C — the Validation Engine's verdict is deterministic; the chat points there, never the model.
+    if role == "SPONSOR":
+        return ("That's the Validation Engine's call, not mine — open Validate or Export to see "
+                "exactly what passed, failed, or is unknown, and why. I explain those results; I "
+                "never override them.\n\nTry this: run Validate and read the first FAIL or UNKNOWN.\n\n"
+                "Question: which check is blocking you?")
+
     cap_lines = "\n".join(f"- {c['summary'] or c['capability']}" for c in caps)
     have = ", ".join(sorted(c["capability"] for c in caps)) or "(none recorded)"
     path_lines = "\n".join(f"{s['step']}. {s['title']} — {s['why']}" for s in path)
@@ -328,8 +567,13 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
               f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
               f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
+              + f"When you suggest an experiment, use this 'Try this': {try_this}\n"
               + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")
-    raw = gw.provider.generate(_CHAT_SYSTEM, prompt)
+    # The model receives a prompt that already IS the detected role (board context before examples).
+    step = path[0]["title"] if path else None
+    system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
+        _role_ctx(board_name, soc, board, cap_set, project, step, current_code))
+    raw = gw.provider.generate(system, prompt)
     filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
     # Enforce the contract even if the model (or the post-filter) dropped a part.
