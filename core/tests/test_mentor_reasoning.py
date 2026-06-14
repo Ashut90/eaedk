@@ -100,3 +100,22 @@ def test_mentor_progress_injected(tmp_path):
                            use_llm=True, gateway=Gateway(provider=rec), project="p1")
     _system, prompt = rec.calls[-1]
     assert "progress" in prompt.lower()                              # State-Engine progress reached the model
+
+
+# v2.4.1 — a named project type reasons about THIS board's specific peripherals, not generically.
+def test_boards_robotics_reasons_about_tim1_not_generic(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_llm.mentor_chat(conn, "STM32F103-BluePill",     # STM32 + timer => TIM1 reasoning
+                                 [{"role": "user", "content": "can I do robotics?"}],
+                                 use_llm=False).lower()
+    assert "tim1" in out and "complementary" in out and "h-bridge" in out
+    assert "encoder" in out                                      # position sensing, not "blink an LED"
+
+
+def test_boards_robotics_family_gated_for_avr(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_llm.mentor_chat(conn, "Arduino-Uno",           # AVR, not STM32 => no TIM1 claim
+                                 [{"role": "user", "content": "can I build a robot with motors?"}],
+                                 use_llm=False).lower()
+    assert "tim1" not in out
+    assert "h-bridge" in out                                     # still the motor-driver safety reasoning

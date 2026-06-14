@@ -465,9 +465,12 @@ def _chat_extra_context(conn, page: str, board: str, body: dict) -> str:
                 str(c.get("check") or c.get("message", "")) for c in confirmed[:5]))
         return "\n".join(bits)
     if page == "boards":
+        guide = ("(Boards page) If the user names a project type (robotics, sensor, motor, audio, "
+                 "IoT), map it to THIS board's specific peripherals and why each is needed — do not "
+                 "list all peripherals generically.")
         names = [r["name"] for r in repo.list_boards(conn, None)]
         others = ", ".join(n for n in names if n != board)
-        return f"Other boards the user could compare against: {others}" if others else ""
+        return guide + (f"\nOther boards to compare against: {others}" if others else "")
     return ""
 
 

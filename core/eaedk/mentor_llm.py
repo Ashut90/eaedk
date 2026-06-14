@@ -83,6 +83,9 @@ _CHAT_SYSTEM = (
     "- Open with a CONSEQUENCE or a QUESTION, never a definition.\n"
     "- Tie the answer to THIS board's real capabilities; if a peripheral is not in the list, say so "
     "rather than assume it. Never give a generic answer when the board is known.\n"
+    "- When the user names a project type (robotics, sensor, motor, audio, IoT), reason about WHICH "
+    "of this board's specific peripherals that project needs and why — e.g. motor control = a "
+    "timer's PWM through an H-bridge, not generic GPIO — never list all peripherals generically.\n"
     "- For any specific register, alternate-function (AF) number, address, clock, or timing: do NOT "
     "state the value — you cannot verify it. Name the concern and the datasheet table to check, then "
     "ask which value the user actually used.\n"
@@ -130,6 +133,89 @@ def _board_try_this(family: str | None) -> str:
             "order is everything in bare-metal firmware.")
 
 
+# Project-type reasoning (v2.4.1): when the user names a domain, reason about WHICH of THIS board's
+# specific peripherals that project needs and why — never a generic capability list.
+_PROJECT_DOMAINS = {
+    "robotics": ("robot", "robotics", "motor", "servo", "h-bridge", "h bridge", "bldc", "stepper",
+                 "wheel", "drone", "actuator", "encoder"),
+    "sensor":   ("sensor", "imu", "accelerometer", "gyro", "temperature", "humidity", "proximity",
+                 "distance", "lidar"),
+    "audio":    ("audio", "sound", "speaker", "microphone", "music", "i2s"),
+    "iot":      ("iot", "wifi", "wi-fi", "bluetooth", " ble ", "mqtt", "internet of"),
+}
+
+
+def _detect_domain(text: str) -> str | None:
+    low = " " + (text or "").lower() + " "
+    for domain, kws in _PROJECT_DOMAINS.items():
+        if any(k in low for k in kws):
+            return domain
+    return None
+
+
+def _domain_reasoning(domain: str, caps: set, family: str | None, board_name: str) -> str:
+    """Curated, family-aware reasoning: which of THIS board's specific peripherals the project needs
+    and why. Deterministic guidance (same class as the existing think-before-code hints), gated on the
+    board's capabilities and chip family — so it is specific, not a generic peripheral dump."""
+    has = caps.__contains__
+    if domain == "robotics":
+        L = [f"Robotics on {board_name} is move + sense + decide, and each maps to a SPECIFIC "
+             "peripheral, not a generic GPIO pin:"]
+        if has("timer"):
+            if family == "stm32":
+                L.append("- Move: motor speed is a PWM signal from a TIMER. On STM32 the advanced-"
+                         "control timer (TIM1) has COMPLEMENTARY outputs with dead-time — exactly what "
+                         "drives both sides of an H-BRIDGE (a DC/BLDC motor). A basic timer "
+                         "(TIM9/10/11) cannot. Confirm which timer is the advanced one on your part in "
+                         "the datasheet.")
+            else:
+                L.append("- Move: motor speed is a PWM signal from a TIMER, sent through a motor "
+                         "driver / H-bridge — never straight from a GPIO pin.")
+            L.append("- Position: a TIMER in encoder mode counts wheel-encoder pulses for odometry.")
+        else:
+            L.append("- Move: motors need PWM, but no timer capability is recorded for this board — "
+                     "check the datasheet for a timer with PWM output.")
+        buses = [b.upper() for b in ("i2c", "spi") if has(b)]
+        if buses:
+            L.append(f"- Sense: an IMU (accel+gyro) over {'/'.join(buses)} gives orientation — your "
+                     "balance and heading.")
+        if has("uart"):
+            L.append("- Talk: UART to a host (Raspberry Pi, GPS, or a Bluetooth module).")
+        L.append("Safety: a motor MUST go through a driver/H-bridge on its own supply — back-EMF and "
+                 "current will destroy a pin driven directly.")
+        return "\n".join(L)
+    if domain == "sensor":
+        L = [f"A sensor project on {board_name} needs a sensor BUS, not generic GPIO:"]
+        if has("i2c"):
+            L.append("- I2C: many sensors on two wires (IMU, temp/humidity, ToF) — start here.")
+        if has("spi"):
+            L.append("- SPI: faster, more wires — for high-rate sensors (some IMUs, external ADCs).")
+        L.append("- A TIMER sets a fixed sample rate so readings are evenly spaced." if has("timer")
+                 else "- Sample at a fixed rate (a timer interrupt) so readings are evenly spaced.")
+        if not (has("i2c") or has("spi")):
+            L.append("- No I2C/SPI is recorded for this board — check the datasheet before assuming a bus.")
+        return "\n".join(L)
+    if domain == "audio":
+        L = [f"Audio on {board_name} is about streaming samples without the CPU stalling:",
+             "- Output: I2S to a DAC/codec if the board has it, or PWM as a crude fallback.",
+             ("- A TIMER sets the sample rate; DMA moves samples so the CPU isn't blocked."
+              if has("timer") else "- You need a steady sample clock (timer) and ideally DMA."),
+             "- Check the datasheet for I2S/DAC — not every board has true audio output."]
+        return "\n".join(L)
+    if domain == "iot":
+        L = [f"An IoT project on {board_name} starts with one question: does it have connectivity?"]
+        conn_caps = [c for c in ("wifi", "ethernet", "bluetooth", "ble") if has(c)]
+        if conn_caps:
+            L.append(f"- This board has {', '.join(conn_caps)} — that's your link.")
+        else:
+            L.append("- No Wi-Fi/Ethernet/BLE is recorded for this board, so you'd add a module over "
+                     "UART or SPI (e.g. an ESP-AT module or a network controller). Confirm in the datasheet.")
+        if has("uart"):
+            L.append("- UART connects that module (and your debug console).")
+        return "\n".join(L)
+    return ""
+
+
 def _followup_question(caps: list, path: list) -> str:
     if any(c["capability"] == "uart" for c in caps):
         return "Question: do you know which clock your UART runs on?"
@@ -173,6 +259,8 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     fam = family_of(soc["name"])
     last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
     concept = _detect_concept(conn, last_user)
+    domain = _detect_domain(last_user)
+    cap_set = {c["capability"] for c in caps}
     try_this = _board_try_this(fam)
     if not has_hardware:        # a Wokwi-only user — point the experiment at the simulator
         try_this = try_this.replace("run it in Wokwi", "run it in Wokwi").rstrip()
@@ -193,7 +281,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         return f"{head}\n\nTry this: {try_this}\n\n{question}"
 
     # Deterministic backbone — a real answer even with no model, always ending in an action.
-    if concept is not None:
+    # A named project type reasons about THIS board's specific peripherals (v2.4.1), ahead of the
+    # generic "start with blink" default.
+    if domain:
+        head = _domain_reasoning(domain, cap_set, fam, board_name)
+    elif concept is not None:
         head = f"{concept['anchor']}"
     elif path:
         head = (f"Good question. For {board_name}, the place to start is '{path[0]['title']}' — "
@@ -227,8 +319,13 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         prog_line = (f"Project '{project}' progress: {progress['complete']}/{progress['total']} "
                      f"done; next task: {progress['next']['title']}.\n")
     extra_line = (extra_context.strip() + "\n") if extra_context and extra_context.strip() else ""
+    dom_block = ""
+    if domain:
+        dom_block = (f"PROJECT DOMAIN — the user named a '{domain}' project. Reason about WHICH of "
+                     "this board's peripherals it needs and why; build on this, stay specific:\n"
+                     + _domain_reasoning(domain, cap_set, fam, board_name) + "\n")
     prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n"
-              f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{extra_line}"
+              f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
               f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
               + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")
