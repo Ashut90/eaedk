@@ -47,6 +47,32 @@ def _flash_enrich(ctx: dict) -> str | None:
             f"scheme needs room for two full images, so {'that may be tight — a single recovery image is the realistic choice.' if flash < 256 else 'two slots are feasible; weigh the robustness against the lost space.'}")
 
 
+def _mem_enrich(ctx: dict) -> str | None:
+    ram, b = ctx.get("ram_kb"), ctx.get("board_name", "this board")
+    if not isinstance(ram, int):
+        return None
+    if ram <= 8:
+        return (f"On {b} you have only {ram}KB of RAM — a stack overflow is your FIRST enemy. Keep "
+                f"locals tiny, avoid recursion and malloc, and put any buffer bigger than a few dozen "
+                f"bytes in static memory.")
+    return (f"On {b} you have {ram}KB of RAM — comfortable, but still set a stack guard and watch the "
+            f"high-water mark, because a stack/heap collision is just as silent here.")
+
+
+def _clock_enrich(ctx: dict) -> str | None:
+    notes = {
+        "stm32": "On STM32, enable a peripheral's clock in RCC->APBxENR / AHBxENR (and its GPIO port's "
+                 "clock too) BEFORE you configure it.",
+        "rp2040": "On RP2040, bring the peripheral out of reset and un-gate its clock in the RESETS / "
+                  "CLOCKS block before use.",
+        "esp32": "On ESP32 the IDF driver enables the peripheral clock for you; a hand-written register "
+                 "driver must enable it in the system clock-control registers first.",
+        "avr": "On AVR most peripherals are clocked by default, but the Power Reduction Register (PRR) "
+               "can gate them — if a peripheral is dead, check its PRR bit.",
+    }
+    return notes.get(ctx.get("family"))
+
+
 TOPICS: dict[str, Topic] = {
     "hal_vs_baremetal": Topic(
         key="hal_vs_baremetal", title="HAL vs bare-metal",
@@ -74,6 +100,42 @@ TOPICS: dict[str, Topic] = {
                       "When it breaks, do I want to debug my own register writes or the vendor's layer?"],
         next_step="Pick one peripheral (a UART) and write its init BOTH ways — bare-metal once, then "
                   "with HAL. You will feel exactly what each hides and exposes."),
+
+    "interrupt_vs_polling": Topic(
+        key="interrupt_vs_polling", title="interrupt vs polling — and the hazards",
+        keywords=("interrupt vs polling", "polling vs interrupt", "interrupt or poll",
+                  "poll or interrupt", "interrupt or polling", "when should i use an interrupt",
+                  "when to use an interrupt", "race condition", "volatile", "atomic read",
+                  "atomic access", "priority inversion", "nested interrupt", "shared variable",
+                  "interrupt-safe", "interrupt safe"),
+        what="Polling and interrupts are two ways to NOTICE an event. Polling: the CPU checks in a "
+             "loop. Interrupt: the hardware calls your code the instant the event fires, then returns "
+             "to what it was doing.",
+        why="Polling burns the CPU waiting and can miss fast events between checks; interrupts free the "
+            "CPU and react immediately. But that asynchrony is the catch — an interrupt can fire in "
+            "the middle of your main code and corrupt state they share.",
+        when="Poll when the work is simple, single-task, and timing isn't tight (a button in a slow "
+             "loop). Use interrupts for asynchronous events, to let the CPU SLEEP until something "
+             "happens (power saving), or for hard real-time response.",
+        alternatives=[("Polling", "dead simple, no concurrency bugs; burns CPU and can miss fast events"),
+                      ("Interrupt", "instant, frees the CPU, enables sleep; introduces races, "
+                       "shared-state and re-entrancy bugs"),
+                      ("Interrupt sets a flag, main loop acts", "the common SAFE pattern — the ISR does "
+                       "the minimum, the main loop does the work")],
+        tradeoffs="Interrupts buy responsiveness and efficiency at the price of concurrency — bugs that "
+                  "simply don't exist in polling. A variable shared with an ISR must be 'volatile' or "
+                  "the compiler caches a stale copy. A multi-byte read of an ISR-updated value can TEAR "
+                  "(half-old, half-new) unless it's atomic. A long ISR can be interrupted again and "
+                  "overflow the stack. Polling has none of these — slower, but boring, and boring is "
+                  "safe.",
+        how_to_think=["Is the event asynchronous, or can I just check for it in my loop?",
+                      "Does the CPU need to sleep or do other work while waiting?",
+                      "Is any variable shared between the ISR and main code — is it 'volatile' and read "
+                      "atomically?",
+                      "Am I keeping the ISR short (set a flag, return) rather than doing real work in it?"],
+        next_step="Start polled. When you need async response or power saving, move to an interrupt — "
+                  "but make the ISR do the MINIMUM (set a volatile flag) and let the main loop act on "
+                  "it. That pattern sidesteps most concurrency bugs."),
 
     "polling_vs_interrupt_vs_dma": Topic(
         key="polling_vs_interrupt_vs_dma", title="polling vs interrupt vs DMA",
@@ -237,6 +299,70 @@ TOPICS: dict[str, Topic] = {
         next_step="Blink an LED at the very top of main(). If it blinks, your clock and toolchain are "
                   "fine and the bug is downstream. If it doesn't, the problem is clock/boot, not your "
                   "application."),
+
+    "clock_tree": Topic(
+        key="clock_tree", title="clock tree and peripheral clocking",
+        keywords=("clock tree", "clock domain", "peripheral clock", "clock enable", "enable the clock",
+                  "clock gat", "rcc", "clocking", "why is my peripheral", "peripheral does nothing",
+                  "peripheral silently", "peripheral is dead"),
+        what="A clock domain is the timing signal that drives a peripheral. On most ARM MCUs every "
+             "peripheral starts OFF — its clock is gated (disabled) to save power — and does literally "
+             "nothing until you enable it.",
+        why="Power. A chip with dozens of peripherals would waste energy clocking ones you never use, "
+            "so they ship disabled. The catch: you must remember to turn each one on, and forgetting "
+            "is SILENT — the register writes land on dead hardware with no error at all.",
+        when="Always, before you touch any peripheral's registers — on STM32 and most ARM MCUs.",
+        alternatives=[("Configure, then enable the clock (WRONG)", "your register writes hit a dead "
+                       "peripheral — no error, no effect"),
+                      ("Enable the clock first (RIGHT)", "clock enable → GPIO config → peripheral "
+                       "config → enable the peripheral"),
+                      ("Let HAL enable it", "vendor init turns the clock on for you — convenient, but "
+                       "you won't think to suspect it when it breaks")],
+        tradeoffs="Gated clocks save real power but cost you a mandatory step that is invisible when "
+                  "forgotten. HAL enabling the clock for you trades that vigilance for not "
+                  "understanding the failure when it happens — and a missing clock ALWAYS looks like "
+                  "'nothing happens'.",
+        how_to_think=["Is this peripheral's clock enabled BEFORE I configure it?",
+                      "Which bus is it on, and am I enabling the right clock register?",
+                      "Did I enable the GPIO PORT's clock too, not just the peripheral's?",
+                      "When nothing happens, is the clock the FIRST thing I check?"],
+        next_step="Burn the sequence in: enable the clock → configure the pins → configure the "
+                  "peripheral → enable the peripheral. When a peripheral is silent, suspect its clock "
+                  "before anything else.",
+        enrich=_clock_enrich),
+
+    "memory_layout": Topic(
+        key="memory_layout", title="memory layout — stack, heap, static, flash",
+        keywords=("memory layout", "stack overflow", "stack and heap", "the heap", "heap memory",
+                  "malloc", "where do my variables", "where my variables live", "where variables live",
+                  "running out of ram", "out of ram", "ram usage", "global variable",
+                  "static variable", "stack pointer", "memory model", ".bss"),
+        what="Your program lives in two memories. FLASH holds what doesn't change — your code and "
+             "'const' data. RAM holds what does — the stack (locals and call frames, growing down), "
+             "the heap (malloc, growing up), and static/global variables (fixed addresses).",
+        why="RAM is small and most MCUs have no MMU to catch mistakes. The stack and heap grow toward "
+            "each other in the SAME RAM; when they collide you get silent corruption, not a clean "
+            "error. You need to know where each variable lives to reason about why a board crashed.",
+        when="Whenever you declare a variable, size a buffer, call malloc, or a board crashes "
+             "mysteriously under load.",
+        alternatives=[("Stack (locals)", "fast, automatic, freed on return; small — a big local buffer "
+                       "or deep recursion silently overflows it"),
+                      ("Static / global", "fixed address, always present; persists and is SHARED — "
+                       "dangerous across interrupts"),
+                      ("Heap (malloc/free)", "flexible size at runtime; fragments, can fail mid-run, "
+                       "and is discouraged in small embedded")],
+        tradeoffs="The stack is fast and automatic but small — a large local array overruns it "
+                  "silently. Globals are convenient but shared state is the root of interrupt bugs. "
+                  "The heap is flexible but fragments and can fail, which is why much embedded code "
+                  "avoids malloc and pre-allocates instead.",
+        how_to_think=["Where does this variable LIVE — stack, static, or heap?",
+                      "Is this buffer big enough to blow the stack (then make it static)?",
+                      "Is any global touched by an interrupt — is that access safe?",
+                      "Do I know my stack high-water mark, or am I guessing how much RAM is left?"],
+        next_step="Move your big buffers off the stack — anything large goes static or heap. Then read "
+                  "the linker map (or the stack high-water mark) to see how much RAM you're actually "
+                  "using, before it crashes.",
+        enrich=_mem_enrich),
 }
 
 

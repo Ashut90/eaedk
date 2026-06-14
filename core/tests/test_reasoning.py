@@ -58,3 +58,40 @@ def test_design_backbone_leads_with_problem_not_implementation(tmp_path):
     assert out.strip().splitlines()[0].startswith("The problem")   # never opens with code/registers
     assert "Your options:" in out and "trade-off" in out.lower()   # teaches options + trade-offs
     assert "decides" in out.lower()                                # teaches the decision process
+
+
+# --- v2.6.1: three new topics (clock tree, interrupt vs polling, memory layout) -------------
+
+def test_new_topics_detected():
+    assert reasoning.detect_topic("do I need to enable the peripheral clock?").key == "clock_tree"
+    assert reasoning.detect_topic("my peripheral does nothing").key == "clock_tree"
+    assert reasoning.detect_topic("interrupt vs polling?").key == "interrupt_vs_polling"
+    assert reasoning.detect_topic("is this variable shared with an interrupt safe?").key == "interrupt_vs_polling"
+    assert reasoning.detect_topic("where do my variables live?").key == "memory_layout"
+    assert reasoning.detect_topic("what does a stack overflow look like?").key == "memory_layout"
+
+
+def test_interrupt_topic_does_not_steal_the_broad_polling_topic():
+    # the existing "how do I move data" topic must still win for the general phrasing
+    assert reasoning.detect_topic("polling or interrupts?").key == "polling_vs_interrupt_vs_dma"
+
+
+def test_new_topics_render_all_axes():
+    for key in ("clock_tree", "interrupt_vs_polling", "memory_layout"):
+        out = reasoning.render(reasoning.TOPICS[key])
+        for axis in ("The problem", "Your options:", "The trade-off", "How an engineer decides", "Next:"):
+            assert axis in out, (key, axis)
+
+
+def test_memory_enrichment_scales_with_ram():
+    tiny = reasoning.render(reasoning.TOPICS["memory_layout"], "Arduino-Uno", "avr", "avr", ram_kb=2)
+    big = reasoning.render(reasoning.TOPICS["memory_layout"], "Nucleo-F411RE", "arm-cortex-m4",
+                           "stm32", ram_kb=128)
+    assert "stack overflow is your FIRST enemy" in tiny       # 2KB
+    assert "stack guard" in big                               # 128KB
+
+
+def test_clock_enrichment_is_family_aware():
+    stm = reasoning.render(reasoning.TOPICS["clock_tree"], "Nucleo-F411RE", "arm-cortex-m4", "stm32")
+    avr = reasoning.render(reasoning.TOPICS["clock_tree"], "Arduino-Uno", "avr", "avr")
+    assert "RCC" in stm and "PRR" in avr and "RCC" not in avr  # the right chip's clock mechanism
