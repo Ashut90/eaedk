@@ -180,12 +180,20 @@ def run_actor_critic(conn: sqlite3.Connection, project: sqlite3.Row,
     epoch = 0
     review_target = scaffold
     for epoch in range(1, max_epochs + 1):
-        issues = _critic(gw, review_target, board_name, soc, facts, grounding, artifact_kind)
+        # A live-model hiccup (timeout / dropped connection / bad JSON) must never break the review:
+        # degrade to the deterministic grounded confirmations, which need no model.
+        try:
+            issues = _critic(gw, review_target, board_name, soc, facts, grounding, artifact_kind)
+        except Exception:
+            issues = []
         c_conf, advisory = arbitrate(issues, board, soc)
         confirmed = grounded + c_conf                           # deterministic faults always first
         if not confirmed:
             break
-        fix = _actor(gw, confirmed, board_name, allow)
+        try:
+            fix = _actor(gw, confirmed, board_name, allow)
+        except Exception:
+            break                      # can't explain fixes this run; deterministic confirmed stands
         fixes.append({"epoch": epoch, "fix": fix})
         review_target = scaffold + "\n/* engineer applied: " + fix[:200] + " */"
         if not c_conf:                 # only deterministic faults remain — one fix pass is enough

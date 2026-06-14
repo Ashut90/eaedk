@@ -156,7 +156,8 @@ def _progress_summary(conn, project_name: str | None):
 
 def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 use_llm: bool = False, gateway: Gateway | None = None,
-                project: str | None = None, has_hardware: bool = False) -> str:
+                project: str | None = None, has_hardware: bool = False,
+                extra_context: str = "") -> str:
     """A 2-way mentor turn. ``messages`` is the conversation so far ([{role, content}, ...]).
     Always returns an answer + a board-tied 'Try this' + a follow-up question (the contract holds
     even offline). The post-filter runs on every LLM response. ``project`` lets the mentor read the
@@ -225,8 +226,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if progress and progress["next"]:
         prog_line = (f"Project '{project}' progress: {progress['complete']}/{progress['total']} "
                      f"done; next task: {progress['next']['title']}.\n")
+    extra_line = (extra_context.strip() + "\n") if extra_context and extra_context.strip() else ""
     prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n"
-              f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}"
+              f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{extra_line}"
               f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
               + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")

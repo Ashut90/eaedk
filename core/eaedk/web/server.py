@@ -448,6 +448,63 @@ async def api_mentor_chat(request: Request):
     return {"board": board, "answer": answer}
 
 
+# --- Contextual chat box (v2.4.0) — one route, four page contexts (docs/23) ---
+
+def _chat_extra_context(conn, page: str, board: str, body: dict) -> str:
+    """Page-specific context injected into the mentor prompt. Built server-side (the route holds
+    the DB), so the client can't smuggle in claims — only the page's own visible state."""
+    if page == "studio":
+        bits = []
+        code = (body.get("current_code") or "").strip()
+        if code:
+            bits.append("THE USER'S CURRENT CODE (reason about THIS exact code, never generic "
+                        "advice):\n" + code[:2000])
+        confirmed = (body.get("review_results") or {}).get("confirmed") or []
+        if confirmed:
+            bits.append("Engine-confirmed problems already found: " + "; ".join(
+                str(c.get("check") or c.get("message", "")) for c in confirmed[:5]))
+        return "\n".join(bits)
+    if page == "boards":
+        names = [r["name"] for r in repo.list_boards(conn, None)]
+        others = ", ".join(n for n in names if n != board)
+        return f"Other boards the user could compare against: {others}" if others else ""
+    return ""
+
+
+@app.post("/api/chat")
+async def api_chat(request: Request):
+    """The contextual chat box for the Boards, Mentor, Code Studio, and Datasheet pages. One route,
+    four contexts: the Datasheet page uses the confidence-rated Board Query Engine (HIGH/MEDIUM/
+    UNKNOWN + citation); the others use the mentor reasoning engine with the page's context injected.
+    The post-filter runs on every reply; offline, the deterministic backbone is returned."""
+    from ..mentor_llm import mentor_chat
+    from ..engines.ingest.query import answer_query
+    body = await request.json()
+    page = (body.get("page_type") or "").lower()
+    board = body.get("board_name") or ""
+    user_message = (body.get("user_message") or "").strip()
+    if not user_message:
+        return _err("Type a message first.", "Ask EAEDK anything about what's on this page.")
+    conn = _conn()
+    if repo.load_board(conn, board)[0] is None:
+        return _err(f"Board not found: {board!r}.", "Pick a board first, then ask.")
+    use_llm = bool(body.get("use_llm", True))           # conversational by default; degrades offline
+    history = body.get("conversation_history") or []
+
+    if page == "datasheet":
+        res = answer_query(conn, board, user_message, use_llm=use_llm)
+        return {"page_type": page, "board": board,
+                "answer": res["answer"], "confidence": res.get("confidence")}
+
+    project = body.get("project_name") or None
+    wokwi = bool(body.get("wokwi_flag"))
+    extra = _chat_extra_context(conn, page, board, body)
+    messages = [m for m in history if isinstance(m, dict)] + [{"role": "user", "content": user_message}]
+    answer = mentor_chat(conn, board, messages, use_llm=use_llm, project=project,
+                         has_hardware=not wokwi, extra_context=extra)
+    return {"page_type": page, "board": board, "answer": answer}
+
+
 # --- Page 7: Code Studio (surfaces the existing Actor-Critic loop) ----------
 
 @app.get("/api/studio/{project}")

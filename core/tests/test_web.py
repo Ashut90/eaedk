@@ -282,3 +282,28 @@ def test_ingest_new_board_onramp(client):
     # missing architecture for a new board -> friendly error, not a crash
     e = client.post("/api/ingest", json={"new_board": "X", "text": text}).json()
     assert "architecture" in e["error"].lower() and "next" in e
+
+
+# --- Contextual chat box (v2.4.0) — one route, four page contexts ----------
+
+def test_chat_datasheet_states_confidence(client):
+    r = client.post("/api/chat", json={"page_type": "datasheet", "use_llm": False,
+                    "board_name": "STM32F103-BluePill", "user_message": "how much RAM does it have?"})
+    d = r.json()
+    assert "error" not in d and d.get("confidence")     # every datasheet hardware answer has a confidence
+
+def test_chat_boards_returns_answer_offline(client):
+    r = client.post("/api/chat", json={"page_type": "boards", "use_llm": False,
+                    "board_name": "STM32F103-BluePill", "user_message": "where do I start?"})
+    d = r.json()
+    assert "error" not in d and d.get("answer")         # offline backbone, never a dead end
+
+def test_chat_studio_returns_answer(client):
+    r = client.post("/api/chat", json={"page_type": "studio", "use_llm": False, "board_name": "STM32F103-BluePill",
+                    "current_code": "int main(){}", "user_message": "my code does nothing"})
+    assert r.json().get("answer")
+
+def test_chat_empty_message_is_friendly_error(client):
+    r = client.post("/api/chat", json={"page_type": "boards",
+                    "board_name": "STM32F103-BluePill", "user_message": "   "})
+    assert "error" in r.json()

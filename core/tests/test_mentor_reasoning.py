@@ -7,7 +7,7 @@ from eaedk.store.db import connect
 from eaedk.store.migrate import migrate
 from eaedk.seed import seed_all
 from eaedk.llm.gateway import Gateway
-from eaedk import mentor_llm
+from eaedk import mentor_llm, repo
 from eaedk import actor_critic as ac
 
 
@@ -76,3 +76,27 @@ def test_job5_wokwi_flag_and_role_d(tmp_path):
     _system, prompt = rec.calls[-1]
     assert "wokwi" in prompt.lower()                                 # the flag reaches the model
     assert "wokwi" in mentor_llm._CHAT_SYSTEM.lower()                # Role D in the system prompt
+
+
+# Code Studio chat — the editor's current code is injected into the prompt (docs/23).
+def test_studio_code_injected_via_extra_context(tmp_path):
+    conn = _seeded(tmp_path)
+    rec = _Recorder()
+    code = "int main(){ GPIOA->ODR = 1; }   // MARKER_UNIQUE_42"
+    mentor_llm.mentor_chat(conn, "STM32F103-BluePill",
+                           [{"role": "user", "content": "why does nothing happen?"}],
+                           use_llm=True, gateway=Gateway(provider=rec), extra_context=code)
+    _system, prompt = rec.calls[-1]
+    assert "MARKER_UNIQUE_42" in prompt                              # the editor code reached the model
+
+
+# Mentor chat — State-Engine progress for the current project is injected (docs/23).
+def test_mentor_progress_injected(tmp_path):
+    conn = _seeded(tmp_path)
+    repo.create_project(conn, "p1", "bare_metal_app", "STM32F103-BluePill")
+    rec = _Recorder()
+    mentor_llm.mentor_chat(conn, "STM32F103-BluePill",
+                           [{"role": "user", "content": "what should I build?"}],
+                           use_llm=True, gateway=Gateway(provider=rec), project="p1")
+    _system, prompt = rec.calls[-1]
+    assert "progress" in prompt.lower()                              # State-Engine progress reached the model
