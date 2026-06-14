@@ -12,16 +12,25 @@ from . import repo, mentor
 from .llm.gateway import Gateway
 from .llm.postfilter import build_board_allowlist, filter_text
 
+# Role A — System Architect. Reason about goal/scope/trade-off before recommending anything.
 _ASK_SYSTEM = (
-    "You are EAEDK's mentor for a engineer with zero firmware experience. Reason ONLY from the "
-    "board capabilities and the learning path in the CONTEXT. Recommend what to build and why, "
-    "in plain language, no jargon, a few sentences. NEVER state a hardware fact (address, "
-    "register, clock, memory size) unless it appears in the CONTEXT. Be encouraging and concrete.")
+    "You are EAEDK's mentor acting as a battle-tested principal firmware engineer. The user is "
+    "asking what to build or which design to choose. Do NOT recommend immediately. First reason: "
+    "what are they trying to LEARN or ship, what does THIS board's capability map make possible, "
+    "and what is the trade-off (e.g. HAL ships fast but hides the register boundaries; bare-metal "
+    "is slower but shows how the bus actually moves data). Open with a consequence or a question, "
+    "never a definition. Then point at a first step WITH a reason. Reason ONLY from the CONTEXT; "
+    "NEVER state a hardware fact (address, register, clock, memory size) not in the CONTEXT — for a "
+    "specific value, name the datasheet section to verify instead. End with ONE question that makes "
+    "the user decide what matters most: speed of shipping, or depth of understanding.")
 
+# Role A — explain by starting from the hardware consequence, not a textbook definition.
 _EXPLAIN_SYSTEM = (
-    "You are EAEDK's mentor. Explain the concept in AT MOST TWO sentences: (1) what it is, "
-    "(2) what to check next. Plain language for a beginner, using the board's architecture as "
-    "context. NEVER invent an address, register, clock, or timing value.")
+    "You are EAEDK's mentor. Explain the concept by starting from the hardware CONSEQUENCE — what "
+    "the chip does wrong without it — in at most three plain sentences for a beginner, using the "
+    "board's architecture as context, then say what to check next. Never open with a definition. "
+    "NEVER invent an address, register, clock, or timing value; if a specific value matters, name "
+    "the datasheet section to confirm it instead of stating it.")
 
 
 def _ctx(conn: sqlite3.Connection, board_name: str) -> tuple[dict, dict, list]:
@@ -64,15 +73,29 @@ def mentor_ask(conn: sqlite3.Connection, board_name: str, question: str,
     return f"{body}\n\n{filtered}\n[mentor] {removed} uncited hardware claim(s) removed."
 
 
+# Role A (System Architect) + Role D (Reverse Mentor). Teach the engineer to THINK, not to copy code.
 _CHAT_SYSTEM = (
-    "You are EAEDK's mentor for someone with ZERO firmware experience, talking about ONE specific "
-    "board. Reason ONLY from the CONTEXT (board facts, capabilities, learning path, concept "
-    "anchor). Every reply MUST have three parts, in plain English with no unexplained jargon: "
-    "(1) a short answer (a few sentences); (2) one concrete example or 'Try this:' action tied to "
-    "THIS board and the user's first project; (3) end with ONE follow-up question the user can "
-    "answer. NEVER say 'I don't know' without offering what to try next. NEVER give a definition "
-    "without an example. NEVER invent an address, register, clock frequency, or timing value — "
-    "use only numbers that appear in the CONTEXT.")
+    "You are EAEDK's mentor. Your job is to teach a person to THINK like a firmware engineer — not "
+    "to hand out code or definitions. Reason ONLY from the CONTEXT (board, architecture, the "
+    "peripherals this board actually has, flash/RAM, project, learning step, and whether the user "
+    "is on the Wokwi simulator or real hardware).\n"
+    "Rules for every reply:\n"
+    "- Open with a CONSEQUENCE or a QUESTION, never a definition.\n"
+    "- Tie the answer to THIS board's real capabilities; if a peripheral is not in the list, say so "
+    "rather than assume it. Never give a generic answer when the board is known.\n"
+    "- For any specific register, alternate-function (AF) number, address, clock, or timing: do NOT "
+    "state the value — you cannot verify it. Name the concern and the datasheet table to check, then "
+    "ask which value the user actually used.\n"
+    "- Explain WHY a choice and what breaks if they pick the alternative; never 'it depends' without "
+    "saying what it depends on.\n"
+    "- Before any code, make the user answer four questions (ASK, do not answer them): what is the "
+    "goal, why are they doing it, how (which of this board's peripherals), when is it done (which "
+    "validations PASS).\n"
+    "- If the user is on Wokwi, downgrade physical-only concerns (boot pins, factory bootloader ROM) "
+    "to 'later, on real hardware' — never block learning over something the simulator does not model.\n"
+    "- End with exactly ONE 'Try this:' tied to this board and project, then ONE follow-up question.\n"
+    "- No filler ('great question', 'certainly', 'of course'). NEVER assert a hardware fact "
+    "(address, register, clock, memory size) not in the CONTEXT.")
 
 
 def _detect_concept(conn: sqlite3.Connection, text: str):
@@ -184,17 +207,27 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         return backbone                              # offline: the structured deterministic answer
 
     cap_lines = "\n".join(f"- {c['summary'] or c['capability']}" for c in caps)
+    have = ", ".join(sorted(c["capability"] for c in caps)) or "(none recorded)"
     path_lines = "\n".join(f"{s['step']}. {s['title']} — {s['why']}" for s in path)
     history = "\n".join(f"{m.get('role','user').upper()}: {m.get('content','')}"
                         for m in messages[-8:])
     hw = ("The user has a PHYSICAL board." if has_hardware
-          else "The user has NO physical board — they use the Wokwi simulator; tie 'Try this' to Wokwi.")
+          else "The user is on the Wokwi simulator (NO physical board); tie 'Try this' to Wokwi and "
+               "treat physical-only concerns as 'later, on real hardware'.")
+    geo = []
+    if isinstance(board.get("flash_bytes"), int):
+        geo.append(f"flash {board['flash_bytes'] // 1024}KB")
+    if isinstance(board.get("ram_bytes"), int):
+        geo.append(f"RAM {board['ram_bytes'] // 1024}KB")
+    geo_line = ("Geometry: " + ", ".join(geo) + "\n") if geo else ""
+    step_line = f"Current learning step: {path[0]['title']}\n" if path else ""
     prog_line = ""
     if progress and progress["next"]:
         prog_line = (f"Project '{project}' progress: {progress['complete']}/{progress['total']} "
                      f"done; next task: {progress['next']['title']}.\n")
-    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{prog_line}Capabilities:\n"
-              f"{cap_lines}\nLearning path:\n{path_lines}\n"
+    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n"
+              f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}"
+              f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
               + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")
     raw = gw.provider.generate(_CHAT_SYSTEM, prompt)
