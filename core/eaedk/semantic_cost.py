@@ -11,6 +11,7 @@ result depends on configuration (UNKNOWN/TIGHT). If the maximum fits, PASS.
 """
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from typing import Any
@@ -129,15 +130,24 @@ def assess(conn: sqlite3.Connection, board_name: str, terms: list[str],
     ``terms`` are canonical costed terms; ``unknown_terms`` are recognised-but-uncosted requests to
     surface. Verdict: FAIL (min doesn't fit) / UNKNOWN (tight or missing data) / PASS (max fits)."""
     board, _soc = repo.load_board(conn, board_name)
+    board_caps = repo.board_capability_names(conn, board_name)
     found: list[dict[str, Any]] = []
     unknown_terms = list(unknown_terms or [])
+    peripheral_failures: list[dict[str, Any]] = []       # v3.1 Gap 4
     for t in terms:
         row = repo.semantic_cost(conn, t)
         if row is None:
             if t not in unknown_terms:
                 unknown_terms.append(t)
         else:
-            found.append(dict(row))
+            d = dict(row)
+            prereqs = json.loads(d.get("prerequisites_json") or "[]")
+            d["prerequisites"] = prereqs
+            # Requires ANY ONE of the listed capabilities. None present -> peripheral non-compliance.
+            d["prereq_ok"] = (not prereqs) or bool(set(prereqs) & board_caps)
+            if not d["prereq_ok"]:
+                peripheral_failures.append({"term": d["term"], "requires": prereqs})
+            found.append(d)
 
     f_min = sum(r["flash_min_bytes"] for r in found)
     f_max = sum(r["flash_max_bytes"] for r in found)
@@ -174,6 +184,13 @@ def assess(conn: sqlite3.Connection, board_name: str, terms: list[str],
                 reasons.append(f"Fits: max estimate {_fmt(f_max)} flash / {_fmt(r_max)} RAM is "
                                f"within {_fmt(board_flash)} / {_fmt(board_ram)}.")
 
+    # v3.1 Gap 4: a missing physical peripheral is a hard FAIL regardless of memory — you cannot run
+    # a network protocol on a board with no NIC, even if it had infinite flash.
+    for pf in peripheral_failures:
+        verdict = "FAIL"
+        reasons.append(f"Peripheral: '{pf['term']}' requires a {' or '.join(pf['requires'])} "
+                       f"interface, which {board_name} does not have. It cannot run here at any size.")
+
     if unknown_terms and verdict == "PASS":
         verdict = "UNKNOWN"
     if unknown_terms:
@@ -182,6 +199,7 @@ def assess(conn: sqlite3.Connection, board_name: str, terms: list[str],
 
     return {"board": board_name, "board_flash": board_flash, "board_ram": board_ram,
             "terms": found, "unknown_terms": unknown_terms,
+            "peripheral_failures": peripheral_failures,
             "flash_min": f_min, "flash_max": f_max, "ram_min": r_min, "ram_max": r_max,
             "verdict": verdict, "reasons": reasons}
 
@@ -198,6 +216,9 @@ def render(result: dict[str, Any]) -> str:
         verified = "verified" if r["verified_by_human"] else "UNVERIFIED estimate"
         L.append(f"  • {r['term']}: flash {_fmt(r['flash_min_bytes'])}–{_fmt(r['flash_max_bytes'])}, "
                  f"RAM {_fmt(r['ram_min_bytes'])}–{_fmt(r['ram_max_bytes'])}  [{verified}]")
+        if r.get("prerequisites"):                       # v3.1 Gap 4: peripheral requirement status
+            ok = "present" if r.get("prereq_ok") else "MISSING on this board"
+            L.append(f"        requires: {' or '.join(r['prerequisites'])} interface — {ok}")
         if r["notes"]:
             L.append(f"        {r['notes']}")
     for t in result["unknown_terms"]:
@@ -233,6 +254,9 @@ def chat_note(conn: sqlite3.Connection, board_name: str, text: str) -> str:
         parts.append(f"{r['term']} ~{_fmt(r['flash_min_bytes'])}–{_fmt(r['flash_max_bytes'])} flash / "
                      f"~{_fmt(r['ram_min_bytes'])}–{_fmt(r['ram_max_bytes'])} RAM")
     note = "Based on known cost data: " + "; ".join(parts) + ". "
+    for pf in res.get("peripheral_failures", []):        # v3.1 Gap 4: peripheral compliance first
+        note += (f"But {pf['term']} needs a {' or '.join(pf['requires'])} interface this board does "
+                 f"not have — it cannot run here regardless of memory. ")
     bf, br = res["board_flash"], res["board_ram"]
     if bf is not None:
         note += (f"Summed, that is ~{_fmt(res['flash_min'])}–{_fmt(res['flash_max'])} flash and "

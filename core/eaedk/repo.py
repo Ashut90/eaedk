@@ -308,13 +308,13 @@ def semantic_cost(conn: sqlite3.Connection, term: str) -> sqlite3.Row | None:
     """One curated cost estimate by canonical term, or None (v3.0 P2)."""
     return conn.execute(
         "SELECT term,flash_min_bytes,flash_max_bytes,ram_min_bytes,ram_max_bytes,notes,source,"
-        "verified_by_human FROM semantic_cost_estimates WHERE term = ?", (term,)).fetchone()
+        "verified_by_human,prerequisites_json FROM semantic_cost_estimates WHERE term = ?", (term,)).fetchone()
 
 
 def all_semantic_costs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         "SELECT term,flash_min_bytes,flash_max_bytes,ram_min_bytes,ram_max_bytes,notes,source,"
-        "verified_by_human FROM semantic_cost_estimates ORDER BY term").fetchall()
+        "verified_by_human,prerequisites_json FROM semantic_cost_estimates ORDER BY term").fetchall()
 
 
 def resolve_board_name(conn: sqlite3.Connection, query: str) -> tuple[str | None, bool]:

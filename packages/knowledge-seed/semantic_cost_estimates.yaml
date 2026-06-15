@@ -9,6 +9,7 @@
   flash_max_bytes: 614400      # ~600KB
   ram_min_bytes: 51200         # ~50KB
   ram_max_bytes: 81920         # ~80KB
+  prerequisites: [wifi, ethernet]   # needs a network interface (any one)
   notes: "gRPC + protobuf + an HTTP/2 stack, typically over mbedTLS. Not realistic on a small MCU."
   source: "gRPC C-core / nanopb community builds; order-of-magnitude estimate"
   verified_by_human: false
@@ -27,6 +28,7 @@
   flash_max_bytes: 61440       # ~60KB
   ram_min_bytes: 8192          # ~8KB
   ram_max_bytes: 16384         # ~16KB
+  prerequisites: [wifi, ethernet]   # MQTT is a network protocol — needs a NIC
   notes: "Eclipse Paho MQTT embedded client, excluding the TLS layer (add tls_mbedtls separately)."
   source: "Eclipse Paho embedded C client footprint"
   verified_by_human: false
@@ -54,6 +56,7 @@
   flash_max_bytes: 81920       # ~80KB
   ram_min_bytes: 20480         # ~20KB
   ram_max_bytes: 40960         # ~40KB
+  prerequisites: [wifi, ethernet]   # a TCP/IP stack needs a network interface to drive
   notes: "lwIP TCP/IP stack; RAM scales with pbuf pool and TCP window size."
   source: "lwIP documentation / typical embedded config"
   verified_by_human: false

@@ -115,3 +115,46 @@ def test_gap3_chat_now_catches_ai_intent(tmp_path):
                         "gestures. Can I do that on my Blue Pill?"}], use_llm=False)
     assert "Based on known cost data" in out
     assert "will NOT fit" in out
+
+
+# --- v3.1 Gap 4: peripheral prerequisites (a network stack needs a NIC) --------------------
+
+def test_gap4_mqtt_fails_on_board_without_nic(tmp_path):
+    conn = _seeded(tmp_path)
+    res = sc.assess(conn, "STM32F103-BluePill", ["mqtt_paho"])   # fits memory, but no wifi/ethernet
+    assert res["verdict"] == "FAIL"
+    assert res["peripheral_failures"] == [{"term": "mqtt_paho", "requires": ["wifi", "ethernet"]}]
+    assert any("does not have" in r for r in res["reasons"])
+
+
+def test_gap4_mqtt_passes_on_wifi_board(tmp_path):
+    conn = _seeded(tmp_path)
+    assert sc.assess(conn, "ESP32-DevKitC", ["mqtt_paho"])["verdict"] == "PASS"        # wifi
+    assert sc.assess(conn, "WIZnet-W5500-EVB-Pico", ["mqtt_paho"])["peripheral_failures"] == []  # ethernet
+
+
+def test_gap4_peripheral_fail_is_independent_of_memory(tmp_path):
+    """gRPC on the Blue Pill fails BOTH on memory and on the missing NIC — the peripheral check is
+    not masked by the memory check."""
+    conn = _seeded(tmp_path)
+    res = sc.assess(conn, "STM32F103-BluePill", ["grpc"])
+    assert res["verdict"] == "FAIL"
+    assert res["peripheral_failures"] and res["peripheral_failures"][0]["term"] == "grpc"
+
+
+def test_gap4_no_prerequisite_term_unaffected(tmp_path):
+    conn = _seeded(tmp_path)
+    res = sc.assess(conn, "STM32F103-BluePill", ["freertos"])   # no peripheral requirement
+    assert res["verdict"] == "PASS" and res["peripheral_failures"] == []
+
+
+def test_gap4_unified_validate_surfaces_peripheral_fail(tmp_path):
+    """End to end (Gap 4 + Gap 5): a project intending MQTT on a NIC-less board is not feasible."""
+    from eaedk.orchestrator.orchestrator import assess_project
+    conn = _seeded(tmp_path)
+    repo.create_project(conn, "node", "bare_metal_app", "STM32F103-BluePill")
+    p = repo.get_project(conn, "node")
+    resp = assess_project(conn, p, intent="mqtt")
+    assert resp.feasibility == "not_feasible"
+    assert resp.intent["peripheral_failures"]
+    assert "wifi or ethernet" in " ".join(resp.intent["reasons"])

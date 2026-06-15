@@ -194,11 +194,11 @@ def _load_semantic_cost_estimates(conn: sqlite3.Connection) -> int:
     for r in rows:
         conn.execute(
             "INSERT INTO semantic_cost_estimates(term,flash_min_bytes,flash_max_bytes,"
-            "ram_min_bytes,ram_max_bytes,notes,source,verified_by_human) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "ram_min_bytes,ram_max_bytes,notes,source,verified_by_human,prerequisites_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (r["term"], r["flash_min_bytes"], r["flash_max_bytes"], r["ram_min_bytes"],
              r["ram_max_bytes"], r.get("notes"), r.get("source"),
-             1 if r.get("verified_by_human") else 0))
+             1 if r.get("verified_by_human") else 0, json.dumps(r.get("prerequisites", []))))
     return len(rows)
 
 
