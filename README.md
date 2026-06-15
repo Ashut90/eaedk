@@ -89,7 +89,9 @@ eaedk roadmap --board bluepill --goal firmware-job  # "How do I get a job with t
 
 Two front doors call the same deterministic engine core; every fact flows through `repo.py` into
 local SQLite. The LLM sits **outside** the trust boundary and reaches you only through an
-Actor → Critic → **deterministic Arbiter** → Post-Filter pipeline.
+Actor → Critic → **deterministic Arbiter** → Post-Filter pipeline. A mentor turn first passes a
+deterministic **Purpose Decision** — answer / clarify / redirect / decline — before any of this runs
+(see *[Reasoning workflow](#reasoning-workflow--how-the-mentor-actually-thinks)* below).
 
 ```mermaid
 flowchart TB
@@ -123,11 +125,15 @@ flowchart TB
     TOOL --> DB
     MENT --> DB
 
+    PURP{"Purpose Decision — GUARDRAIL<br/>answer · clarify · redirect · decline<br/>(first step of a mentor turn, no LLM)"}:::guard
+    ORCH -->|mentor turn| PURP
+    PURP -.->|"clarify · redirect · decline<br/>(model never called)"| user
+
     subgraph OUT["LLM — OUTSIDE the boundary · explains only"]
         direction LR
         ACT["Actor<br/>propose"]:::llm --> CRIT["Critic<br/>self-review"]:::llm --> ARB["Arbiter — GUARDRAIL<br/>deterministic · final say"]:::guard --> PF["Post-Filter — GUARDRAIL<br/>strip uncited hardware numbers"]:::guard
     end
-    ORCH -->|grounding context| ACT
+    PURP -->|"ANSWER_NOW + grounding context"| ACT
     DB -.->|cited allowlist| PF
     TRUTH -.->|feasibility + cost verdict| ARB
     PF -->|filtered, cited prose| user
@@ -187,32 +193,41 @@ flowchart TD
 
 ## Reasoning workflow — how the mentor actually thinks
 
-When you ask a question (Boards chat or `eaedk mentor`), EAEDK does **not** hand it straight to a
-model. It runs deterministic detectors first, prepends an un-bypassable grounding (a feasibility
-banner and any semantic-cost reality check), builds a **reasoning backbone** — the board-agnostic
-framework *what → why → when → options → trade-off → how to decide → next*, with board facts only
-*enriching* the trade-off — and only then, if `--llm` is on, lets the model elaborate that backbone
-through Actor → Critic → **Arbiter** → Post-Filter. Offline, the backbone *is* the answer.
+The mentor does **not** assume the job of every turn is to produce an answer. Before anything else, a
+deterministic **Purpose Decision** (no LLM) chooses *what the turn is for* — `ANSWER_NOW`,
+`ASK_CLARIFICATION`, `REDIRECT_TO_FOUNDATION`, or `DECLINE_OUT_OF_SCOPE`. `ANSWER_NOW` is **never the
+default**: it requires both a resolvable intent *and* grounding in EAEDK's curated knowledge. The
+user's question is the subject; the selected board is only context — so *"How do I use a Jetson?"* is
+declined honestly, never answered as a blink tutorial on whatever board happens to be selected.
+
+Only on `ANSWER_NOW` does it proceed: deterministic detectors, an un-bypassable grounding (a
+feasibility banner and any semantic-cost reality check), a **reasoning backbone** — the board-agnostic
+framework *what → why → when → options → trade-off → how to decide → next*, board facts only
+*enriching* the trade-off — and then, if `--llm` is on, the model elaborates that backbone through
+Actor → Critic → **Arbiter** → Post-Filter. Offline, the backbone *is* the answer.
 
 ```mermaid
 flowchart TD
     Q["User question / chat<br/>(Boards page or eaedk mentor)"]:::in
 
-    Q --> DET["Deterministic detectors — no LLM"]:::core
+    Q --> PURP{"PURPOSE DECISION — first step, no LLM<br/>what is this turn FOR?"}:::guard
+    PURP -->|DECLINE_OUT_OF_SCOPE| O1["Subject outside grounded knowledge<br/>('Nvidia Jetson', 'Yocto') — honest, never a board default"]:::out
+    PURP -->|ASK_CLARIFICATION| O2["Need context first<br/>('help'; a crash with no address / registers / logs)"]:::out
+    PURP -->|REDIRECT_TO_FOUNDATION| O3["Career / learning path<br/>(a sequence, not a board-bound answer)"]:::out
+    PURP -->|"ANSWER_NOW · only if grounded AND intent clear"| DET["Deterministic detectors — no LLM"]:::core
+
     DET --> R1["role · SPONSOR / PEER / ARCHITECT / REVERSE"]:::detect
     DET --> R2["topic · an engineering DECISION"]:::detect
     DET --> R3["domain · robotics / sensor / IoT"]:::detect
-    DET --> R4["career · learning roadmap"]:::detect
     DET --> R5["concept · HardFault, vector table, …"]:::detect
 
-    Q --> LEAD["Deterministic prefix — always, un-bypassable"]:::guard
+    DET --> LEAD["Deterministic prefix — always, un-bypassable"]:::guard
     LEAD --> G1["Feasibility guard · NOT FEASIBLE banner"]:::guard
     LEAD --> G2["Semantic cost note · gRPC ~500KB vs 64KB"]:::guard
 
     R1 --> BACK
     R2 --> BACK
     R3 --> BACK
-    R4 --> BACK
     R5 --> BACK
     BACK["Reasoning backbone — priority-ordered"]:::core
     BACK --> FW["The reasoning FRAMEWORK<br/>what → why → when → options →<br/>trade-off → how to decide → next"]:::frame
@@ -235,11 +250,33 @@ flowchart TD
     classDef llm fill:#fce4ec,stroke:#c2185b,stroke-dasharray:6 4,color:#7a1438;
     classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b4d2e;
     classDef dec fill:#fffde7,stroke:#f9a825,color:#7a5b00;
+    classDef out fill:#ede7f6,stroke:#5e35b1,color:#311b92;
 ```
 
 The framework lives as curated Python data (`reasoning.py`), so the *thinking* holds fully offline —
 an air-gapped mentor still teaches the reasoning, not just a stored answer. See
 [docs/27-reasoning-framework.md](docs/27-reasoning-framework.md).
+
+## Sample interactions you can expect
+
+The Purpose Decision is what makes the mentor refuse to be a generic answer box. The board below is
+**STM32F103-BluePill** in every row — notice it is never forced onto a question that isn't about it.
+(Try them: Boards chat in `eaedk web`, or `eaedk mentor --board bluepill --ask "…" --llm`.)
+
+| You ask | Purpose | What you get |
+|---|---|---|
+| *"How can I use Nvidia Jetson?"* | `DECLINE_OUT_OF_SCOPE` | *"Jetson is outside the hardware EAEDK has verified facts for — I won't guess."* No blink, no board default. |
+| *"When should I use Yocto?"* | `DECLINE_OUT_OF_SCOPE` | Honest about the limitation, with **no** board-specific claims invented to fill the gap. |
+| *"Should I learn Zephyr or FreeRTOS?"* | `ANSWER_NOW` | The RTOS-vs-super-loop **decision criteria** — when each wins, the per-task RAM cost on this board, how to decide. Not "start with blink." |
+| *"I want to become a firmware engineer but don't know where to start."* | `REDIRECT_TO_FOUNDATION` | An ordered learning **path** (blink → UART → SPI → interrupts → bootloader → RTOS), each step with *why it comes first* — a sequence, not one experiment. |
+| *"Help"* | `ASK_CLARIFICATION` | *"Tell me what you're trying to do, and on which board, and I'll point you at the first real step."* |
+| *"My code crashed with HardFault_Handler"* | `ASK_CLARIFICATION` | Asks for the **evidence** — the faulting address, the fault status registers (CFSR/HFSR on Cortex-M), or the code. Naming the exception is the *symptom*, not the diagnosis. |
+| *"What is SPI?"* | `ANSWER_NOW` | Teaches with the **framework**: what it is, why it exists, the alternatives, the trade-off, how an engineer decides, and the next step. |
+
+The rule across all seven: **the user's question is the subject, the selected board is only context.**
+A subject EAEDK cannot ground is declined honestly; a question missing context is clarified; a learner
+asking too far ahead is redirected to the foundation; and only a grounded, clear-intent question is
+answered.
 
 ## The guardrails the LLM cannot bypass
 
