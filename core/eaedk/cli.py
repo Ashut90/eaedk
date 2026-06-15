@@ -374,6 +374,19 @@ def cmd_project_status(args):
 
 def cmd_validate(args):
     conn = _conn(args)
+    if getattr(args, "intent", None):                 # P2C: intent feasibility against a board
+        if not args.board:
+            print("error: validate --intent needs --board NAME", file=sys.stderr); sys.exit(2)
+        if repo.load_board(conn, args.board)[0] is None:
+            _unknown_board(conn, args.board); sys.exit(2)
+        from .semantic_cost import classify_terms, assess, render
+        known, unknown = classify_terms(args.intent)
+        res = assess(conn, args.board, known, unknown)
+        if args.json:
+            print(json.dumps(res, indent=2, default=str))
+        else:
+            print(render(res), end="")
+        sys.exit(1 if res["verdict"] == "FAIL" else 0)
     p = _require_project(conn, args.name)
     only = [args.rule] if args.rule else None
     resp = assess_project(conn, p, only=only)
@@ -933,7 +946,9 @@ def build_parser() -> argparse.ArgumentParser:
     cdn = cl.add_parser("done", help="mark a checklist item complete (you confirm it)")
     cdn.add_argument("name"); cdn.add_argument("item"); cdn.set_defaults(func=cmd_checklist_done)
 
-    v = sub.add_parser("validate"); v.add_argument("name"); v.add_argument("--rule")
+    v = sub.add_parser("validate"); v.add_argument("name", nargs="?"); v.add_argument("--rule")
+    v.add_argument("--board", help="check an intent against this board (with --intent)")
+    v.add_argument("--intent", help="high-level capabilities to cost out, e.g. \"grpc tls freertos\"")
     v.set_defaults(func=cmd_validate)
     rk = sub.add_parser("risk").add_subparsers(dest="sub", required=True)
     rks = rk.add_parser("show"); rks.add_argument("name"); rks.set_defaults(func=cmd_risk_show)

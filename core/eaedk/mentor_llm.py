@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import sqlite3
 
-from . import repo, mentor, reasoning
+from . import repo, mentor, reasoning, semantic_cost
 from .llm.gateway import Gateway
 from .llm.postfilter import build_board_allowlist, filter_text
 
@@ -728,6 +728,8 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     question = _followup_question(caps, path)
     progress = _progress_summary(conn, project)
     guard = _feasibility_guard(conn, project)        # P1: hard NOT-FEASIBLE banner, prepended below
+    sem_note = semantic_cost.chat_note(conn, board_name, last_user)  # P2B: grounded intent cost
+    lead = guard + (sem_note + "\n\n" if sem_note else "")           # deterministic prefix on every reply
 
     # "How am I doing / what's next" -> answer straight from the State Engine (never the LLM).
     if progress and any(k in last_user.lower() for k in _PROGRESS_Q):
@@ -738,7 +740,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         else:
             head = (f"You're at {progress['complete']}/{progress['total']} — every item is "
                     "complete. Nice work.")
-        return guard + f"{head}{_tt_block(try_this)}\n\n{question}"
+        return lead + f"{head}{_tt_block(try_this)}\n\n{question}"
 
     # Deterministic backbone — a real answer even with no model, always ending in an action.
     # An engineering decision teaches the reasoning FRAMEWORK (v2.6.0); a named project type reasons
@@ -761,11 +763,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     gw = gateway or Gateway()
     note = _llm_or_note(use_llm, gw)
     if note is not None:
-        return guard + backbone                      # offline: the structured deterministic answer
+        return lead + backbone                       # offline: the structured deterministic answer
 
     # Role C — the Validation Engine's verdict is deterministic; the chat points there, never the model.
     if role == "SPONSOR":
-        return guard + ("That's the Validation Engine's call, not mine — open Validate or Export to "
+        return lead + ("That's the Validation Engine's call, not mine — open Validate or Export to "
                 "see exactly what passed, failed, or is unknown, and why. I explain those results; I "
                 "never override them.\n\nTry this: run Validate and read the first FAIL or UNKNOWN.\n\n"
                 "Question: which check is blocking you?")
@@ -805,7 +807,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         boards_line = (f"The user has referenced multiple boards: {_and_join(active_boards)}. For a "
                        "career/learning question, sequence learning across ALL of them and stress how "
                        "the reasoning transfers between them.\n")
-    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{boards_line}{feas_line}"
+    sem_line = ""
+    if sem_note:                                         # P2B: the cost data is already shown to the user
+        sem_line = ("COST DATA (seeded estimates, already stated to the user above — reason WITHIN it, "
+                    "do not contradict it or invent different numbers):\n" + sem_note + "\n")
+    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{boards_line}{sem_line}{feas_line}"
               f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
               f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
@@ -835,7 +841,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
             answer += f"\n\nTry this: {try_this}"
         if not answer.rstrip().rstrip("*_# ").endswith("?") and "question:" not in answer.lower():
             answer += f"\n\n{question}"           # already ends in a question? don't append a second
-    return guard + answer                            # P1: hard limit acknowledged on line 1, always
+    return lead + answer                             # P1/P2B: hard limit + cost data prefixed, always
 
 
 def mentor_explain(conn: sqlite3.Connection, board_name: str, concept: str,

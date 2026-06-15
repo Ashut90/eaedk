@@ -302,6 +302,19 @@ def learning_steps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "FROM learning_steps ORDER BY step").fetchall()
 
 
+def semantic_cost(conn: sqlite3.Connection, term: str) -> sqlite3.Row | None:
+    """One curated cost estimate by canonical term, or None (v3.0 P2)."""
+    return conn.execute(
+        "SELECT term,flash_min_bytes,flash_max_bytes,ram_min_bytes,ram_max_bytes,notes,source,"
+        "verified_by_human FROM semantic_cost_estimates WHERE term = ?", (term,)).fetchone()
+
+
+def all_semantic_costs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT term,flash_min_bytes,flash_max_bytes,ram_min_bytes,ram_max_bytes,notes,source,"
+        "verified_by_human FROM semantic_cost_estimates ORDER BY term").fetchall()
+
+
 def boards_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Name + SoC + architecture + geometry for every board — used to find the closest board by
     architecture family and memory bracket (v3.0 P1)."""

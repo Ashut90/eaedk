@@ -22,6 +22,7 @@ _SEED_TABLES = [
     "capabilities", "learning_steps", "concepts", "soc_defaults",
     "debug_probes", "soc_flash_profiles",
     "first_mistakes", "learning_step_intro", "board_blink_facts",
+    "semantic_cost_estimates",
     "citations", "sources",
 ]
 
@@ -186,6 +187,19 @@ def _load_learning_steps(conn: sqlite3.Connection) -> int:
     return len(rows)
 
 
+def _load_semantic_cost_estimates(conn: sqlite3.Connection) -> int:
+    rows = _load_yaml(seed_dir() / "semantic_cost_estimates.yaml") or []
+    for r in rows:
+        conn.execute(
+            "INSERT INTO semantic_cost_estimates(term,flash_min_bytes,flash_max_bytes,"
+            "ram_min_bytes,ram_max_bytes,notes,source,verified_by_human) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (r["term"], r["flash_min_bytes"], r["flash_max_bytes"], r["ram_min_bytes"],
+             r["ram_max_bytes"], r.get("notes"), r.get("source"),
+             1 if r.get("verified_by_human") else 0))
+    return len(rows)
+
+
 def _load_concepts(conn: sqlite3.Connection) -> int:
     rows = _load_yaml(seed_dir() / "concepts.yaml") or []
     for r in rows:
@@ -273,5 +287,6 @@ def seed_all(conn: sqlite3.Connection, force: bool = False) -> dict[str, int]:
             "first_mistakes": _load_first_mistakes(conn),
             "learning_step_intro": _load_learning_step_intro(conn),
             "board_blink_facts": _load_board_blink_facts(conn),
+            "semantic_cost_estimates": _load_semantic_cost_estimates(conn),
         }
     return counts

@@ -1,0 +1,68 @@
+# Semantic cost estimates (v3.0 P2). Curated flash/RAM cost RANGES for high-level intents, so a
+# beginner who says "I want gRPC" gets a concrete hardware cost the validation engine can check.
+#
+# verified_by_human: false for every entry below — these are typical published/community figures,
+# NOT yet confirmed by Ash against a primary measurement. They are honest estimates with a source,
+# flagged as unverified, never presented as ground truth.
+- term: grpc
+  flash_min_bytes: 409600      # ~400KB
+  flash_max_bytes: 614400      # ~600KB
+  ram_min_bytes: 51200         # ~50KB
+  ram_max_bytes: 81920         # ~80KB
+  notes: "gRPC + protobuf + an HTTP/2 stack, typically over mbedTLS. Not realistic on a small MCU."
+  source: "gRPC C-core / nanopb community builds; order-of-magnitude estimate"
+  verified_by_human: false
+
+- term: tls_mbedtls
+  flash_min_bytes: 102400      # ~100KB
+  flash_max_bytes: 204800      # ~200KB
+  ram_min_bytes: 20480         # ~20KB
+  ram_max_bytes: 51200         # ~50KB
+  notes: "mbedTLS minimum config (one cipher suite, no large cert chain). RAM grows with TLS record/session buffers."
+  source: "mbedTLS footprint docs / typical embedded TLS config"
+  verified_by_human: false
+
+- term: mqtt_paho
+  flash_min_bytes: 30720       # ~30KB
+  flash_max_bytes: 61440       # ~60KB
+  ram_min_bytes: 8192          # ~8KB
+  ram_max_bytes: 16384         # ~16KB
+  notes: "Eclipse Paho MQTT embedded client, excluding the TLS layer (add tls_mbedtls separately)."
+  source: "Eclipse Paho embedded C client footprint"
+  verified_by_human: false
+
+- term: freertos
+  flash_min_bytes: 5120        # ~5KB
+  flash_max_bytes: 15360       # ~15KB
+  ram_min_bytes: 4096          # ~4KB
+  ram_max_bytes: 8192          # ~8KB
+  notes: "FreeRTOS kernel, minimum config (a few tasks). RAM excludes per-task stacks you add on top."
+  source: "FreeRTOS kernel size documentation"
+  verified_by_human: false
+
+- term: tflite_micro
+  flash_min_bytes: 204800      # ~200KB
+  flash_max_bytes: 307200      # ~300KB
+  ram_min_bytes: 51200         # ~50KB
+  ram_max_bytes: 102400        # ~100KB
+  notes: "TensorFlow Lite for Microcontrollers, hello-world / person-detection scale. Model size is on top of this."
+  source: "TFLite-Micro example footprints"
+  verified_by_human: false
+
+- term: lwip
+  flash_min_bytes: 40960       # ~40KB
+  flash_max_bytes: 81920       # ~80KB
+  ram_min_bytes: 20480         # ~20KB
+  ram_max_bytes: 40960         # ~40KB
+  notes: "lwIP TCP/IP stack; RAM scales with pbuf pool and TCP window size."
+  source: "lwIP documentation / typical embedded config"
+  verified_by_human: false
+
+- term: fatfs
+  flash_min_bytes: 8192        # ~8KB
+  flash_max_bytes: 15360       # ~15KB
+  ram_min_bytes: 4096          # ~4KB
+  ram_max_bytes: 8192          # ~8KB
+  notes: "FatFs FAT filesystem; RAM dominated by the sector/work buffers."
+  source: "ChaN FatFs footprint documentation"
+  verified_by_human: false
