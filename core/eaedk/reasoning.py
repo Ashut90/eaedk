@@ -73,6 +73,17 @@ def _clock_enrich(ctx: dict) -> str | None:
     return notes.get(ctx.get("family"))
 
 
+def _linker_enrich(ctx: dict) -> str | None:
+    fb, rb = ctx.get("flash_base"), ctx.get("ram_base")
+    fk, rk = ctx.get("flash_kb"), ctx.get("ram_kb")
+    b = ctx.get("board_name", "this board")
+    if not all(isinstance(x, int) for x in (fb, rb, fk, rk)):
+        return None
+    return (f"On {b} the numbers are real and verifiable: FLASH ORIGIN = 0x{fb:08X}, LENGTH = {fk}K; "
+            f"RAM ORIGIN = 0x{rb:08X}, LENGTH = {rk}K. .text/.rodata go in FLASH; .data and .bss live "
+            f"in RAM. Those exact addresses are why the chip boots — change 0x{fb:08X} and it won't.")
+
+
 TOPICS: dict[str, Topic] = {
     "hal_vs_baremetal": Topic(
         key="hal_vs_baremetal", title="HAL vs bare-metal",
@@ -331,6 +342,40 @@ TOPICS: dict[str, Topic] = {
                   "before anything else.",
         enrich=_clock_enrich),
 
+    "linker_script": Topic(
+        key="linker_script", title="the linker script (memory.ld) — why it is mandatory",
+        keywords=("memory.ld", "linker script", "linker file", "flash layout", "memory section",
+                  ".text", ".data", ".bss", "origin =", "length =", "scatter file", "memory map",
+                  "vector table", "where to put code", "place code and data", " ld file",
+                  "where to put code and data"),
+        what="A linker script (memory.ld, sometimes called a 'scatter file' in some ARM toolchains) "
+             "tells the linker the EXACT physical addresses of flash and RAM, and which output "
+             "section (.text, .data, .bss) goes where.",
+        why="On bare metal there is NO operating system and NO program loader to place your code and "
+            "data for you — the chip powers on and executes from a fixed address. The linker script is "
+            "where YOU supply that map. It is MANDATORY, not optional: without a correct one your code "
+            "is linked to the wrong addresses and the board simply does not boot.",
+        when="Always, for every bare-metal firmware. On a desktop or Linux the OS loader does this for "
+             "you, which is exactly why you never wrote one in application C — that intuition does NOT "
+             "carry to bare metal.",
+        alternatives=[("'Let the compiler decide' (the desktop assumption)", "WRONG on bare metal — "
+                       "there is no loader; the image links to default/garbage addresses and the chip "
+                       "faults or never boots"),
+                      ("Write a correct linker script", "you state flash ORIGIN/LENGTH and RAM "
+                       "ORIGIN/LENGTH and map .text→flash, .data/.bss→RAM; the board boots"),
+                      ("Start from the vendor's default script", "fine to begin with, but you must "
+                       "still read it — it encodes this exact map")],
+        tradeoffs="There is no real trade-off about WHETHER to have one — bare metal requires it. The "
+                  "only choice is whether you write it yourself (full understanding) or start from the "
+                  "vendor's (faster, but you must still read it). Treating it as optional is the bug.",
+        how_to_think=["On this chip, what is the flash start address and the RAM start address?",
+                      "Which sections live in flash (code, const) and which in RAM (.data, .bss, stack)?",
+                      "Is my vector table at the very start of flash, where the CPU looks on reset?",
+                      "If I changed an ORIGIN, would I know what breaks (the board would not boot)?"],
+        next_step="Open your memory.ld and match its ORIGIN/LENGTH against the board's flash and RAM "
+                  "in the datasheet. Change nothing until you can explain what each line maps and why.",
+        enrich=_linker_enrich),
+
     "memory_layout": Topic(
         key="memory_layout", title="memory layout — stack, heap, static, flash",
         keywords=("memory layout", "stack overflow", "stack and heap", "the heap", "heap memory",
@@ -376,7 +421,8 @@ def detect_topic(text: str) -> Topic | None:
 
 
 def render(topic: Topic, board_name: str | None = None, arch: str | None = None,
-           family: str | None = None, ram_kb: int | None = None, flash_kb: int | None = None) -> str:
+           family: str | None = None, ram_kb: int | None = None, flash_kb: int | None = None,
+           flash_base: int | None = None, ram_base: int | None = None) -> str:
     """Render the framework as readable, teaching prose. The core (what / why / options / trade-offs /
     how-to-decide) is board-agnostic; only the optional enrichment line uses the board's facts."""
     L = [f"The problem — {topic.what}",
@@ -389,7 +435,8 @@ def render(topic: Topic, board_name: str | None = None, arch: str | None = None,
     L += [f"  ? {q}" for q in topic.how_to_think]
     if topic.enrich is not None:
         enr = topic.enrich({"board_name": board_name, "arch": arch, "family": family,
-                            "ram_kb": ram_kb, "flash_kb": flash_kb})
+                            "ram_kb": ram_kb, "flash_kb": flash_kb,
+                            "flash_base": flash_base, "ram_base": ram_base})
         if enr:
             L.append(enr)
     L.append(f"Next: {topic.next_step}")

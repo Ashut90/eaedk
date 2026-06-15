@@ -95,3 +95,17 @@ def test_clock_enrichment_is_family_aware():
     stm = reasoning.render(reasoning.TOPICS["clock_tree"], "Nucleo-F411RE", "arm-cortex-m4", "stm32")
     avr = reasoning.render(reasoning.TOPICS["clock_tree"], "Arduino-Uno", "avr", "avr")
     assert "RCC" in stm and "PRR" in avr and "RCC" not in avr  # the right chip's clock mechanism
+
+
+# --- P2: linker-script questions route to a mandatory-not-optional teach path ---------------
+
+def test_p2_linker_script_routing_and_content():
+    for q in ("Why does this memory.ld file exist?", "what is a linker script?",
+              "what goes in the .bss section?", "explain the flash layout"):
+        assert reasoning.detect_topic(q).key == "linker_script", q
+    out = reasoning.render(reasoning.TOPICS["linker_script"], "STM32F103-BluePill", "arm-cortex-m3",
+                           "stm32", ram_kb=20, flash_kb=64, flash_base=0x08000000, ram_base=0x20000000)
+    assert "MANDATORY" in out                                    # not optional
+    assert "no operating system" in out.lower() and "loader" in out.lower()   # why: no OS loader
+    assert "0x08000000" in out and "0x20000000" in out          # real board ORIGIN values
+    assert "IAR" not in out and "Keil" not in out               # no proprietary IDE pushed

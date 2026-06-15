@@ -519,6 +519,33 @@ def _progress_summary(conn, project_name: str | None):
     return s
 
 
+# P1 — the LLM/Engine trust boundary. A chat reply must never offer optimisation advice over a
+# project the Validation Engine has already proved NOT FEASIBLE. This banner is prepended in Python
+# at every return site, so no rephrasing of the question routes around it.
+_NOT_FEASIBLE_BANNER = "⛔ STOP — this project is NOT FEASIBLE."
+
+
+def _feasibility_guard(conn, project_name: str | None) -> str:
+    """Return the hard NOT-FEASIBLE banner (with the blocking failures) when the project's current
+    feasibility is ``not_feasible``; else ''. Deterministic; reads the Validation Engine."""
+    if not project_name:
+        return ""
+    p = repo.get_project(conn, project_name)
+    if p is None:
+        return ""
+    from .orchestrator import assess_project
+    resp = assess_project(conn, p)
+    if resp.feasibility != "not_feasible":
+        return ""
+    fails = [f"{v['check']}: {v['reason']}" for v in resp.validations
+             if v.get("gating", True) and v["status"] == "FAIL"]
+    blockers = "\n".join(f"  - {f}" for f in fails) or "  - a hard validation failure"
+    return (f"{_NOT_FEASIBLE_BANNER} The Validation Engine already proved a HARD hardware limit, not "
+            f"a tuning problem:\n{blockers}\n"
+            "No optimisation (quantization, -Os, pruning) changes a physical limit — fix the numbers "
+            "above or move to a larger board before anything else.\n\n")
+
+
 def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 use_llm: bool = False, gateway: Gateway | None = None,
                 project: str | None = None, has_hardware: bool = False,
@@ -542,6 +569,8 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     topic = reasoning.detect_topic(last_user)        # v2.6.0: an engineering decision -> the framework
     ram_kb = board["ram_bytes"] // 1024 if isinstance(board.get("ram_bytes"), int) else None
     flash_kb = board["flash_bytes"] // 1024 if isinstance(board.get("flash_bytes"), int) else None
+    flash_base = board["flash_base"] if isinstance(board.get("flash_base"), int) else None
+    ram_base = board["ram_base"] if isinstance(board.get("ram_base"), int) else None
     cap_set = {c["capability"] for c in caps}
     role = detect_mentor_role(last_user, {"page_type": page_type,
                                           "wokwi_flag": (not has_hardware),
@@ -551,6 +580,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         try_this += " (run it in the Wokwi simulator — no hardware needed)."
     question = _followup_question(caps, path)
     progress = _progress_summary(conn, project)
+    guard = _feasibility_guard(conn, project)        # P1: hard NOT-FEASIBLE banner, prepended below
 
     # "How am I doing / what's next" -> answer straight from the State Engine (never the LLM).
     if progress and any(k in last_user.lower() for k in _PROGRESS_Q):
@@ -561,13 +591,13 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         else:
             head = (f"You're at {progress['complete']}/{progress['total']} — every item is "
                     "complete. Nice work.")
-        return f"{head}\n\nTry this: {try_this}\n\n{question}"
+        return guard + f"{head}\n\nTry this: {try_this}\n\n{question}"
 
     # Deterministic backbone — a real answer even with no model, always ending in an action.
     # An engineering decision teaches the reasoning FRAMEWORK (v2.6.0); a named project type reasons
     # about this board's peripherals (v2.4.1); both ahead of the generic "start with blink" default.
     if topic:
-        head = reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb)
+        head = reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
     elif domain:
         head = _domain_reasoning(domain, cap_set, fam, board_name)
     elif concept is not None:
@@ -582,12 +612,12 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     gw = gateway or Gateway()
     note = _llm_or_note(use_llm, gw)
     if note is not None:
-        return backbone                              # offline: the structured deterministic answer
+        return guard + backbone                      # offline: the structured deterministic answer
 
     # Role C — the Validation Engine's verdict is deterministic; the chat points there, never the model.
     if role == "SPONSOR":
-        return ("That's the Validation Engine's call, not mine — open Validate or Export to see "
-                "exactly what passed, failed, or is unknown, and why. I explain those results; I "
+        return guard + ("That's the Validation Engine's call, not mine — open Validate or Export to "
+                "see exactly what passed, failed, or is unknown, and why. I explain those results; I "
                 "never override them.\n\nTry this: run Validate and read the first FAIL or UNKNOWN.\n\n"
                 "Question: which check is blocking you?")
 
@@ -616,7 +646,12 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         dom_block = (f"PROJECT DOMAIN — the user named a '{domain}' project. Reason about WHICH of "
                      "this board's peripherals it needs and why; build on this, stay specific:\n"
                      + _domain_reasoning(domain, cap_set, fam, board_name) + "\n")
-    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n"
+    feas_line = ""
+    if guard:                                        # P1: the model must reason WITHIN the hard limit
+        feas_line = ("HARD CONSTRAINT — this project is NOT FEASIBLE (the Validation Engine proved a "
+                     "physical hardware limit). Open your reply by stating this failure; do NOT "
+                     "suggest optimisation as if it could work as-is:\n" + guard + "\n")
+    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{feas_line}"
               f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
               f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
@@ -628,7 +663,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if topic:                                        # ground the Architect in the framework reasoning
         reasoning_block = ("Engineering reasoning for this question — elaborate on it, never "
                            "contradict it:\n"
-                           + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb)
+                           + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
         _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
@@ -643,7 +678,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
             answer += f"\n\nTry this: {try_this}"
         if not answer.rstrip().rstrip("*_# ").endswith("?") and "question:" not in answer.lower():
             answer += f"\n\n{question}"           # already ends in a question? don't append a second
-    return answer
+    return guard + answer                            # P1: hard limit acknowledged on line 1, always
 
 
 def mentor_explain(conn: sqlite3.Connection, board_name: str, concept: str,
