@@ -70,7 +70,10 @@ def mentor_ask(conn: sqlite3.Connection, board_name: str, question: str,
     path_lines = "\n".join(f"{s['step']}. {s['title']} — {s['why']}" for s in path)
     prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\nCapabilities:\n{cap_lines}\n"
               f"Learning path:\n{path_lines}\n\nQUESTION: {question}\n\nAnswer:")
-    raw = gw.provider.generate(_ASK_SYSTEM, prompt)
+    try:                                                 # a model timeout must degrade, not crash
+        raw = gw.provider.generate(_ASK_SYSTEM, prompt)
+    except Exception:
+        return body + "\n[mentor] LLM unreachable (timed out); showing the deterministic answer above."
     filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
     return f"{body}\n\n{filtered}\n[mentor] {removed} uncited hardware claim(s) removed."
 
@@ -1041,8 +1044,13 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
         _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
-    # Actor pass — the model proposes.
-    raw = gw.provider.generate(system, prompt)
+    # Actor pass — the model proposes. A live-model hiccup (timeout, dropped connection, the model
+    # answered the availability ping but stalls on generation) must NEVER crash the request — degrade
+    # to the deterministic backbone, which is already a complete grounded answer.
+    try:
+        raw = gw.provider.generate(system, prompt)
+    except Exception:
+        return lead + backbone
     # Critic pass — the model reviews its own answer (P4; runs on every online response).
     grounding = f"{sem_line}{feas_line}Board: {board_name} ({soc['arch']}); peripherals: {have}."
     critiqued = arbiter.critic_review(gw, system, raw, grounding)
@@ -1081,6 +1089,9 @@ def mentor_explain(conn: sqlite3.Connection, board_name: str, concept: str,
     prompt = (f"Concept: {concept}\nBoard architecture: {soc['arch']}\n"
               f"Factual anchor (true; build on this): {anchor['anchor'] if anchor else '(none)'}\n"
               f"Explain in at most two sentences (what it is; what to check next):")
-    raw = gw.provider.generate(_EXPLAIN_SYSTEM, prompt)
+    try:                                                 # a model timeout must degrade, not crash
+        raw = gw.provider.generate(_EXPLAIN_SYSTEM, prompt)
+    except Exception:
+        return base + "\n[mentor] LLM unreachable (timed out); showing the deterministic anchor above."
     filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
     return f"{base}\n\n{filtered}\n[mentor] {removed} uncited hardware claim(s) removed."

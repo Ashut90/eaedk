@@ -76,3 +76,25 @@ def test_p4_chat_offline_arbiter_still_grounds(tmp_path):
     out = mentor_chat(conn, "STM32F103-BluePill",
                       [{"role": "user", "content": "I want gRPC on this board"}], use_llm=False)
     assert "will NOT fit" in out
+
+
+def test_chat_generate_timeout_degrades_to_backbone(tmp_path):
+    """available() can pass (the model answered the ping) yet generate() time out mid-call. That must
+    degrade to the deterministic backbone, never 500 the web request (regression for the Ollama
+    TimeoutError that crashed /api/mentor/chat)."""
+    conn = _seeded(tmp_path)
+
+    class _TimeoutGw:
+        model = "fake"
+        def available(self):
+            return True
+        class provider:
+            @staticmethod
+            def generate(system, prompt):
+                raise TimeoutError("timed out")
+
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "should I use HAL or bare metal?"}],
+                      use_llm=True, gateway=_TimeoutGw())
+    assert out and "HAL" in out                              # the grounded backbone, not a crash
+    assert out.rstrip().endswith("?") or "Question:" in out  # contract still holds
