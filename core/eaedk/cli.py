@@ -682,12 +682,42 @@ def _mentor_chat_repl(conn, board: str, use_llm: bool) -> None:
         print(f"\nmentor> {answer}\n")
 
 
+def cmd_board_capabilities(args):
+    """P1A: plain-language board capability summary, sourced entirely from the database."""
+    conn = _conn(args)
+    name = args.board or args.name
+    if not name:
+        print("error: board capabilities needs --board NAME", file=sys.stderr); sys.exit(2)
+    from .mentor_beginner import render_board_capabilities
+    out = render_board_capabilities(conn, name)
+    if out is None:
+        _unknown_board(conn, name); sys.exit(2)
+    print(out, end="")
+
+
+def cmd_roadmap(args):
+    """P1C: a job-focused learning roadmap grounded in the board(s)' confirmed peripherals."""
+    conn = _conn(args)
+    from .mentor_beginner import render_roadmap
+    for n in args.boards:
+        if repo.load_board(conn, n)[0] is None:
+            _unknown_board(conn, n); sys.exit(2)
+    out = render_roadmap(conn, args.boards, args.goal)
+    if out is None:
+        _unknown_board(conn, args.boards[0]); sys.exit(2)
+    print(out, end="")
+
+
 def cmd_mentor(args):
     conn = _conn(args)
     board, _soc = repo.load_board(conn, args.board)
     if board is None:
         _unknown_board(conn, args.board)
         sys.exit(2)
+    if getattr(args, "level", None) is not None:
+        from .mentor_beginner import render_recommendation
+        print(render_recommendation(conn, args.board, args.level), end="")
+        return
     if getattr(args, "think", False):
         from .mentor import think_before_code
         goal = "bare_metal_app"
@@ -870,6 +900,12 @@ def build_parser() -> argparse.ArgumentParser:
     bca = bc.add_parser("add", help="add a capability (e.g. UART) so its learning steps unlock")
     bca.add_argument("name"); bca.add_argument("capability")
     bca.set_defaults(func=cmd_board_capability_add)
+    bcap = bd.add_parser("capabilities",
+                         help="plain-language capability summary for a beginner (arch, memory, "
+                              "what EAEDK can and cannot validate)")
+    bcap.add_argument("--board", dest="board")
+    bcap.add_argument("name", nargs="?", help="board name (or use --board)")
+    bcap.set_defaults(func=cmd_board_capabilities)
 
     pr = sub.add_parser("project").add_subparsers(dest="sub", required=True)
     pr.add_parser("init").set_defaults(func=cmd_project_init)
@@ -931,7 +967,18 @@ def build_parser() -> argparse.ArgumentParser:
     mt.add_argument("--next", dest="next_step", nargs="?", const="", default=None,
                     metavar="COMPLETED_STEP",
                     help="the next project to build (optionally name the step you just finished)")
+    mt.add_argument("--level", type=int, default=None, metavar="N",
+                    help="beginner project recommendation for an experience level (0 = complete "
+                         "beginner): what to build first and the next projects, in dependency order")
     _add_llm(mt); mt.set_defaults(func=cmd_mentor)
+
+    rm = sub.add_parser("roadmap",
+                        help="a job-focused learning roadmap grounded in this board's confirmed "
+                             "peripherals, sequenced as a dependency graph")
+    rm.add_argument("--board", dest="boards", action="append", required=True,
+                    help="board name (repeat --board to sequence a roadmap across several boards)")
+    rm.add_argument("--goal", default="firmware-job")
+    rm.set_defaults(func=cmd_roadmap)
 
     ing = sub.add_parser("ingest")
     ing.add_argument("--file"); ing.add_argument("--board")

@@ -176,10 +176,13 @@ def _load_learning_steps(conn: sqlite3.Connection) -> int:
     for r in rows:
         conn.execute(
             "INSERT INTO learning_steps(step,key,title,goal_type,requires_json,why,"
-            "before_you_start_json) VALUES (?,?,?,?,?,?,?)",
+            "before_you_start_json,peripherals_json,failure_mode,diagnose,proves,builds_on) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (r["step"], r["key"], r["title"], r.get("goal_type"),
              json.dumps(r.get("requires", [])), r["why"],
-             json.dumps(r.get("before_you_start", []))))
+             json.dumps(r.get("before_you_start", [])),
+             json.dumps(r.get("peripherals", [])), r.get("failure_mode"),
+             r.get("diagnose"), r.get("proves"), r.get("builds_on")))
     return len(rows)
 
 

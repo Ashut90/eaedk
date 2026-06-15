@@ -297,8 +297,18 @@ def board_facts_map(conn: sqlite3.Connection, board_name: str) -> dict[str, str]
 
 def learning_steps(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT step, key, title, goal_type, requires_json, why, before_you_start_json "
+        "SELECT step, key, title, goal_type, requires_json, why, before_you_start_json, "
+        "peripherals_json, failure_mode, diagnose, proves, builds_on "
         "FROM learning_steps ORDER BY step").fetchall()
+
+
+def boards_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Name + SoC + architecture + geometry for every board — used to find the closest board by
+    architecture family and memory bracket (v3.0 P1)."""
+    return conn.execute(
+        "SELECT b.name, s.name AS soc, s.arch, b.flash_bytes, b.ram_bytes, "
+        "b.primary_storage, b.flash_endurance_cycles "
+        "FROM boards b JOIN socs s ON s.id = b.soc_id ORDER BY b.name").fetchall()
 
 
 def blink_facts(conn: sqlite3.Connection, board_name: str) -> sqlite3.Row | None:

@@ -29,7 +29,11 @@ def learning_path_for(conn: sqlite3.Connection, cap_names: set[str]) -> list[dic
         if set(json.loads(s["requires_json"])) <= cap_names:
             out.append({"step": s["step"], "key": s["key"], "title": s["title"],
                         "goal_type": s["goal_type"], "why": s["why"],
-                        "before_you_start": json.loads(s["before_you_start_json"])})
+                        "before_you_start": json.loads(s["before_you_start_json"]),
+                        "requires": json.loads(s["requires_json"]),
+                        "peripherals": json.loads(s["peripherals_json"] or "[]"),
+                        "failure_mode": s["failure_mode"], "diagnose": s["diagnose"],
+                        "proves": s["proves"], "builds_on": s["builds_on"]})
     return out
 
 

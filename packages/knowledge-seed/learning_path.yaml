@@ -1,11 +1,18 @@
 # A deliberate learning order. The sequence AND the reason both matter — each project teaches
 # the prerequisite skill for the next. `requires` filters steps to what the board can actually do.
+# v3.0 (P1): each step also carries the peripherals it exercises, the failure mode to expect, how
+# to diagnose it, what it proves to an interviewer, and the explicit dependency on the prior step.
 - step: 1
   key: blink
   title: "Blink an LED"
   goal_type: bare_metal_app
   requires: []
+  peripherals: [gpio]
   why: "Start here. It teaches the whole build → flash → run loop with the least possible code. If the LED blinks, your toolchain and flashing actually work — everything else builds on that."
+  builds_on: ""
+  failure_mode: "The LED stays dark (or stuck on) with no error message at all."
+  diagnose: "Confirm the GPIO clock is enabled BEFORE configuring the pin, check the pin/port against the board schematic, and verify the flash actually programmed (read it back or watch the debugger). Silence with no error is almost always a missing clock-enable."
+  proves: "That you can drive the full toolchain → linker → flash → run loop on real silicon — the table-stakes every interviewer assumes before anything else."
   before_you_start:
     - "Which GPIO pin your LED is on (check the board schematic)."
     - "That your toolchain can build and flash — run `eaedk toolchain validate`."
@@ -16,7 +23,12 @@
   title: "UART Logger (print over serial)"
   goal_type: bare_metal_app
   requires: [uart]
+  peripherals: [uart]
   why: "Once code runs, you need to SEE what it's doing. UART printing is how you debug every project after this — learn it before anything complex."
+  builds_on: "Blink already proved your clock and pin configuration work. UART derives its baud rate from that same clock, so it must come after Blink — you cannot compute a baud divisor until you know your clock is correct."
+  failure_mode: "Garbage characters on the terminal, or nothing at all."
+  diagnose: "Garbage = the baud divisor is wrong, which means your clock-frequency assumption is off (the value Blink relied on). Nothing = the TX pin or the UART's own clock gate isn't enabled. Check the clock first, then the pin."
+  proves: "That you can bring a peripheral up from a datasheet and compute a clock-derived divisor — and that you now have the debug channel every later project depends on."
   before_you_start:
     - "Which UART peripheral and TX pin to use (datasheet + schematic)."
     - "Your CPU clock frequency — it sets the baud-rate divisor."
@@ -27,7 +39,12 @@
   title: "Read an SPI Sensor"
   goal_type: bare_metal_app
   requires: [spi]
+  peripherals: [spi]
   why: "Now learn a real bus protocol. SPI is the most common way to read sensors and is simpler to get right than I2C, so it's the place to start with peripherals."
+  builds_on: "You need the UART logger from step 2 to print the raw bytes the sensor returns — debugging a silent bus with no way to see the data is exactly where beginners stall."
+  failure_mode: "Every read comes back all-0x00 or all-0xFF."
+  diagnose: "0xFF = MISO is never driven (chip-select, wiring, or power wrong); 0x00 = wrong SPI mode (CPOL/CPHA) or the clock is too fast for the sensor. Print the raw bytes over your step-2 UART logger before trying to interpret them."
+  proves: "That you can read a datasheet's register map and drive a real synchronous bus — the core skill behind every sensor and peripheral driver."
   before_you_start:
     - "The sensor's SPI mode (clock polarity/phase) and register map (sensor datasheet)."
     - "Which SPI peripheral and the CS / SCK / MOSI / MISO pins."
@@ -37,7 +54,12 @@
   title: "Handle an Interrupt"
   goal_type: bare_metal_app
   requires: []
+  peripherals: ["NVIC (the core interrupt controller)", gpio]
   why: "Polling wastes the CPU. Interrupts let the chip react to events — a button press, data arriving — and are the foundation of responsive firmware. Learn them before multitasking."
+  builds_on: "Blink proved your vector table sits correctly at the flash base; an interrupt jumps through that table, so it depends on the flash layout Blink already validated."
+  failure_mode: "The handler never fires, or it fires once and the chip hangs in a HardFault."
+  diagnose: "Never fires = the line isn't enabled in the NVIC or the vector table isn't at the flash base; hangs = you forgot to clear the interrupt flag, or your handler's name doesn't match the vector entry. Use the UART logger to print on entry."
+  proves: "That you understand pre-emption, the vector table, and re-entrancy — the line between toy code and firmware that reacts in real time."
   before_you_start:
     - "What the vector table is and where it lives (the start of flash)."
     - "Which interrupt line your event uses, and how the NVIC enables it."
@@ -47,7 +69,12 @@
   title: "Write a Bootloader"
   goal_type: bootloader
   requires: []
+  peripherals: ["internal flash controller"]
   why: "With peripherals and interrupts understood, learn memory layout: a bootloader lives in one flash region and jumps to your app in another. This is the gateway to firmware updates."
+  builds_on: "A bootloader hands control to your app, and the app must relocate its OWN vector table (VTOR) to its region — so you need the interrupt and vector-table understanding from step 4 before this makes sense."
+  failure_mode: "The board bricks: the bootloader runs but never reaches the app, or an update half-writes and nothing boots."
+  diagnose: "Confirm the app relocates its vector table (SCB->VTOR), verify the jump address and stack-pointer load, and check the image CRC before jumping. Log progress over UART from the bootloader to see how far it got."
+  proves: "That you understand flash partitioning, vector-table relocation, and fail-safe update — the skill that separates product firmware from hobby code."
   before_you_start:
     - "Your flash partition layout — bootloader region vs application region."
     - "How to verify an image (CRC/checksum) before jumping to it."
@@ -58,7 +85,12 @@
   title: "Run an RTOS"
   goal_type: bare_metal_app
   requires: []
+  peripherals: ["SysTick timer", "NVIC (the core interrupt controller)"]
   why: "The final step. A real-time OS lets multiple tasks run 'at once' with scheduling — how production firmware manages complexity once a superloop isn't enough."
+  builds_on: "An RTOS scheduler runs off a timer interrupt and depends on careful per-task RAM/stack budgeting — it is built directly on the interrupt skill (step 4) and the memory awareness every earlier step taught."
+  failure_mode: "A task overflows its stack and silently corrupts another task, or the system HardFaults under load."
+  diagnose: "Watch each task's stack high-water mark; a HardFault with a garbage program counter is almost always a stack overflow. The interrupt and memory-layout skills from earlier steps are what let you read the fault."
+  proves: "That you can reason about concurrency, per-task stacks, and priority inversion — the top of the bare-metal ladder."
   before_you_start:
     - "How much RAM you have — each task needs its own stack."
     - "What a context switch is and roughly what it costs."
