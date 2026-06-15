@@ -387,6 +387,11 @@ def list_concepts(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT name, anchor FROM concepts ORDER BY name").fetchall()
 
 
+def list_capabilities(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """The global capability vocabulary with plain-language summaries (name, summary)."""
+    return conn.execute("SELECT name, summary FROM capabilities ORDER BY name").fetchall()
+
+
 # --- datasheet ingestion (fact candidates) ---------------------------------
 
 def create_datasheet_source(conn: sqlite3.Connection, title: str, uri: str | None,
