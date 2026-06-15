@@ -33,6 +33,11 @@ def as_int(value: Any) -> int | None:
         s = value.strip()
         if not s:
             return None
+        low = s.lower()
+        if low in ("true", "yes", "on"):      # boolean inputs (e.g. has_rtos=true) -> 1/0 (v3.0)
+            return 1
+        if low in ("false", "no", "off"):
+            return 0
         try:
             return int(s, 0)  # 0 → auto base (handles 0x.., 0o.., decimal)
         except ValueError:

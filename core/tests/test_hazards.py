@@ -119,3 +119,21 @@ def test_p3_hazards_silent_without_inputs(tmp_path):
     resp = assess(conn, "bare_metal_app", {}, board_name="STM32F103-BluePill")
     for key in ("TIMING_DEADLINE", "TIMING_DEADLINE_RTOS", "POWER_BUDGET", "STACK_OVERFLOW_ISR"):
         assert _risk(resp, key) is None
+
+
+# --- regression: boolean string inputs (has_rtos=true/false) must coerce, not error ---------
+
+def test_p3_has_rtos_boolean_string_coerces(tmp_path):
+    """has_rtos='false' (a string, as the CLI stores it) must read as 0 — not raise UnknownIdent
+    and surface a contradictory 'missing input has_rtos' while it is plainly set."""
+    conn = _seeded(tmp_path)
+    # has_rtos=false -> the RTOS-tick rule simply does not apply (no UNKNOWN noise)
+    resp = assess(conn, "bare_metal_app",
+                  {"isr_frequency_hz": 3000, "isr_budget_us": 40, "has_rtos": "false",
+                   "stack_size": 256}, board_name="STM32F103-BluePill")
+    assert _risk(resp, "TIMING_DEADLINE_RTOS") is None
+    # has_rtos=true (string) + no budget -> the rule fires MEDIUM (the boolean is honoured)
+    resp2 = assess(conn, "bare_metal_app",
+                   {"isr_frequency_hz": 5000, "has_rtos": "true"}, board_name="STM32F103-BluePill")
+    f = _risk(resp2, "TIMING_DEADLINE_RTOS")
+    assert f is not None and f["severity"] == "MEDIUM"
