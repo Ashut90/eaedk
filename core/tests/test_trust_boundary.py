@@ -102,3 +102,57 @@ def test_p25_requires_gate_and_unknown_severity():
     # x present but board.cap unresolved -> fired MEDIUM, not dropped.
     fired = evaluate_risks({"x": 10}, [rule], "g")
     assert len(fired) == 1 and fired[0].severity == "MEDIUM" and fired[0].fired is True
+
+
+# --- P3: topic-aware 'Try this' — curated experiments, suppression, no repeats -------------
+
+def test_p3_career_suppresses_try_this_and_gives_roadmap(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "how do I get a job in embedded systems?"}],
+                      use_llm=False)
+    assert "Try this:" not in out                       # no canned experiment for a career question
+    assert "sequence" in out.lower() or "roadmap" in out.lower()   # a learning roadmap instead
+
+
+def test_p3_ml_inference_gets_curated_experiment_not_blink(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "I want to run a tflite neural network on this board"}],
+                      use_llm=False)
+    low = out.lower()
+    assert "try this:" in low
+    assert "model" in low and "ram" in low and "flash" in low      # size-vs-budget, the real first step
+    assert "blink project" not in low                              # NOT the generic fallback
+
+
+def test_p3_linker_gets_curated_experiment_not_blink(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "how does the linker script decide where code goes?"}],
+                      use_llm=False)
+    low = out.lower()
+    assert "try this:" in low and ".ld" in low
+    assert "blink project" not in low
+
+
+def test_p3_never_repeats_the_same_try_this_in_a_session(tmp_path):
+    conn = _seeded(tmp_path)
+    first = mentor_chat(conn, "STM32F103-BluePill",
+                        [{"role": "user", "content": "where do I start?"}], use_llm=False)
+    assert "Try this:" in first                          # first time: the board's blink experiment
+    prior = first[first.index("Try this:"):]
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "where do I start?"},
+                       {"role": "assistant", "content": prior},
+                       {"role": "user", "content": "what else should I try first?"}],
+                      use_llm=False)
+    assert "Try this:" not in out                        # same experiment already given -> suppressed
+
+
+def test_p3_first_project_still_gets_board_experiment(tmp_path):
+    """Regression: a plain first-project question (no prior turns) still gets the family experiment."""
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "Arduino-Uno",
+                      [{"role": "user", "content": "where do I start?"}], use_llm=False)
+    assert "F_CPU" in out                                # AVR family experiment, unchanged

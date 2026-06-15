@@ -260,49 +260,128 @@ def detect_mentor_role(user_message: str, page_context: dict) -> str:
 # --- Domain-aware "Try this" (chosen in Python, not left to the model) ---------------------------
 
 DOMAIN_TRY_THIS = {
-    "robotics":   "Generate one PWM signal on {timer} and sweep the duty cycle 0-100% — that is motor "
-                  "speed control. Watch it in Wokwi before touching a real motor.",
-    "motor":      "Sweep a servo 0-180 degrees at 50Hz PWM — it proves your timer period and "
-                  "duty-cycle math are correct.",
-    "sensor":     "Write a blocking I2C read of one register and print the raw value over UART — "
-                  "before interpreting it, prove the bus is talking.",
-    "audio":      "Generate a square wave at 440Hz on a timer output — that is concert A. If you hear "
-                  "it, your timer and GPIO are working.",
-    "iot":        "Connect to Wi-Fi and print your IP over UART — before sending data, prove the stack "
-                  "initialises cleanly.",
-    "bootloader": "Write 4 bytes to flash, read them back, and compare — if they match, your flash "
-                  "driver works.",
-    "driver":     "Write to one register, read it back, and verify the value — before any protocol, "
-                  "prove register access works.",
-    "default":    "Enable the peripheral clock, configure one pin, and toggle it in a loop — before "
-                  "any protocol, prove the pin moves.",
+    "robotics":      "Generate one PWM signal on {timer} and sweep the duty cycle 0-100% — that is motor "
+                     "speed control. Watch it in Wokwi before touching a real motor.",
+    "motor":         "Sweep a servo 0-180 degrees at 50Hz PWM — it proves your timer period and "
+                     "duty-cycle math are correct.",
+    "sensor":        "Write a blocking I2C read of one register and print the raw value over UART — "
+                     "before interpreting it, prove the bus is talking.",
+    "audio":         "Generate a square wave at 440Hz on a timer output — that is concert A. If you hear "
+                     "it, your timer and GPIO are working.",
+    "iot":           "Connect to Wi-Fi and print your IP over UART — before sending data, prove the stack "
+                     "initialises cleanly.",
+    "secure_boot":   "Sketch your boot chain on paper — ROM, then bootloader, then app — and mark where "
+                     "each stage VERIFIES the next before it jumps. The first arrow with no verification "
+                     "is your vulnerability; that's what secure boot closes.",
+    "bootloader":    "Write 4 bytes to flash, read them back, and compare — if they match, your flash "
+                     "driver works.",
+    "linker_script": "Open your project's linker script (the .ld file), halve the FLASH region's LENGTH, "
+                     "and rebuild. Read the linker's 'region overflowed' error — it shows you exactly how "
+                     "the script, not the compiler, decides what fits where.",
+    "ml_inference":  "Before writing any inference code, get your model's size (the .tflite / weights "
+                     "array in bytes) and compare it against this board's RAM and flash. Most ML-on-MCU "
+                     "projects live or die on that one comparison — do it first.",
+    "memory_layout": "Add one large static array to your program, build it, and open the .map file — "
+                     "watch .bss grow and free RAM shrink. The map file, not a guess, is the truth about "
+                     "where every byte lives.",
+    "driver":        "Write to one register, read it back, and verify the value — before any protocol, "
+                     "prove register access works.",
+    "default":       "Enable the peripheral clock, configure one pin, and toggle it in a loop — before "
+                     "any protocol, prove the pin moves.",
 }
 
+# Specific topics first so they win over the broader ones (secure_boot before bootloader; the
+# ml/linker/memory topics before any generic match).
 _TRY_THIS_KEYWORDS = (
-    ("bootloader", ("bootloader", "fail-safe", "failsafe", "ota", "rollback")),
-    ("driver",     ("driver", "device tree", "of_match", "register map")),
-    ("motor",      ("servo",)),
-    ("robotics",   ("robot", "robotics", "motor", "wheel", "drone", "bldc", "stepper", "actuator")),
-    ("sensor",     ("sensor", "imu", "accelerometer", "gyro", "temperature", "humidity", "distance",
-                    "lidar", "proximity")),
-    ("audio",      ("audio", "sound", "speaker", "microphone", "music", "i2s")),
-    ("iot",        ("iot", "wifi", "wi-fi", "bluetooth", "ble", "mqtt", "internet of")),
+    ("secure_boot",   ("secure boot", "chain of trust", "signature verif", "verify the signature",
+                       "anti-rollback", "rollback counter", "boot chain", "root of trust")),
+    ("linker_script", ("linker", "memory.ld", ".ld file", "ld script", "scatter file",
+                       "linker script", "memory section", "memory map")),
+    ("ml_inference",  ("neural network", "tensorflow", "tflite", "tinyml", "inference", "ml model",
+                       "machine learning model", "run a model", "ai model", "cnn ", "gesture recogn")),
+    ("memory_layout", ("memory layout", ".bss", ".data section", "stack overflow", "heap vs stack",
+                       "where do variables", "where variables live", "ram usage", "stack vs heap")),
+    ("bootloader",    ("bootloader", "fail-safe", "failsafe", "ota", "rollback")),
+    ("driver",        ("driver", "device tree", "of_match", "register map")),
+    ("motor",         ("servo",)),
+    ("robotics",      ("robot", "robotics", "motor", "wheel", "drone", "bldc", "stepper", "actuator")),
+    ("sensor",        ("sensor", "imu", "accelerometer", "gyro", "temperature", "humidity", "distance",
+                       "lidar", "proximity")),
+    ("audio",         ("audio", "sound", "speaker", "microphone", "music", "i2s")),
+    ("iot",           ("iot", "wifi", "wi-fi", "bluetooth", "ble", "mqtt", "internet of")),
 )
 
+# A career / learning-path question has NO single hands-on experiment — it gets a roadmap, and the
+# 'Try this' is SUPPRESSED rather than faked with an irrelevant blink (v2.7 P3). Kept specific so a
+# genuine "where do I start with this board" still gets an experiment.
+_CAREER_KW = ("career", "get a job", "land a job", "get into embedded", "break into embedded",
+              "become an embedded", "roadmap to", "learning roadmap", "study plan", "curriculum",
+              "what should i learn", "how do i learn embedded", "learn embedded systems",
+              "job in embedded", "embedded career")
 
-def _select_try_this(text: str, family: str | None) -> str:
-    """The first experiment to run, matched to the project type the user named. Family-gated: the
-    robotics/motor experiment names TIM1 only on STM32, a generic timer output elsewhere. When no
-    project type is named, fall back to the board family's own experiment (F_CPU on AVR, RCC on
-    STM32, …) rather than a generic default."""
+
+def _is_career(text: str) -> bool:
+    low = " " + (text or "").lower() + " "
+    return any(k in low for k in _CAREER_KW)
+
+
+def _tt_norm(s: str) -> str:
+    """Normalise a 'Try this' for repeat-detection: first 40 chars, lowercased, whitespace-collapsed
+    (well before any appended Wokwi suffix)."""
+    return " ".join((s or "").lower().split())[:40]
+
+
+def _used_try_this(messages: list[dict]) -> set[str]:
+    """The experiments already offered this session, so we never repeat one (v2.7 P3)."""
+    used: set[str] = set()
+    for m in messages or []:
+        if m.get("role") != "assistant":
+            continue
+        for line in (m.get("content") or "").splitlines():
+            low = line.strip().lower()
+            if low.startswith("try this:"):
+                used.add(_tt_norm(low[len("try this:"):]))
+    return used
+
+
+def _select_try_this(text: str, family: str | None,
+                     used: set[str] | frozenset[str] = frozenset()) -> str | None:
+    """The first experiment to run, matched to the topic the user named. Returns None to SUPPRESS the
+    'Try this' — for a career/learning question (which gets a roadmap instead) or when the only
+    experiment we'd offer was already given this session. Family-gated: the robotics/motor experiment
+    names TIM1 only on STM32. When no topic is named, fall back to the board family's own experiment
+    (F_CPU on AVR, RCC on STM32, …)."""
+    if _is_career(text):
+        return None                                    # roadmap, not an experiment
     low = " " + (text or "").lower() + " "
     key = next((k for k, kws in _TRY_THIS_KEYWORDS if any(w in low for w in kws)), None)
     if key is None:
-        return _board_try_this(family)
-    t = DOMAIN_TRY_THIS[key]
-    if "{timer}" in t:
-        t = t.replace("{timer}", "TIM1" if family == "stm32" else "a timer output")
-    return t
+        candidate = _board_try_this(family)
+    else:
+        candidate = DOMAIN_TRY_THIS[key]
+        if "{timer}" in candidate:
+            candidate = candidate.replace("{timer}", "TIM1" if family == "stm32" else "a timer output")
+    if _tt_norm(candidate) in used:
+        return None                                    # never repeat the same experiment in a session
+    return candidate
+
+
+def _tt_block(try_this: str | None) -> str:
+    """The 'Try this' paragraph, or nothing when it is suppressed."""
+    return f"\n\nTry this: {try_this}" if try_this else ""
+
+
+def _career_roadmap(board_name: str, path: list) -> str:
+    """A learning *sequence* for a career/learning question — the deterministic answer that replaces a
+    single canned experiment (v2.7 P3)."""
+    if path:
+        steps = "\n".join(f"{i}. {s['title']} — {s['why']}" for i, s in enumerate(path, 1))
+        return ("Career and skill aren't a single experiment — they're a sequence. On "
+                f"{board_name} a sound order is:\n{steps}\n"
+                "Go deep on each before the next; the reasoning transfers to every other board.")
+    return ("Embedded skill is built in order, not in one experiment: blink, then timers/PWM, then "
+            "interrupts, then a bus (UART/I2C/SPI), then a real peripheral, then an RTOS or "
+            "bootloader. Master one board deeply; the reasoning transfers everywhere.")
 
 
 # --- One self-contained few-shot prompt per role (the model never decides which role to play) ----
@@ -575,8 +654,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     role = detect_mentor_role(last_user, {"page_type": page_type,
                                           "wokwi_flag": (not has_hardware),
                                           "current_code": current_code})
-    try_this = _select_try_this(last_user, fam)        # Fix 4: domain-aware, family-gated
-    if not has_hardware and "wokwi" not in try_this.lower():
+    career = _is_career(last_user)                     # P3: career -> roadmap, suppress 'Try this'
+    used = _used_try_this(messages)                    # P3: never repeat an experiment this session
+    try_this = _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
+    if try_this and not has_hardware and "wokwi" not in try_this.lower():
         try_this += " (run it in the Wokwi simulator — no hardware needed)."
     question = _followup_question(caps, path)
     progress = _progress_summary(conn, project)
@@ -591,12 +672,14 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         else:
             head = (f"You're at {progress['complete']}/{progress['total']} — every item is "
                     "complete. Nice work.")
-        return guard + f"{head}\n\nTry this: {try_this}\n\n{question}"
+        return guard + f"{head}{_tt_block(try_this)}\n\n{question}"
 
     # Deterministic backbone — a real answer even with no model, always ending in an action.
     # An engineering decision teaches the reasoning FRAMEWORK (v2.6.0); a named project type reasons
     # about this board's peripherals (v2.4.1); both ahead of the generic "start with blink" default.
-    if topic:
+    if career:                                           # P3: a learning roadmap, not an experiment
+        head = _career_roadmap(board_name, path)
+    elif topic:
         head = reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
     elif domain:
         head = _domain_reasoning(domain, cap_set, fam, board_name)
@@ -607,7 +690,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 f"{path[0]['why']}")
     else:
         head = f"For {board_name}, tell me what you want to do and I'll point you at the first step."
-    backbone = f"{head}\n\nTry this: {try_this}\n\n{question}"
+    backbone = f"{head}{_tt_block(try_this)}\n\n{question}"
 
     gw = gateway or Gateway()
     note = _llm_or_note(use_llm, gw)
@@ -655,8 +738,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
               f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
               f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
-              + f"When you suggest an experiment, use this 'Try this': {try_this}\n"
-              + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + Try this + a question):")
+              + (f"When you suggest an experiment, use this 'Try this': {try_this}\n" if try_this
+                 else "Do NOT end with a 'Try this:' experiment — this is a career/learning question "
+                      "(or its experiment was already given). End with a short learning roadmap and a "
+                      "question instead.\n")
+              + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + a question):")
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
     reasoning_block = ""
@@ -674,7 +760,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if len(answer) < 20:
         answer = backbone
     else:
-        if "try this" not in answer.lower():
+        if try_this and "try this" not in answer.lower():
             answer += f"\n\nTry this: {try_this}"
         if not answer.rstrip().rstrip("*_# ").endswith("?") and "question:" not in answer.lower():
             answer += f"\n\n{question}"           # already ends in a question? don't append a second
