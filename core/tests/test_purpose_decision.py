@@ -53,6 +53,21 @@ def test_case1_jetson_is_declined_not_answered_about_the_board(tmp_path):
 
 # --- Case 2: career / foundation question -------------------------------------------------------
 
+def test_direction_phrase_does_not_rescue_an_out_of_scope_subject(tmp_path):
+    """'where to start' grounds the ACTION, not the SUBJECT — a question naming an out-of-scope
+    platform must still be declined, never answered as a board default (regression: the gate used to
+    let the direction phrase ground the whole turn)."""
+    conn = _seeded(tmp_path)
+    d = _decide(conn, "where to start in NVIDIA jetson ?")
+    assert d.purpose == "DECLINE_OUT_OF_SCOPE"
+    assert "NVIDIA" in d.subject
+    out = mentor_chat(conn, BOARD, [{"role": "user", "content": "where to start in NVIDIA jetson ?"}])
+    assert "blink" not in out.lower() and BOARD not in out      # not the board-default answer
+
+    # but the SAME direction phrase with no out-of-scope subject still answers on this board
+    assert _decide(conn, "where do I start?").purpose == "ANSWER_NOW"
+
+
 def test_case2_career_redirects_to_foundation_not_board_default(tmp_path):
     conn = _seeded(tmp_path)
     q = "I want to become a firmware engineer but I don't know where to start."

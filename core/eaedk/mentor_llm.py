@@ -383,6 +383,19 @@ def _external_subject(text: str) -> str:
     return phrases[0] if phrases else ""
 
 
+def _subject_grounded(conn: sqlite3.Connection, subject: str, board_name: str) -> bool:
+    """Is the NAMED subject something EAEDK actually knows — a seeded board (by name or colloquialism),
+    a word in the curated peripheral/concept vocabulary, or a recognised semantic-cost intent (gRPC,
+    TLS, CoAP, …)? If none of these, it is out of scope."""
+    low = _norm_words(subject)
+    for r in repo.list_boards(conn):
+        if any(f" {a} " in low for a in _board_aliases(r["name"])):
+            return True
+    if _mentions_vocab(conn, subject):
+        return True
+    return bool(semantic_cost.parse_intent(subject) or semantic_cost.detect_uncosted(subject))
+
+
 def decide_purpose(conn: sqlite3.Connection, board_name: str, user_text: str,
                    page_context: dict, messages: list[dict] | None = None) -> PurposeDecision:
     """First-step gate: choose the turn's PURPOSE before any answer is generated (docs/29)."""
@@ -418,15 +431,22 @@ def decide_purpose(conn: sqlite3.Connection, board_name: str, user_text: str,
     if _seeks_foundation(msg) and not anchored:
         return PurposeDecision("REDIRECT_TO_FOUNDATION", "learner seeking a starting point")
 
-    # (3) Nothing resolves to grounded knowledge.
-    if not grounded:
+    # (3) An out-of-scope NAMED SUBJECT wins over weak grounding. A direction phrase ("where to
+    #     start") grounds the ACTION, not the SUBJECT — so "where to start in NVIDIA Jetson" must
+    #     still be declined. Skip when the question is anchored to a concept/topic/domain we teach
+    #     (e.g. "Zephyr or FreeRTOS" anchors the RTOS topic) or when the subject is a board / vocab
+    #     term EAEDK actually knows.
+    if not anchored:
         subject = _external_subject(msg)
-        if subject:
+        if subject and not _subject_grounded(conn, subject, board_name):
             return PurposeDecision("DECLINE_OUT_OF_SCOPE",
                                    "named subject outside grounded knowledge", subject)
+
+    # (4) Nothing resolves to grounded knowledge — and no named subject to decline.
+    if not grounded:
         return PurposeDecision("ASK_CLARIFICATION", "intent not resolvable")
 
-    # (4) Grounded AND intent understood — only now may the mentor answer.
+    # (5) Grounded AND intent understood — only now may the mentor answer.
     return PurposeDecision("ANSWER_NOW", "grounded; intent clear")
 
 
