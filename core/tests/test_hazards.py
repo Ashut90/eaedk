@@ -3,8 +3,17 @@ from eaedk.store.db import connect
 from eaedk.store.migrate import migrate
 from eaedk.seed import seed_all
 from eaedk.orchestrator.orchestrator import assess
-from eaedk.engines.risk.engine import eval_condition, DSLSyntaxError
+from eaedk.engines.risk.engine import eval_condition, DSLSyntaxError, RiskRule, evaluate_risks
 import pytest
+
+
+def test_unparseable_rule_degrades_not_crashes():
+    """A rule the engine can't parse (e.g. a DB seeded by a newer EAEDK than the running code, the
+    /usr/lib stale-install crash) must surface as UNKNOWN, never propagate and 500 the whole run."""
+    bad = RiskRule("BROKEN", None, "unset(x", "HIGH", "expl", "mit")     # malformed (no ')')
+    out = evaluate_risks({"x": 1}, [bad], "bare_metal_app")
+    assert len(out) == 1 and out[0].rule_key == "BROKEN" and out[0].severity == "UNKNOWN"
+    assert out[0].fired is False
 
 
 def _seeded(tmp_path):

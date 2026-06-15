@@ -210,6 +210,15 @@ def evaluate_risks(ctx: dict[str, Any], rules: list[RiskRule],
             continue
         try:
             fired = eval_condition(r.condition_dsl, ctx)
+        except DSLSyntaxError as e:
+            # A rule the engine cannot parse (e.g. a DB seeded by a newer EAEDK than the running
+            # code) must never take down the whole assessment. Surface it as UNKNOWN and continue.
+            findings.append(RiskFinding(
+                r.key, "UNKNOWN",
+                f"cannot evaluate risk '{r.key}': its condition is not understood by this "
+                f"version of EAEDK ({e}). Update EAEDK or re-seed the database.",
+                r.mitigation_tmpl, fired=False))
+            continue
         except UnknownIdent as e:
             if r.severity_on_unknown == "UNKNOWN":
                 findings.append(RiskFinding(
