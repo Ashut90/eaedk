@@ -48,7 +48,7 @@ def test_job2_capability_map_injected(tmp_path):
     mentor_llm.mentor_chat(conn, "STM32F103-BluePill",
                            [{"role": "user", "content": "how do I drive the LED?"}],
                            use_llm=True, gateway=Gateway(provider=rec))
-    _system, prompt = rec.calls[-1]
+    _system, prompt = rec.calls[0]   # the Actor pass (P4 adds a Critic pass at calls[1])
     assert "peripherals" in prompt.lower()
     assert "uart" in prompt.lower() and "gpio" in prompt.lower()     # the board's actual caps
 
@@ -73,7 +73,7 @@ def test_job5_wokwi_flag_and_role_d(tmp_path):
     mentor_llm.mentor_chat(conn, "STM32F103-BluePill",
                            [{"role": "user", "content": "what about boot pins?"}],
                            use_llm=True, gateway=Gateway(provider=rec), has_hardware=False)
-    _system, prompt = rec.calls[-1]
+    _system, prompt = rec.calls[0]   # the Actor pass (P4 adds a Critic pass at calls[1])
     assert "wokwi" in prompt.lower()                                 # the flag reaches the model
     assert "wokwi" in mentor_llm._CHAT_SYSTEM.lower()                # Role D in the system prompt
 
@@ -86,7 +86,7 @@ def test_studio_code_injected_via_extra_context(tmp_path):
     mentor_llm.mentor_chat(conn, "STM32F103-BluePill",
                            [{"role": "user", "content": "why does nothing happen?"}],
                            use_llm=True, gateway=Gateway(provider=rec), extra_context=code)
-    _system, prompt = rec.calls[-1]
+    _system, prompt = rec.calls[0]   # the Actor pass (P4 adds a Critic pass at calls[1])
     assert "MARKER_UNIQUE_42" in prompt                              # the editor code reached the model
 
 
@@ -98,7 +98,7 @@ def test_mentor_progress_injected(tmp_path):
     mentor_llm.mentor_chat(conn, "STM32F103-BluePill",
                            [{"role": "user", "content": "what should I build?"}],
                            use_llm=True, gateway=Gateway(provider=rec), project="p1")
-    _system, prompt = rec.calls[-1]
+    _system, prompt = rec.calls[0]   # the Actor pass (P4 adds a Critic pass at calls[1])
     assert "progress" in prompt.lower()                              # State-Engine progress reached the model
 
 

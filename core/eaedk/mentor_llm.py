@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 import sqlite3
 
-from . import repo, mentor, reasoning, semantic_cost
+from . import repo, mentor, reasoning, semantic_cost, arbiter
 from .llm.gateway import Gateway
 from .llm.postfilter import build_board_allowlist, filter_text
 
@@ -830,8 +830,12 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
         _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
+    # Actor pass — the model proposes.
     raw = gw.provider.generate(system, prompt)
-    filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
+    # Critic pass — the model reviews its own answer (P4; runs on every online response).
+    grounding = f"{sem_line}{feas_line}Board: {board_name} ({soc['arch']}); peripherals: {have}."
+    critiqued = arbiter.critic_review(gw, system, raw, grounding)
+    filtered, removed = filter_text(critiqued, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
     # Enforce the contract even if the model (or the post-filter) dropped a part.
     if len(answer) < 20:
@@ -841,6 +845,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
             answer += f"\n\nTry this: {try_this}"
         if not answer.rstrip().rstrip("*_# ").endswith("?") and "question:" not in answer.lower():
             answer += f"\n\n{question}"           # already ends in a question? don't append a second
+    # Arbiter pass — deterministic, final say. Discards the prose on any hard fail (P4).
+    arb = arbiter.arbitrate(conn, board_name, project, last_user, answer)
+    if arb.overridden:
+        return lead + arb.text                       # the Validation Engine wins; Actor text dropped
     return lead + answer                             # P1/P2B: hard limit + cost data prefixed, always
 
 
