@@ -21,6 +21,7 @@ class AssessResponse:
     assumptions: list[dict[str, Any]] = field(default_factory=list)
     unknowns: list[str] = field(default_factory=list)
     input_warnings: list[str] = field(default_factory=list)   # unrecognized engineer inputs (v2.7 P4B)
+    intent: dict[str, Any] | None = None                      # behavioural intent feasibility (v3.1 Gap 5)
     next_step: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -47,6 +48,18 @@ class AssessResponse:
             else:
                 L.append("✅ **Your project is feasible and ready to export.** "
                          "Next: `eaedk export`.")
+            L.append("")
+        if self.intent is not None:                # v3.1 Gap 5: behavioural intent, in the same report
+            it = self.intent
+            L.append("## Intent Feasibility")
+            L.append(f"Verdict: {it.get('verdict', '?')}")
+            bf, br = it.get("board_flash"), it.get("board_ram")
+            L.append(f"  Flash needed: {it.get('flash_min',0)//1024}KB–{it.get('flash_max',0)//1024}KB "
+                     f"vs board {bf//1024 if bf else '?'}KB")
+            L.append(f"  RAM needed:   {it.get('ram_min',0)//1024}KB–{it.get('ram_max',0)//1024}KB "
+                     f"vs board {br//1024 if br else '?'}KB")
+            for r in it.get("reasons", []):
+                L.append(f"  - {r}")
             L.append("")
         L.append("## Risk Summary")
         if self.risks:

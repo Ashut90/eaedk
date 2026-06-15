@@ -317,6 +317,44 @@ def all_semantic_costs(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "verified_by_human FROM semantic_cost_estimates ORDER BY term").fetchall()
 
 
+def resolve_board_name(conn: sqlite3.Connection, query: str) -> tuple[str | None, bool]:
+    """Resolve a user-typed board name to the canonical one (v3.1 Gap 2).
+
+    Returns (canonical_name, exact). Tries, in order: exact match; case-insensitive match;
+    normalised substring (so 'bluepill' -> 'STM32F103-BluePill', 'f411' -> 'Nucleo-F411RE'); then
+    closest by difflib ratio above a confidence threshold. Returns (None, False) if nothing is close.
+    """
+    import difflib
+    import re as _re
+    if not query:
+        return None, False
+    names = [r["name"] for r in conn.execute("SELECT name FROM boards").fetchall()]
+    if query in names:
+        return query, True
+    low = {n.lower(): n for n in names}
+    if query.lower() in low:
+        return low[query.lower()], True
+
+    def norm(s: str) -> str:
+        return _re.sub(r"[^a-z0-9]", "", s.lower())
+
+    qn = norm(query)
+    if qn:
+        # substring either direction: 'bluepill' in 'stm32f103bluepill', or 'f411' in 'nucleof411re'
+        subs = [n for n in names if qn in norm(n) or norm(n) in qn]
+        if len(subs) == 1:
+            return subs[0], False
+        if len(subs) > 1:                       # ambiguous substring -> pick the closest by ratio
+            best = max(subs, key=lambda n: difflib.SequenceMatcher(None, qn, norm(n)).ratio())
+            return best, False
+    # fall back to fuzzy ratio over the whole set
+    scored = [(difflib.SequenceMatcher(None, qn, norm(n)).ratio(), n) for n in names]
+    scored.sort(reverse=True)
+    if scored and scored[0][0] >= 0.6:
+        return scored[0][1], False
+    return None, False
+
+
 def boards_overview(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Name + SoC + architecture + geometry for every board — used to find the closest board by
     architecture family and memory bracket (v3.0 P1)."""

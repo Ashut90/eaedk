@@ -205,6 +205,18 @@ def _unknown_board(conn, name: str) -> None:
           "`eaedk board add --interactive` to add your own.", file=sys.stderr)
 
 
+def _resolve_board_or_exit(conn, name: str) -> str:
+    """Resolve a (possibly fuzzy) board name to its canonical form, printing a coercion notice when
+    it wasn't an exact match. Exits 2 if nothing close is found (v3.1 Gap 2)."""
+    resolved, exact = repo.resolve_board_name(conn, name)
+    if resolved is None:
+        _unknown_board(conn, name)
+        sys.exit(2)
+    if not exact:
+        print(f"Note: assuming '{resolved}' from input '{name}'.", file=sys.stderr)
+    return resolved
+
+
 def cmd_project_init(args):
     conn = _conn(args)
     from .project_init import run_project_init
@@ -374,23 +386,31 @@ def cmd_project_status(args):
 
 def cmd_validate(args):
     conn = _conn(args)
-    if getattr(args, "intent", None):                 # P2C: intent feasibility against a board
+    intent = getattr(args, "intent", None)
+    # v3.1 Gap 5: a project (+ optional --intent) runs structural validation AND behavioural intent
+    # as ONE unified report and a single aggregated verdict.
+    if args.name:
+        p = _require_project(conn, args.name)
+        only = [args.rule] if args.rule else None
+        resp = assess_project(conn, p, only=only, intent=intent)
+        _emit(args, resp.to_dict(), resp.to_markdown())
+        sys.exit(1 if resp.feasibility == "not_feasible" else 0)
+    # Board + intent only (no project): the quick stand-alone intent check.
+    if intent:
         if not args.board:
-            print("error: validate --intent needs --board NAME", file=sys.stderr); sys.exit(2)
-        if repo.load_board(conn, args.board)[0] is None:
-            _unknown_board(conn, args.board); sys.exit(2)
-        from .semantic_cost import classify_terms, assess, render
-        known, unknown = classify_terms(args.intent)
-        res = assess(conn, args.board, known, unknown)
+            print("error: validate needs a project NAME, or --board NAME with --intent",
+                  file=sys.stderr); sys.exit(2)
+        resolved = _resolve_board_or_exit(conn, args.board)
+        from .semantic_cost import classify_terms, assess as sc_assess, render
+        known, unknown = classify_terms(intent)
+        res = sc_assess(conn, resolved, known, unknown)
         if args.json:
             print(json.dumps(res, indent=2, default=str))
         else:
             print(render(res), end="")
         sys.exit(1 if res["verdict"] == "FAIL" else 0)
-    p = _require_project(conn, args.name)
-    only = [args.rule] if args.rule else None
-    resp = assess_project(conn, p, only=only)
-    _emit(args, resp.to_dict(), resp.to_markdown())
+    print("error: validate needs a project NAME, or --board NAME --intent \"...\"",
+          file=sys.stderr); sys.exit(2)
 
 
 def cmd_risk_show(args):
