@@ -18,9 +18,14 @@ stripped before you read it.
 
 ## Getting started
 
-New here? Copy-paste these one at a time. By the last line you'll have a sequenced project roadmap.
+EAEDK is pure Python (≥ 3.11) and runs the same on **Linux, macOS, and Windows** — one SQLite file,
+no per-token cost, fully offline. The only thing that differs per OS is how you get Python and
+activate the workspace.
+
+### macOS / Linux
 
 ```bash
+# 0. (once) get Python 3.11+ — macOS: `brew install python@3.11` (or python.org); most Linux has it.
 git clone https://github.com/Ashut90/eaedk        # 1. download
 cd eaedk                                            # 2. enter the folder
 python3 -m venv .venv && source .venv/bin/activate  # 3-4. private workspace
@@ -30,14 +35,31 @@ eaedk board list                                    # 8. see the 14 built-in boa
 eaedk board capabilities --board bluepill           # 9. what can this board do? (fuzzy names OK)
 ```
 
-Typing `bluepill` instead of `STM32F103-BluePill` is fine — EAEDK auto-coerces and tells you.
-Coming back later? `cd eaedk`, `source .venv/bin/activate`, and you're ready — steps 1–7 are
-one-time only.
+### Windows (PowerShell)
 
-**Prefer a browser?** `pip install -e '.[web]'` then `eaedk web` → <http://localhost:8080>.
-**On Ubuntu/Debian:** `packaging/build-deb.sh` → `sudo apt install ./dist/eaedk_*_all.deb` puts the
-`eaedk` command on your `$PATH` system-wide. The full CLI needs only `python3` + `python3-yaml` and
-works offline.
+Install **Python 3.11+** from [python.org](https://www.python.org/downloads/windows/) or the
+Microsoft Store (tick *"Add python.exe to PATH"*), then in PowerShell:
+
+```powershell
+git clone https://github.com/Ashut90/eaedk         # 1. download (needs Git for Windows)
+cd eaedk                                            # 2. enter the folder
+py -m venv .venv ; .venv\Scripts\Activate.ps1       # 3-4. private workspace
+pip install -e .                                    # 5. install the `eaedk` command
+eaedk db init ; eaedk db seed                       # 6-7. create + load the local database
+eaedk board capabilities --board bluepill           # 8. what can this board do?
+```
+
+> If PowerShell blocks the activate script, run once:
+> `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`. On Command Prompt (cmd.exe) the
+> activate line is `.venv\Scripts\activate.bat`.
+
+Typing `bluepill` instead of `STM32F103-BluePill` is fine — EAEDK auto-coerces and tells you.
+Coming back later? `cd eaedk`, re-activate the workspace, and you're ready — steps 1–7 are one-time.
+
+**Prefer a browser?** `pip install -e '.[web]'` then `eaedk web` → <http://localhost:8080> (all OSes).
+**On Ubuntu/Debian** you can instead build a native package — `packaging/build-deb.sh` →
+`sudo apt install ./dist/eaedk_*_all.deb` puts `eaedk` on your `$PATH` system-wide. (macOS and
+Windows use the pip flow above — there is no native installer for them yet.)
 
 ---
 
@@ -162,6 +184,62 @@ flowchart TD
 ```
 
 ---
+
+## Reasoning workflow — how the mentor actually thinks
+
+When you ask a question (Boards chat or `eaedk mentor`), EAEDK does **not** hand it straight to a
+model. It runs deterministic detectors first, prepends an un-bypassable grounding (a feasibility
+banner and any semantic-cost reality check), builds a **reasoning backbone** — the board-agnostic
+framework *what → why → when → options → trade-off → how to decide → next*, with board facts only
+*enriching* the trade-off — and only then, if `--llm` is on, lets the model elaborate that backbone
+through Actor → Critic → **Arbiter** → Post-Filter. Offline, the backbone *is* the answer.
+
+```mermaid
+flowchart TD
+    Q["User question / chat<br/>(Boards page or eaedk mentor)"]:::in
+
+    Q --> DET["Deterministic detectors — no LLM"]:::core
+    DET --> R1["role · SPONSOR / PEER / ARCHITECT / REVERSE"]:::detect
+    DET --> R2["topic · an engineering DECISION"]:::detect
+    DET --> R3["domain · robotics / sensor / IoT"]:::detect
+    DET --> R4["career · learning roadmap"]:::detect
+    DET --> R5["concept · HardFault, vector table, …"]:::detect
+
+    Q --> LEAD["Deterministic prefix — always, un-bypassable"]:::guard
+    LEAD --> G1["Feasibility guard · NOT FEASIBLE banner"]:::guard
+    LEAD --> G2["Semantic cost note · gRPC ~500KB vs 64KB"]:::guard
+
+    R1 --> BACK
+    R2 --> BACK
+    R3 --> BACK
+    R4 --> BACK
+    R5 --> BACK
+    BACK["Reasoning backbone — priority-ordered"]:::core
+    BACK --> FW["The reasoning FRAMEWORK<br/>what → why → when → options →<br/>trade-off → how to decide → next"]:::frame
+    FW --> ENR["board facts ENRICH the trade-off<br/>(they never drive it)"]:::frame
+
+    ENR --> OFF{"Model on?"}:::dec
+    LEAD --> OFF
+    OFF -->|offline| AOFF["lead + backbone<br/>a real grounded answer, no model"]:::ok
+    OFF -->|--llm| ACT["Actor — elaborate the framework"]:::llm
+    ACT --> CRIT["Critic — review own answer"]:::llm
+    CRIT --> ARB["Arbiter — deterministic, final say<br/>discards LLM text on a hard fail"]:::guard
+    ARB --> PF["Post-Filter — strip uncited numbers"]:::guard
+    PF --> AON["lead + reviewed answer"]:::ok
+
+    classDef in fill:#ede7f6,stroke:#5e35b1,color:#311b92;
+    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
+    classDef detect fill:#f1f8e9,stroke:#558b2f,color:#33691e;
+    classDef frame fill:#e0f7fa,stroke:#00838f,color:#004d54;
+    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#7a3b00;
+    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-dasharray:6 4,color:#7a1438;
+    classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b4d2e;
+    classDef dec fill:#fffde7,stroke:#f9a825,color:#7a5b00;
+```
+
+The framework lives as curated Python data (`reasoning.py`), so the *thinking* holds fully offline —
+an air-gapped mentor still teaches the reasoning, not just a stored answer. See
+[docs/27-reasoning-framework.md](docs/27-reasoning-framework.md).
 
 ## The guardrails the LLM cannot bypass
 
