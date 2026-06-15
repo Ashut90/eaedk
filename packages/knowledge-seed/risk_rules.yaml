@@ -74,7 +74,7 @@
   condition_dsl: "board.active_current_ma > target_current_ma"
   severity: HIGH
   explanation_tmpl: "This board's typical active current ({board.active_current_ma} mA) exceeds your {target_current_ma} mA power budget — at full activity it will not meet the budget."
-  mitigation_tmpl: "Duty-cycle the workload, use the chip's sleep/stop modes between bursts, or raise the budget. Confirm active current at your clock speed in the datasheet."
+  mitigation_tmpl: "To hit {target_current_ma} mA on a {board.active_current_ma} mA board you must keep it ACTIVE at most {power_budget_duty_pct}% of the time (duty cycle) and in sleep/stop mode the rest. Either duty-cycle to that figure, or raise the budget. Confirm active current at your clock speed in the datasheet."
 
 - key: STACK_OVERFLOW_ISR
   goal_type: null

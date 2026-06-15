@@ -123,6 +123,23 @@ def test_p3_hazards_silent_without_inputs(tmp_path):
 
 # --- regression: boolean string inputs (has_rtos=true/false) must coerce, not error ---------
 
+def test_gap6_power_budget_quantifies_duty_cycle(tmp_path):
+    """v3.1 Gap 6: POWER_BUDGET states the exact max duty cycle, not just 'duty-cycle it'."""
+    conn = _seeded(tmp_path)
+    resp = assess(conn, "bare_metal_app",
+                  {"target_current_ma": 8}, board_name="STM32F103-BluePill")  # active 50mA
+    f = _risk(resp, "POWER_BUDGET")
+    assert f is not None and "16%" in f["mitigation"]      # 8/50 = 16%
+
+
+def test_gap6_duty_pct_derived_in_context():
+    from eaedk.context import build_context
+    ctx = build_context({"target_current_ma": 8}, {"active_current_ma": 50}, None, "bare_metal_app")
+    assert ctx["power_budget_duty_pct"] == 16
+    # no target -> no derived value (rule won't fire, nothing to quantify)
+    assert "power_budget_duty_pct" not in build_context({}, {"active_current_ma": 50}, None, "x")
+
+
 def test_p3_has_rtos_boolean_string_coerces(tmp_path):
     """has_rtos='false' (a string, as the CLI stores it) must read as 0 — not raise UnknownIdent
     and surface a contradictory 'missing input has_rtos' while it is plainly set."""

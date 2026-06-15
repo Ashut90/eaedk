@@ -69,3 +69,21 @@ def test_gap5_stateless_assess_supports_intent(tmp_path):
     conn = _seeded(tmp_path)
     resp = assess(conn, "bare_metal_app", {}, board_name="STM32F103-BluePill", intent="grpc")
     assert resp.intent["verdict"] == "FAIL" and resp.feasibility == "not_feasible"
+
+
+# --- v3.1 Gap 7: --json accepted after the subcommand, output serializable -----------------
+
+def test_gap7_json_flag_accepted_after_validate_subcommand():
+    from eaedk.cli import build_parser
+    args = build_parser().parse_args(["validate", "--board", "bluepill", "--intent", "grpc", "--json"])
+    assert args.json is True
+    args2 = build_parser().parse_args(["--json", "validate", "prod"])   # global form still works
+    assert args2.json is True
+    args3 = build_parser().parse_args(["validate", "prod"])             # default stays False
+    assert args3.json is False
+
+
+def test_gap7_intent_result_is_json_serializable(tmp_path):
+    conn = _seeded(tmp_path)
+    resp = assess(conn, "bare_metal_app", {}, board_name="STM32F103-BluePill", intent="grpc tls")
+    json.dumps(resp.to_dict())                              # must not raise; nested intent dict is clean

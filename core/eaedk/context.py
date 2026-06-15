@@ -94,6 +94,13 @@ def build_context(
     if ctx.get("projected_device_lifetime_seconds") is None:
         ctx["projected_device_lifetime_seconds"] = 157_680_000  # 5 years in seconds
 
+    # v3.1 Gap 6: the maximum active duty cycle that still meets the power budget
+    # (target / active current). Lets POWER_BUDGET quantify "duty-cycle to X%" instead of hand-waving.
+    tgt = as_int(inputs.get("target_current_ma"))
+    act = as_int(board.get("active_current_ma")) if board else None
+    if tgt is not None and act and act > 0:
+        ctx["power_budget_duty_pct"] = max(0, round(tgt / act * 100))
+
     ctx["_provided"] = provided
     ctx["_goal"] = goal_type
     return ctx

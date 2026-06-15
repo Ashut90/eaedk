@@ -904,6 +904,14 @@ def _add_llm(sp):
     return sp
 
 
+def _add_json(sp):
+    """v3.1 Gap 7: accept --json *after* the subcommand too (the global --json must precede it).
+    SUPPRESS keeps the subparser from clobbering the global default unless explicitly given."""
+    sp.add_argument("--json", dest="json", action="store_true", default=argparse.SUPPRESS,
+                    help="machine-readable JSON output")
+    return sp
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="eaedk",
                                 description="Embedded AI Engineering Development Kit")
@@ -981,7 +989,7 @@ def build_parser() -> argparse.ArgumentParser:
     v = sub.add_parser("validate"); v.add_argument("name", nargs="?"); v.add_argument("--rule")
     v.add_argument("--board", help="check an intent against this board (with --intent)")
     v.add_argument("--intent", help="high-level capabilities to cost out, e.g. \"grpc tls freertos\"")
-    v.set_defaults(func=cmd_validate)
+    _add_json(v); v.set_defaults(func=cmd_validate)
     rk = sub.add_parser("risk").add_subparsers(dest="sub", required=True)
     rks = rk.add_parser("show"); rks.add_argument("name"); rks.set_defaults(func=cmd_risk_show)
     rkr = rk.add_parser("resolve")
