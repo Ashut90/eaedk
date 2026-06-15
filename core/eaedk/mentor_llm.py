@@ -6,6 +6,7 @@ the model elaborates and the post-filter strips any uncited hardware value.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 
 from . import repo, mentor, reasoning
@@ -371,14 +372,78 @@ def _tt_block(try_this: str | None) -> str:
     return f"\n\nTry this: {try_this}" if try_this else ""
 
 
-def _career_roadmap(board_name: str, path: list) -> str:
+# --- Multi-board context retention (v2.7 P4A) ----------------------------------------------------
+# Informal names the user is likely to type, mapped to the canonical board. The board's own name
+# (and its hyphen/space variants) is always matched too — this only adds the colloquialisms.
+_BOARD_ALIASES = {
+    "STM32F103-BluePill":     ("blue pill", "bluepill", "stm32f103", "f103c8"),
+    "Nucleo-F103RB":          ("nucleo f103", "f103rb"),
+    "Nucleo-F411RE":          ("nucleo f411", "f411", "f411re"),
+    "STM32H743":              ("h743", "stm32h7"),
+    "STM32MP157":             ("mp157", "stm32mp1", "stm32mp157"),
+    "ESP32-DevKitC":          ("esp32", "esp 32", "devkitc"),
+    "Raspberry-Pi-Pico":      ("pico", "rp2040", "raspberry pi pico"),
+    "WIZnet-W5500-EVB-Pico":  ("w5500", "wiznet"),
+    "Arduino-Uno":            ("uno", "atmega328", "arduino uno"),
+    "Arduino-Mega":           ("mega", "atmega2560", "arduino mega"),
+    "Raspberry-Pi-4":         ("pi 4", "raspberry pi 4", "rpi4", "bcm2711"),
+    "BeagleBone-Black":       ("beaglebone", "bbb", "am335"),
+    "i.MX8M-Mini-EVK":        ("imx8", "imx8m", "i mx8"),
+    "RTL8722DM":              ("rtl8722", "ameba"),
+}
+
+
+def _norm_words(s: str) -> str:
+    """Lowercase, drop punctuation to spaces, collapse — so ' uno ' matches but 'announce' doesn't."""
+    return " " + re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]+", " ", (s or "").lower())).strip() + " "
+
+
+def _board_aliases(name: str) -> set[str]:
+    al = {name.lower(), name.lower().replace("-", " "), name.lower().replace("-", "")}
+    al |= set(_BOARD_ALIASES.get(name, ()))
+    return {_norm_words(a).strip() for a in al if a.strip()}
+
+
+def _mentioned_boards(conn: sqlite3.Connection, messages: list[dict], selected: str) -> list[str]:
+    """Every board referenced anywhere in the conversation — the selected board first, then any the
+    user named by name or colloquialism, deduped in mention order (v2.7 P4A)."""
+    text = _norm_words(" ".join((m.get("content") or "") for m in messages or []))
+    active = [selected]
+    for r in repo.list_boards(conn):
+        n = r["name"]
+        if n == selected:
+            continue
+        if any(f" {a} " in text for a in _board_aliases(n)):
+            active.append(n)
+    return active
+
+
+def _and_join(items: list[str]) -> str:
+    items = list(items)
+    if len(items) <= 1:
+        return items[0] if items else ""
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _career_roadmap(board_name: str, path: list, active_boards: list[str] | None = None) -> str:
     """A learning *sequence* for a career/learning question — the deterministic answer that replaces a
-    single canned experiment (v2.7 P3)."""
+    single canned experiment (v2.7 P3). When several boards are in play it sequences across all of
+    them and stresses transfer (v2.7 P4A)."""
+    boards = active_boards or [board_name]
+    multi = len(boards) > 1
+    if multi:
+        lead = (f"You've mentioned {_and_join(boards)}. Career and skill aren't a single experiment "
+                "or a single board — they're a sequence you can run on any of them, because the "
+                "reasoning transfers. A sound order:")
+    else:
+        lead = ("Career and skill aren't a single experiment — they're a sequence. On "
+                f"{board_name} a sound order is:")
     if path:
         steps = "\n".join(f"{i}. {s['title']} — {s['why']}" for i, s in enumerate(path, 1))
-        return ("Career and skill aren't a single experiment — they're a sequence. On "
-                f"{board_name} a sound order is:\n{steps}\n"
-                "Go deep on each before the next; the reasoning transfers to every other board.")
+        tail = ("\nGo deep on each before the next; what you learn on one of these boards transfers "
+                "directly to the others." if multi else
+                "\nGo deep on each before the next; the reasoning transfers to every other board.")
+        return f"{lead}\n{steps}{tail}"
     return ("Embedded skill is built in order, not in one experiment: blink, then timers/PWM, then "
             "interrupts, then a bus (UART/I2C/SPI), then a real peripheral, then an RTOS or "
             "bootloader. Master one board deeply; the reasoning transfers everywhere.")
@@ -655,6 +720,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                                           "wokwi_flag": (not has_hardware),
                                           "current_code": current_code})
     career = _is_career(last_user)                     # P3: career -> roadmap, suppress 'Try this'
+    active_boards = _mentioned_boards(conn, messages, board_name)  # P4A: every board in the convo
     used = _used_try_this(messages)                    # P3: never repeat an experiment this session
     try_this = _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
     if try_this and not has_hardware and "wokwi" not in try_this.lower():
@@ -677,8 +743,8 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # Deterministic backbone — a real answer even with no model, always ending in an action.
     # An engineering decision teaches the reasoning FRAMEWORK (v2.6.0); a named project type reasons
     # about this board's peripherals (v2.4.1); both ahead of the generic "start with blink" default.
-    if career:                                           # P3: a learning roadmap, not an experiment
-        head = _career_roadmap(board_name, path)
+    if career:                                           # P3/P4A: roadmap across all active boards
+        head = _career_roadmap(board_name, path, active_boards)
     elif topic:
         head = reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
     elif domain:
@@ -734,7 +800,12 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         feas_line = ("HARD CONSTRAINT — this project is NOT FEASIBLE (the Validation Engine proved a "
                      "physical hardware limit). Open your reply by stating this failure; do NOT "
                      "suggest optimisation as if it could work as-is:\n" + guard + "\n")
-    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{feas_line}"
+    boards_line = ""
+    if len(active_boards) > 1:                            # P4A: retain every board the user named
+        boards_line = (f"The user has referenced multiple boards: {_and_join(active_boards)}. For a "
+                       "career/learning question, sequence learning across ALL of them and stress how "
+                       "the reasoning transfers between them.\n")
+    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{boards_line}{feas_line}"
               f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
               f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
               + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")

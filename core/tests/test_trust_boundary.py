@@ -156,3 +156,36 @@ def test_p3_first_project_still_gets_board_experiment(tmp_path):
     out = mentor_chat(conn, "Arduino-Uno",
                       [{"role": "user", "content": "where do I start?"}], use_llm=False)
     assert "F_CPU" in out                                # AVR family experiment, unchanged
+
+
+# --- P4A: multi-board context retention ---------------------------------------------------
+
+def test_p4a_career_query_sequences_across_all_mentioned_boards(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "I also have an ESP32 and an Arduino Uno. "
+                        "What should I learn for an embedded career?"}],
+                      use_llm=False)
+    assert "Try this:" not in out                        # career -> roadmap, no canned experiment
+    low = out.lower()
+    assert "esp32" in low and "uno" in low               # the other two boards are retained
+    assert "stm32f103" in low or "bluepill" in low       # and the selected one
+    assert "transfer" in low                             # reasoning-transfers framing
+
+
+def test_p4a_mentioned_boards_detects_colloquial_names(tmp_path):
+    conn = _seeded(tmp_path)
+    from eaedk.mentor_llm import _mentioned_boards
+    msgs = [{"role": "user", "content": "I have a Blue Pill, a Pico, and an Arduino Mega."}]
+    active = _mentioned_boards(conn, msgs, "STM32F103-BluePill")
+    assert active[0] == "STM32F103-BluePill"             # selected stays first
+    assert "Raspberry-Pi-Pico" in active and "Arduino-Mega" in active
+
+
+def test_p4a_no_false_positive_board_mentions(tmp_path):
+    conn = _seeded(tmp_path)
+    from eaedk.mentor_llm import _mentioned_boards
+    # "announce" must not match "uno"; ordinary prose adds no boards.
+    active = _mentioned_boards(conn, [{"role": "user", "content": "I want to announce a megabyte buffer."}],
+                               "STM32F103-BluePill")
+    assert active == ["STM32F103-BluePill"]
