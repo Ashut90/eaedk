@@ -158,3 +158,37 @@ def test_gap4_unified_validate_surfaces_peripheral_fail(tmp_path):
     assert resp.feasibility == "not_feasible"
     assert resp.intent["peripheral_failures"]
     assert "wifi or ethernet" in " ".join(resp.intent["reasons"])
+
+
+# --- Grounded board recommendation — "which board suits best for X" --------------------------
+
+def test_recommend_boards_buckets_by_real_geometry(tmp_path):
+    """recommend_boards ranks EVERY seeded board by fit, deterministically from verified geometry —
+    a tiny MCU is too small for tflite, a large one fits. No selected board, no LLM."""
+    conn = _seeded(tmp_path)
+    rec = sc.recommend_boards(conn, ["tflite_micro"])
+    fits = {e["board"] for e in rec["fits"]}
+    too_small = {e["board"] for e in rec["no"]}
+    assert "STM32F103-BluePill" in too_small           # 64KB flash / 20KB RAM cannot hold it
+    assert any("ESP32" in b or "STM32H7" in b for b in fits)   # a large board fits
+    assert "STM32F103-BluePill" not in fits
+
+
+def test_board_selection_with_intent_recommends_not_overrides(tmp_path):
+    """A board-selection question with an AI intent must recommend across the fleet — never the
+    selected-board cost override, never an LLM-invented board (the hallucination this replaces)."""
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "which board suits best for an AI application?"}],
+                      use_llm=False)
+    assert "Arbiter override" not in out               # not the selected-board FAIL override
+    assert "verified flash/RAM" in out                 # the grounded fleet recommendation
+    assert ("ESP32" in out or "STM32H743" in out)      # real seeded boards, not hallucinated
+
+
+def test_board_selection_without_intent_gives_framework(tmp_path):
+    """No intent named → the board-selection reasoning framework, not a recommendation."""
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "which board should I pick?"}], use_llm=False)
+    assert "trade-off" in out.lower() and "verified flash/RAM" not in out

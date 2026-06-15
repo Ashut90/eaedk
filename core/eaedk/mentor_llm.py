@@ -964,6 +964,16 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if purpose.purpose != "ANSWER_NOW":
         return render_purpose(conn, purpose, board_name, path, active_boards)
 
+    # Board SELECTION is fleet-wide: the user is asking WHICH board to choose, so the selected board is
+    # not the subject. Answer deterministically from every seeded board's verified geometry + the cost
+    # table — never the selected-board cost override, never the LLM (which would hallucinate boards).
+    if topic and topic.key == "board_selection":
+        sel_terms = semantic_cost.parse_intent(last_user)
+        sel_unknown = semantic_cost.detect_uncosted(last_user)
+        if sel_terms or sel_unknown:
+            return _feasibility_guard(conn, project) + semantic_cost.recommend_chat(
+                conn, sel_terms, sel_unknown)
+
     used = _used_try_this(messages)                    # P3: never repeat an experiment this session
     try_this = _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
     if try_this and not has_hardware and "wokwi" not in try_this.lower():
