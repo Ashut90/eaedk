@@ -83,6 +83,7 @@ def cmd_board_list(args):
 
 def cmd_board_show(args):
     conn = _conn(args)
+    args.name = _resolve_board_or_exit(conn, args.name)    # v3.1 Gap 2: auto-coerce board name
     board, soc = repo.load_board(conn, args.name)
     if board is None:
         _unknown_board(conn, args.name)
@@ -715,34 +716,38 @@ def _mentor_chat_repl(conn, board: str, use_llm: bool) -> None:
         print(f"\nmentor> {answer}\n")
 
 
+def cmd_board_root(args):
+    """v3.1 Gap 1: the `board` group with no subcommand — `--capabilities` routes to the summary."""
+    if getattr(args, "capabilities", False):
+        cmd_board_capabilities(args)
+        return
+    print("usage: eaedk board {list,show,add,fill-geometry,capability,capabilities} ...\n"
+          "       eaedk board --capabilities --board NAME", file=sys.stderr)
+    sys.exit(2)
+
+
 def cmd_board_capabilities(args):
     """P1A: plain-language board capability summary, sourced entirely from the database."""
     conn = _conn(args)
-    name = args.board or args.name
+    name = args.board or getattr(args, "name", None)
     if not name:
         print("error: board capabilities needs --board NAME", file=sys.stderr); sys.exit(2)
+    name = _resolve_board_or_exit(conn, name)         # v3.1 Gap 2: auto-coerce "bluepill" etc.
     from .mentor_beginner import render_board_capabilities
-    out = render_board_capabilities(conn, name)
-    if out is None:
-        _unknown_board(conn, name); sys.exit(2)
-    print(out, end="")
+    print(render_board_capabilities(conn, name), end="")
 
 
 def cmd_roadmap(args):
     """P1C: a job-focused learning roadmap grounded in the board(s)' confirmed peripherals."""
     conn = _conn(args)
     from .mentor_beginner import render_roadmap
-    for n in args.boards:
-        if repo.load_board(conn, n)[0] is None:
-            _unknown_board(conn, n); sys.exit(2)
-    out = render_roadmap(conn, args.boards, args.goal)
-    if out is None:
-        _unknown_board(conn, args.boards[0]); sys.exit(2)
-    print(out, end="")
+    boards = [_resolve_board_or_exit(conn, n) for n in args.boards]   # v3.1 Gap 2
+    print(render_roadmap(conn, boards, args.goal), end="")
 
 
 def cmd_mentor(args):
     conn = _conn(args)
+    args.board = _resolve_board_or_exit(conn, args.board)   # v3.1 Gap 2: auto-coerce board name
     board, _soc = repo.load_board(conn, args.board)
     if board is None:
         _unknown_board(conn, args.board)
@@ -915,7 +920,14 @@ def build_parser() -> argparse.ArgumentParser:
     s = db.add_parser("seed"); s.add_argument("--force", action="store_true")
     s.set_defaults(func=cmd_db_seed)
 
-    bd = sub.add_parser("board").add_subparsers(dest="sub", required=True)
+    board_p = sub.add_parser("board")
+    # v3.1 Gap 1: accept the flag form `board --capabilities --board NAME` as an alias for the
+    # `board capabilities` subcommand — both route to the same handler.
+    board_p.add_argument("--capabilities", action="store_true",
+                         help="alias for `board capabilities` — the beginner capability summary")
+    board_p.add_argument("--board", dest="board", help="board name (with --capabilities)")
+    board_p.set_defaults(func=cmd_board_root)
+    bd = board_p.add_subparsers(dest="sub", required=False)
     bl = bd.add_parser("list"); bl.add_argument("--query"); bl.set_defaults(func=cmd_board_list)
     bs = bd.add_parser("show"); bs.add_argument("name"); bs.set_defaults(func=cmd_board_show)
     ba = bd.add_parser("add")
