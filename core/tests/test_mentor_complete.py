@@ -177,5 +177,5 @@ def test_chat_unknown_board_is_friendly(tmp_path):
 def test_chat_avr_board_gets_avr_try_this(tmp_path):
     conn = _seeded(tmp_path)
     a = mentor_chat(conn, "Arduino-Uno",
-                    [{"role": "user", "content": "help"}], use_llm=False)
+                    [{"role": "user", "content": "how do I blink the LED?"}], use_llm=False)
     assert "F_CPU" in a                               # board-family-appropriate experiment

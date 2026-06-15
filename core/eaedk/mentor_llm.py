@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from dataclasses import dataclass
 
 from . import repo, mentor, reasoning, semantic_cost, arbiter
 from .llm.gateway import Gateway
@@ -224,6 +225,12 @@ def _domain_reasoning(domain: str, caps: set, family: str | None, board_name: st
 _SIM_TRIGGERS = ("wokwi", "simulator", "virtual", "blocking", "boot pin", "boot0",
                  "can't export", "cannot export", "won't export")
 
+# The user shared code or is reporting a fault — a debugging turn (shared by the Purpose gate).
+_PEER_TRIGGERS = ("my code", "compiles but", "doesn't work", "nothing happens", "not working",
+                  "wrong output", "review this", "check this", "what's wrong", "crashed",
+                  "crashes", "won't run", "wont run", "won't boot", "wont boot", "freezes",
+                  "hangs", "reboots", "stuck")
+
 
 def detect_mentor_role(user_message: str, page_context: dict) -> str:
     """Pick the mentor's behavioural mode deterministically (docs/25, reordered in v2.5.1):
@@ -238,9 +245,7 @@ def detect_mentor_role(user_message: str, page_context: dict) -> str:
 
     # Role B — the user shared code or is debugging.
     code = page_context.get("current_code") or ""
-    peer_triggers = ("my code", "compiles but", "doesn't work", "nothing happens", "not working",
-                     "wrong output", "review this", "check this", "what's wrong")
-    if len(code) > 50 or any(t in msg for t in peer_triggers):
+    if len(code) > 50 or any(t in msg for t in _PEER_TRIGGERS):
         return "PEER_MENTOR"
 
     # Role A — architectural / design / feasibility question.
@@ -256,6 +261,201 @@ def detect_mentor_role(user_message: str, page_context: dict) -> str:
         return "REVERSE_MENTOR"
 
     return "SYSTEM_ARCHITECT"
+
+
+# --- Purpose Decision (the first-step gate): decide WHAT the turn is for, before any answer -------
+#
+# The mentor is not an answer engine. Before generating anything it chooses one OUTCOME:
+#   ANSWER_NOW | ASK_CLARIFICATION | REDIRECT_TO_FOUNDATION | DECLINE_OUT_OF_SCOPE
+# ANSWER_NOW is never the default — it requires BOTH a resolvable intent AND grounding in EAEDK's
+# CURATED knowledge (its boards, concepts, capabilities, and reasoning topics). The user's question
+# is the subject; the selected board is only context. Grounding reuses the EXISTING detectors, so
+# this is a decision layer over what the system already knows — not a new keyword/domain list.
+
+# Foundation intents — the learner wants to enter the FIELD / become an engineer (a career framing),
+# not start a task. These get a learning path, not a board-bound technical answer.
+_FOUNDATION_PHRASES = (
+    "become a firmware", "become an embedded", "become a embedded", "firmware engineer",
+    "embedded engineer", "embedded developer", "firmware developer", "want to become",
+    "how do i become", "trying to become", "new to embedded", "new to firmware",
+    "getting into embedded", "get into embedded", "break into embedded", "into firmware",
+    "complete beginner", "career in",
+)
+
+# Direction intents — "where do I start" on THIS board: grounded by the board's learning path.
+_DIRECTION_PHRASES = (
+    "where do i start", "where to start", "where should i start", "where do i begin",
+    "how do i start", "how should i start", "what should i build", "what do i build",
+    "what should i make", "what to build", "get started", "getting started", "first project",
+    "start with", "begin with", "what should i learn first",
+)
+
+# Generic English words filtered out of the curated grounding vocabulary so common filler in a
+# capability summary ("you turn on/off") never grounds an off-topic question.
+_VOCAB_STOP = frozenset((
+    "the", "and", "for", "with", "that", "this", "you", "your", "they", "them", "its", "are",
+    "use", "used", "using", "one", "two", "four", "more", "most", "each", "same", "like", "via",
+    "off", "out", "read", "reads", "turn", "turns", "talk", "talks", "connect", "connects", "send",
+    "sending", "wired", "several", "small", "share", "attached", "often", "hold", "holds", "general",
+    "purpose", "device", "computer", "custom", "other", "high", "speed", "precise", "periodic",
+    "events", "event", "messages", "message", "files", "file", "data", "block", "blocks", "drive",
+    "drives", "screen", "monitor", "things", "simplest", "wire", "wires", "line", "lines", "run",
+    "reading", "writing", "first", "how", "what", "where", "debug", "between",
+))
+
+# Capitalised pronoun forms that are never an external subject.
+_SUBJECT_STOP = {"i", "im", "ive", "id", "ill"}
+
+
+@dataclass
+class PurposeDecision:
+    purpose: str                 # ANSWER_NOW | ASK_CLARIFICATION | REDIRECT_TO_FOUNDATION | DECLINE_OUT_OF_SCOPE
+    reason: str = ""             # short rationale, for logs/tests
+    subject: str = ""            # the out-of-scope subject (DECLINE_OUT_OF_SCOPE only)
+
+
+def _seeks_foundation(text: str) -> bool:
+    """The learner wants to enter the field / become an engineer — a career/foundation framing, not a
+    specific grounded concept. Reuses the existing career detector plus the field-entry phrases."""
+    low = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
+    return _is_career(text) or any(p in low for p in _FOUNDATION_PHRASES)
+
+
+def _grounding_vocab(conn: sqlite3.Connection) -> set[str]:
+    """EAEDK's curated content vocabulary: capability names, the salient words of their plain-language
+    summaries, and concept names. Used to tell an embedded question ('drive the LED', 'boot pins')
+    from an off-topic one — derived from seeded data, not a hand-written keyword list."""
+    vocab: set[str] = set()
+    for r in repo.list_capabilities(conn):
+        vocab.add(r["name"].lower())
+        for w in re.findall(r"[a-z0-9]+", (r["summary"] or "").lower()):
+            if len(w) >= 3 and w not in _VOCAB_STOP:
+                vocab.add(w)
+    for r in repo.list_concepts(conn):
+        vocab.add(re.sub(r"[^a-z0-9]+", "", r["name"].lower()))
+    return vocab
+
+
+def _mentions_vocab(conn: sqlite3.Connection, text: str) -> bool:
+    """The question contains a word from EAEDK's curated content vocabulary."""
+    vocab = _grounding_vocab(conn)
+    return any(w in vocab for w in re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def _has_evidence(low: str, code: str) -> bool:
+    """A fault report is answerable only WITH concrete diagnostic evidence — shared code, a fault
+    ADDRESS or register value, a log/stack trace, or a line number. Naming the exception TYPE
+    ('it crashed with a HardFault') is the symptom, not evidence; that still needs clarification."""
+    if len(code or "") > 50:
+        return True
+    markers = ("traceback", "stack trace", "backtrace", "undefined reference", "panic:",
+               "assert", "0x", "log:", "at line", "line ")
+    if any(m in low for m in markers):
+        return True
+    return bool(re.search(r"\b0x[0-9a-f]+\b|\b\d{3,}\b", low))   # a fault address or concrete value
+
+
+def _external_subject(text: str) -> str:
+    """A mid-sentence, capitalised proper-noun phrase the question is really about (e.g. 'Nvidia
+    Jetson'). Empty when it names no such entity. A named-entity signal, NOT a blocklist: sentence-
+    initial capitals and the pronoun 'I' are ignored. Only consulted once a question has already
+    failed to resolve to any grounded EAEDK knowledge."""
+    phrases: list[str] = []
+    cur: list[str] = []
+    at_start = True
+    for tok in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+#'-]*|[.?!]", text or ""):
+        if tok in ".?!":
+            if cur:
+                phrases.append(" ".join(cur)); cur = []
+            at_start = True
+            continue
+        proper = tok[:1].isupper() and not at_start and tok.lower().rstrip(".") not in _SUBJECT_STOP
+        if proper:
+            cur.append(tok)
+        elif cur:
+            phrases.append(" ".join(cur)); cur = []
+        at_start = False
+    if cur:
+        phrases.append(" ".join(cur))
+    return phrases[0] if phrases else ""
+
+
+def decide_purpose(conn: sqlite3.Connection, board_name: str, user_text: str,
+                   page_context: dict, messages: list[dict] | None = None) -> PurposeDecision:
+    """First-step gate: choose the turn's PURPOSE before any answer is generated (docs/29)."""
+    msg = user_text or ""
+    low = " " + msg.lower() + " "
+    code = page_context.get("current_code") or ""
+    page = page_context.get("page_type") or ""
+
+    # Validate/Export context: the Validation Engine has a deterministic verdict to point at (SPONSOR).
+    if page in ("validate", "export"):
+        return PurposeDecision("ANSWER_NOW", "validation context")
+
+    # Does the question resolve to EAEDK's CURATED knowledge? The selected board is context, never
+    # grounding by itself — only another board the user actually NAMES counts.
+    anchored = (reasoning.detect_topic(msg) is not None      # a known engineering decision
+                or _detect_concept(conn, msg) is not None    # a known concept
+                or _detect_domain(msg) is not None)          # a known project domain
+    direction = any(p in low for p in _DIRECTION_PHRASES)    # "where do I start" on this board
+    progress = any(k in low for k in _PROGRESS_Q)
+    grounded = (anchored or direction or progress
+                or bool(semantic_cost.parse_intent(msg))     # a named, costed intent (gRPC, TLS, …)
+                or bool(semantic_cost.detect_uncosted(msg))  # a recognised intent without cost data (CoAP)
+                or len(code) > 50                            # a code-review / studio turn
+                or _mentions_vocab(conn, msg)                # curated peripheral/concept vocabulary
+                or len(_mentioned_boards(conn, messages or [], board_name)) > 1)
+
+    # (1) A fault report with no evidence yet — get the logs/error/code before answering.
+    if any(t in low for t in _PEER_TRIGGERS) and not _has_evidence(low, code):
+        return PurposeDecision("ASK_CLARIFICATION", "fault report without evidence")
+
+    # (2) A field-entry / career question (not anchored to a specific concept) — give a learning
+    #     path, not a board-bound technical answer.
+    if _seeks_foundation(msg) and not anchored:
+        return PurposeDecision("REDIRECT_TO_FOUNDATION", "learner seeking a starting point")
+
+    # (3) Nothing resolves to grounded knowledge.
+    if not grounded:
+        subject = _external_subject(msg)
+        if subject:
+            return PurposeDecision("DECLINE_OUT_OF_SCOPE",
+                                   "named subject outside grounded knowledge", subject)
+        return PurposeDecision("ASK_CLARIFICATION", "intent not resolvable")
+
+    # (4) Grounded AND intent understood — only now may the mentor answer.
+    return PurposeDecision("ANSWER_NOW", "grounded; intent clear")
+
+
+def render_purpose(conn: sqlite3.Connection, decision: PurposeDecision,
+                   board_name: str, path: list, active_boards: list[str] | None = None) -> str:
+    """Render a non-answer outcome. None of these bind the answer to the selected board as the subject
+    — that is the whole point of the gate."""
+    if decision.purpose == "REDIRECT_TO_FOUNDATION":
+        return _career_roadmap(board_name, path, active_boards)
+    if decision.purpose == "DECLINE_OUT_OF_SCOPE":
+        subj = decision.subject or "that"
+        return (
+            f"I'd be guessing about {subj}, and I won't pretend otherwise — it's outside the hardware "
+            "EAEDK actually has verified facts for. I'm grounded in a specific set of microcontroller "
+            "and single-board-computer targets and the embedded concepts that transfer across them; "
+            f"{subj} isn't one of them.\n\n"
+            f"If {subj} is genuinely what you need, EAEDK isn't the right tool for it yet — I'd rather "
+            "tell you that than invent an answer. If you're here to learn embedded firmware, tell me "
+            "your goal and I'll ground it in hardware I can reason about honestly.\n\n"
+            "Question: what are you trying to build or learn?")
+    # ASK_CLARIFICATION — two flavours, both ask rather than guess.
+    if decision.reason.startswith("fault report"):
+        return (
+            "Naming the fault is the symptom, not the evidence — I'd just be guessing without more. "
+            "Give me something concrete and I can reason about it: the faulting ADDRESS (the PC/LR the "
+            "CPU stacked), the fault status registers your handler can read (CFSR/HFSR on Cortex-M), "
+            "the last line it logged before it died, or the code in the function it crashed in.\n\n"
+            "Question: what was it doing when it faulted, and what address did it fault at?")
+    return (
+        "I don't have enough to answer that well yet, and I'd rather ask than guess. Tell me what "
+        "you're trying to do, and on which board, and I'll point you at the first real step.\n\n"
+        "Question: what's your goal here?")
 
 
 # --- Domain-aware "Try this" (chosen in Python, not left to the model) ---------------------------
@@ -721,6 +921,17 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                                           "current_code": current_code})
     career = _is_career(last_user)                     # P3: career -> roadmap, suppress 'Try this'
     active_boards = _mentioned_boards(conn, messages, board_name)  # P4A: every board in the convo
+
+    # First-step Purpose gate (docs/29): decide WHAT this turn is for BEFORE generating any answer.
+    # Anything but ANSWER_NOW returns a non-answer outcome — the proof the mentor is not an answer
+    # engine, and that the user's question (not the selected board) is the subject. ANSWER_NOW falls
+    # through to the existing pipeline below.
+    purpose = decide_purpose(conn, board_name, last_user,
+                             {"page_type": page_type, "current_code": current_code or extra_context},
+                             messages)
+    if purpose.purpose != "ANSWER_NOW":
+        return render_purpose(conn, purpose, board_name, path, active_boards)
+
     used = _used_try_this(messages)                    # P3: never repeat an experiment this session
     try_this = _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
     if try_this and not has_hardware and "wokwi" not in try_this.lower():
