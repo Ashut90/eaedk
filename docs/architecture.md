@@ -75,6 +75,46 @@ flowchart TB
   log analyze → risk resolve`. Each step writes through `repo.record_fact()` and the migration
   path — no raw SQL, every fact provenanced.
 
+## What the Post-Filter Does and Does Not Do
+
+The Post-Filter is a structural guardrail, not an oracle. Its honesty depends on being clear
+about its exact boundary — it is the *last* line of defence, never the source of truth.
+
+**What it DOES:**
+
+- Builds an allowlist of *cited* integer values from SQLite — board geometry fields,
+  human-verified `engineering_facts`, and engineer-provided project inputs (including the
+  integers nested inside region and partition structures).
+- Scans the model's prose sentence-by-sentence for hardware-number patterns: hex addresses
+  (`0x…`), memory sizes (`KB/KiB/MB/MiB/GB/GiB/B`), clock frequencies (`kHz/MHz/GHz`), and
+  timing values (`ns/µs/ms`).
+- Strips the **whole sentence** — replacing it with `[uncited claim removed — verify against
+  TRM]` — when it asserts any such number that is not in the allowlist.
+- Matches sizes against both binary and decimal multipliers, so a cited byte count still
+  matches a `64 KB` mention regardless of the unit convention the model used.
+- Removes **every** clock and timing assertion by design: frequencies and timings are never
+  stored in the MVP database, so the LLM can never introduce a clock or timing number.
+
+**What it DOES NOT do:**
+
+- It does **not** judge logic or correctness. A sentence containing no hardware number passes
+  through untouched, however wrong its engineering advice — reasoning quality is the
+  mentor/reasoning layer's responsibility, not the filter's.
+- It does **not** catch a wrong-but-cited number. The filter checks *provenance, not truth*: if
+  a value is in the allowlist (e.g. the engineer entered a bad input, or a number coincidentally
+  matches a cited one), the sentence survives.
+- It does **not** understand units or meaning. It matches the numeric value, not the context —
+  a correctly cited address used in the wrong claim is not detected.
+- It does **not** rewrite, correct, or annotate claims. It deletes whole sentences; it never
+  patches a number to the "right" one.
+- It does **not** replace the Validation and Risk engines. Feasibility and risk are decided
+  *before* the model runs, inside the truth boundary; the filter only constrains what the model
+  is allowed to say on the way out.
+
+In short: the Post-Filter guarantees that **no uncited hardware number leaves the system**. It
+guarantees nothing about whether the surrounding reasoning is correct — that is what the
+deterministic engines, not the filter, are for.
+
 ## The closing loop (project-aware log triage)
 
 When `log analyze --project-aware` finds no deterministic signature match, it correlates the
