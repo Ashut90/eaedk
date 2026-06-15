@@ -17,6 +17,7 @@ board:
   ddr_type: null
   ddr_bytes: null
   primary_storage: nor
+  flash_endurance_cycles: null   # UNKNOWN — external/removable storage; endurance is the medium's, not confirmed per-board
   boot_modes: [spi_flash, uart_download]
   confidence: MEDIUM
 source:

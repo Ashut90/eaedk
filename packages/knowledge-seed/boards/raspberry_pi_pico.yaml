@@ -10,6 +10,7 @@ board:
   ram_base: 0x20000000
   ram_bytes: 270336           # 264 KiB on-chip SRAM
   primary_storage: nor
+  flash_endurance_cycles: null   # UNKNOWN — external/removable storage; endurance is the medium's, not confirmed per-board
   boot_modes: [bootrom_usb, bootrom_flash]
   confidence: HIGH
 source:

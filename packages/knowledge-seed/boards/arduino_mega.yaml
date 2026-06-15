@@ -10,6 +10,7 @@ board:
   ram_base: 0x00000200        # SRAM begins after the register/IO space
   ram_bytes: 8192             # 8 KiB SRAM
   primary_storage: internal_flash
+  flash_endurance_cycles: 10000   # ATmega2560 flash: 10,000 write/erase cycles (Atmel datasheet)
   boot_modes: [flash, bootloader]
   confidence: HIGH
 source:

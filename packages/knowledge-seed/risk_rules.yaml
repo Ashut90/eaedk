@@ -26,3 +26,24 @@
   severity: HIGH
   explanation_tmpl: "DDR timing not verified from datasheet."
   mitigation_tmpl: "Confirm CL/tRCD/tRP from the TRM before first boot."
+
+# --- FLASH endurance (v2.7 P2.5) ----------------------------------------------------------
+# Gated on write_rate: these rules do not apply until the engineer states a write rate.
+# FLASH_ENDURANCE uses the multi-operand arithmetic grammar (write_rate * lifetime) and,
+# when the board's endurance rating is UNCONFIRMED, fires at MEDIUM instead of dropping.
+- key: FLASH_ENDURANCE
+  goal_type: null
+  requires: [write_rate]
+  condition_dsl: "write_rate * projected_device_lifetime_seconds > board.flash_endurance_cycles"
+  severity: HIGH
+  severity_on_unknown: MEDIUM
+  explanation_tmpl: "At {write_rate} write(s)/s over the device lifetime ({projected_device_lifetime_seconds} s) the firmware performs far more flash erase cycles than this board's rated endurance ({board.flash_endurance_cycles} cycles). Internal flash physically wears out and the device bricks in the field."
+  mitigation_tmpl: "Cut the write rate, batch writes with wear-levelling (a small flash FS), or move logging to external storage (SD/eMMC/FRAM/EEPROM). Confirm the erase-cycle rating in the datasheet."
+
+- key: FLASH_ENDURANCE_INTERNAL
+  goal_type: null
+  requires: [write_rate]
+  condition_dsl: "write_rate > 100 and storage_is_internal_flash == 1"
+  severity: HIGH
+  explanation_tmpl: "{write_rate} write(s)/s to INTERNAL MCU flash is a wear hazard regardless of the exact rating — internal flash is rated for only ~10K-100K erase cycles and is not meant for high-frequency logging. At this rate the rated cycles are consumed in a fraction of the device's intended life."
+  mitigation_tmpl: "Log to external storage (SD/eMMC/FRAM/EEPROM), batch and wear-level writes, or drop the write rate well below 100/s."

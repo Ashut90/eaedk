@@ -12,6 +12,7 @@ board:
   ddr_type: LPDDR4
   ddr_bytes: 4294967296
   primary_storage: sd
+  flash_endurance_cycles: null   # UNKNOWN — external/removable storage; endurance is the medium's, not confirmed per-board
   boot_modes: [sd, usb, network, eeprom]
   confidence: HIGH
 source:

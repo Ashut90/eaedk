@@ -12,6 +12,7 @@ board:
   ddr_type: DDR3
   ddr_bytes: 536870912
   primary_storage: sd
+  flash_endurance_cycles: null   # UNKNOWN — external/removable storage; endurance is the medium's, not confirmed per-board
   boot_modes: [sd, emmc, nor, uart, usb_dfu]
   confidence: HIGH
 source:

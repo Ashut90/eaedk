@@ -3,9 +3,13 @@
 Grammar (MVP, no parentheses):
     condition  := comparison (("and"|"or") comparison)*
     comparison := term op term
-    term       := operand (("*"|"/"|"+"|"-") operand)?      # one arithmetic term (Q4)
+    term       := operand (("*"|"/"|"+"|"-") operand)*      # left-assoc arithmetic chain
     operand    := number | dotted.ident
     op         := ">" | ">=" | "<" | "<=" | "==" | "!="
+
+A ``term`` is a left-associative chain of any length (no operator precedence): the
+FLASH_ENDURANCE rule needs ``write_rate * projected_device_lifetime_seconds`` and the
+grammar must compose multiple operands, not just two.
 
 The evaluator never uses Python ``eval``. An unknown/non-numeric ident raises
 ``UnknownIdent``; the rule then yields a finding with severity ``UNKNOWN`` (surfaced as
@@ -48,6 +52,15 @@ class RiskRule:
     severity: str
     explanation_tmpl: str
     mitigation_tmpl: str | None = None
+    # Inputs that MUST be present (and non-None) for the rule to be applicable. If any is
+    # missing the rule is skipped entirely — it does not apply to this project, so it must
+    # not emit a noisy UNKNOWN. Gating inputs (e.g. write_rate) live here.
+    requires: tuple[str, ...] = ()
+    # Severity to report when the condition references an ident that cannot be resolved
+    # (e.g. an unconfirmed board fact) *after* the requires-gate has passed. "UNKNOWN"
+    # keeps the legacy "missing info" behaviour; any real severity turns the unresolved
+    # case into a fired, lower-confidence warning instead of silently dropping it.
+    severity_on_unknown: str = "UNKNOWN"
 
 
 @dataclass
@@ -132,14 +145,13 @@ class _Parser:
         }[op]
 
     def term(self) -> float:
-        a = self.operand()
-        nxt = self.peek()
-        if nxt in {"*", "/", "+", "-"}:
-            self.next()
-            b = self.operand()
-            return {"*": a * b, "/": a / b if b else float("inf"),
-                    "+": a + b, "-": a - b}[nxt]
-        return a
+        val = self.operand()
+        while self.peek() in {"*", "/", "+", "-"}:
+            op = self.next()
+            rhs = self.operand()
+            val = {"*": val * rhs, "/": val / rhs if rhs else float("inf"),
+                   "+": val + rhs, "-": val - rhs}[op]
+        return val
 
     def operand(self) -> float:
         tok = self.next()
@@ -159,7 +171,10 @@ _FIELD_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_.]*)\}")
 
 
 def _render(tmpl: str, ctx: dict[str, Any]) -> str:
-    return _FIELD_RE.sub(lambda m: str(ctx.get(m.group(1), "?")), tmpl)
+    def sub(m: "re.Match[str]") -> str:
+        v = ctx.get(m.group(1))
+        return "?" if v is None else str(v)
+    return _FIELD_RE.sub(sub, tmpl)
 
 
 def evaluate_risks(ctx: dict[str, Any], rules: list[RiskRule],
@@ -169,13 +184,29 @@ def evaluate_risks(ctx: dict[str, Any], rules: list[RiskRule],
     for r in rules:
         if r.goal_type not in (None, goal_type):
             continue
+        # requires-gate: a rule whose gating inputs are absent simply does not apply to this
+        # project. Skipping (rather than emitting UNKNOWN) keeps gated rules silent until the
+        # engineer supplies the trigger input (e.g. write_rate for endurance).
+        if any(req not in ctx or ctx.get(req) is None for req in r.requires):
+            continue
         try:
             fired = eval_condition(r.condition_dsl, ctx)
         except UnknownIdent as e:
-            findings.append(RiskFinding(
-                r.key, "UNKNOWN",
-                f"cannot evaluate risk '{r.key}': missing input {e}",
-                r.mitigation_tmpl, fired=False))
+            if r.severity_on_unknown == "UNKNOWN":
+                findings.append(RiskFinding(
+                    r.key, "UNKNOWN",
+                    f"cannot evaluate risk '{r.key}': missing input {e}",
+                    r.mitigation_tmpl, fired=False))
+            else:
+                # The gating inputs are present but a board fact (e.g. the flash endurance
+                # rating) is unconfirmed. That is itself a real, lower-confidence warning —
+                # surface it instead of dropping it. No silent failure.
+                findings.append(RiskFinding(
+                    r.key, r.severity_on_unknown,
+                    f"{_render(r.explanation_tmpl, ctx)} (Worst case assumed: {e} is "
+                    f"UNCONFIRMED for this board — verify it in the datasheet.)",
+                    _render(r.mitigation_tmpl, ctx) if r.mitigation_tmpl else None,
+                    fired=True))
             continue
         if fired:
             findings.append(RiskFinding(

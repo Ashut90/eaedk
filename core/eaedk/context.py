@@ -76,6 +76,19 @@ def build_context(
         ctx[k] = v
         provided.add(k)
 
+    # --- Derived facts for the FLASH endurance rules (v2.7 P2.5) ------------------------
+    # Whether the firmware writes to *internal* MCU flash (rated for ~10K-100K erase cycles)
+    # vs an external/removable medium. Engineer override (storage_target) wins; else the
+    # board's primary storage decides.
+    storage = inputs.get("storage_target")
+    if storage is None and board:
+        storage = board.get("primary_storage")
+    ctx["storage_is_internal_flash"] = 1 if storage == "internal_flash" else 0
+    # A default field lifetime so a write-rate alone is enough to compute lifetime writes.
+    # Five years; the engineer can override with an explicit input.
+    if ctx.get("projected_device_lifetime_seconds") is None:
+        ctx["projected_device_lifetime_seconds"] = 157_680_000  # 5 years in seconds
+
     ctx["_provided"] = provided
     ctx["_goal"] = goal_type
     return ctx

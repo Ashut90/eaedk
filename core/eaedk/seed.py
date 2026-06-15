@@ -93,13 +93,14 @@ def _load_boards(conn: sqlite3.Connection) -> int:
 
         board_id = conn.execute(
             "INSERT INTO boards(soc_id,name,flash_base,flash_bytes,ram_base,ram_bytes,"
-            "ddr_type,ddr_bytes,primary_storage,boot_modes_json,source_id,confidence) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "ddr_type,ddr_bytes,primary_storage,boot_modes_json,source_id,confidence,"
+            "flash_endurance_cycles) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (soc_id, board["name"], board.get("flash_base"), board.get("flash_bytes"),
              board.get("ram_base"), board.get("ram_bytes"), board.get("ddr_type"),
              board.get("ddr_bytes"), board.get("primary_storage"),
              json.dumps(board.get("boot_modes", [])), source_id,
-             board.get("confidence", "HIGH")),
+             board.get("confidence", "HIGH"), board.get("flash_endurance_cycles")),
         ).lastrowid
 
         for cap in data.get("capabilities", []):
@@ -123,9 +124,10 @@ def _load_risk_rules(conn: sqlite3.Connection) -> int:
     for r in rules:
         conn.execute(
             "INSERT INTO risk_rules(key,goal_type,condition_dsl,severity,explanation_tmpl,"
-            "mitigation_tmpl) VALUES (?,?,?,?,?,?)",
+            "mitigation_tmpl,requires_json,severity_on_unknown) VALUES (?,?,?,?,?,?,?,?)",
             (r["key"], r.get("goal_type"), r["condition_dsl"], r["severity"],
-             r["explanation_tmpl"], r.get("mitigation_tmpl")),
+             r["explanation_tmpl"], r.get("mitigation_tmpl"),
+             json.dumps(r.get("requires", [])), r.get("severity_on_unknown", "UNKNOWN")),
         )
     return len(rules)
 

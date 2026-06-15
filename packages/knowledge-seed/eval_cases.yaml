@@ -213,3 +213,24 @@
     validations:
       SECURE_BOOT_KEY_STORAGE: UNKNOWN
     unknowns_contains: ["key storage"]
+
+# --- v2.7 P2.5: high write rate to internal flash is a wear/endurance risk ---------------
+- name: flash_endurance_internal_high_write_rate
+  goal_type: bare_metal_app
+  inputs:
+    board: "STM32F103-BluePill"
+    write_rate: 1000                     # 1000 flash writes/s to internal flash
+    storage_target: internal_flash
+  expected:
+    # Both the per-board cycle-math rule (10K rating exceeded) and the internal-flash
+    # heuristic fire HIGH; FLASH_ENDURANCE_INTERNAL is the deterministic HIGH regardless
+    # of the exact endurance number.
+    risks_contains: [FLASH_ENDURANCE, FLASH_ENDURANCE_INTERNAL]
+
+# Gate check: with no write_rate, the endurance rules must be silent (no false positive).
+- name: flash_endurance_silent_without_write_rate
+  goal_type: bare_metal_app
+  inputs:
+    board: "STM32F103-BluePill"
+  expected:
+    risks_absent: [FLASH_ENDURANCE, FLASH_ENDURANCE_INTERNAL]

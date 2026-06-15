@@ -115,7 +115,7 @@ def load_board(conn: sqlite3.Connection, name: str
         "name": row["name"], "flash_base": row["flash_base"], "flash_bytes": row["flash_bytes"],
         "ram_base": row["ram_base"], "ram_bytes": row["ram_bytes"], "ddr_type": row["ddr_type"],
         "ddr_bytes": row["ddr_bytes"], "primary_storage": row["primary_storage"],
-        "confidence": row["confidence"],
+        "confidence": row["confidence"], "flash_endurance_cycles": row["flash_endurance_cycles"],
     }
     soc = {"name": row["soc_name"], "arch": row["soc_arch"], "vendor": row["soc_vendor"]}
     return board, soc
@@ -404,10 +404,13 @@ def load_board_toolchain_reqs(conn: sqlite3.Connection, board_name: str) -> list
 
 def load_risk_rules(conn: sqlite3.Connection) -> list[RiskRule]:
     rows = conn.execute(
-        "SELECT key,goal_type,condition_dsl,severity,explanation_tmpl,mitigation_tmpl "
-        "FROM risk_rules").fetchall()
+        "SELECT key,goal_type,condition_dsl,severity,explanation_tmpl,mitigation_tmpl,"
+        "requires_json,severity_on_unknown FROM risk_rules").fetchall()
     return [RiskRule(r["key"], r["goal_type"], r["condition_dsl"], r["severity"],
-                     r["explanation_tmpl"], r["mitigation_tmpl"]) for r in rows]
+                     r["explanation_tmpl"], r["mitigation_tmpl"],
+                     requires=tuple(json.loads(r["requires_json"] or "[]")),
+                     severity_on_unknown=r["severity_on_unknown"] or "UNKNOWN")
+            for r in rows]
 
 
 # --- templates -------------------------------------------------------------
