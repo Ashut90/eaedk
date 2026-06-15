@@ -11,6 +11,9 @@ board:
   ram_bytes: 1048576          # ~1 MiB on-chip SRAM (AXI + D2 + D3 + TCM)
   primary_storage: internal_flash
   flash_endurance_cycles: 10000   # STM32H743 flash: 10,000 erase cycles (datasheet guaranteed min)
+  active_current_ma: 250
+  sleep_current_ua: null
+  min_voltage_v: 1.62
   boot_modes: [flash, system_memory, sram]
   confidence: HIGH
 source:

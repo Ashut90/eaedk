@@ -116,6 +116,8 @@ def load_board(conn: sqlite3.Connection, name: str
         "ram_base": row["ram_base"], "ram_bytes": row["ram_bytes"], "ddr_type": row["ddr_type"],
         "ddr_bytes": row["ddr_bytes"], "primary_storage": row["primary_storage"],
         "confidence": row["confidence"], "flash_endurance_cycles": row["flash_endurance_cycles"],
+        "active_current_ma": row["active_current_ma"], "sleep_current_ua": row["sleep_current_ua"],
+        "min_voltage_v": row["min_voltage_v"],
     }
     soc = {"name": row["soc_name"], "arch": row["soc_arch"], "vendor": row["soc_vendor"]}
     return board, soc

@@ -4,7 +4,8 @@ Grammar (MVP, no parentheses):
     condition  := comparison (("and"|"or") comparison)*
     comparison := term op term
     term       := operand (("*"|"/"|"+"|"-") operand)*      # left-assoc arithmetic chain
-    operand    := number | dotted.ident
+    operand    := number | dotted.ident | func "(" dotted.ident ")"
+    func       := "unset" | "set"                           # presence predicates (v3.0 P3)
     op         := ">" | ">=" | "<" | "<=" | "==" | "!="
 
 A ``term`` is a left-associative chain of any length (no operator precedence): the
@@ -28,9 +29,18 @@ _TOKEN_RE = re.compile(r"""
         (?P<num>0[xX][0-9a-fA-F]+|\d+\.\d+|\d+) |
         (?P<op>>=|<=|==|!=|>|<) |
         (?P<arith>[*/+\-]) |
+        (?P<paren>[()]) |
         (?P<ident>[A-Za-z_][A-Za-z0-9_.]*)
     )
 """, re.VERBOSE)
+
+# Unary predicates over an input's PRESENCE, not its value (v3.0 P3): unset(x) is 1.0 when x is
+# absent or None, else 0.0 — so a rule can fire on "the engineer did not provide x" (e.g. an ISR
+# budget) without the missing ident raising UnknownIdent.
+_FUNCS = {
+    "unset": lambda name, ctx: 1.0 if (name not in ctx or ctx.get(name) is None) else 0.0,
+    "set":   lambda name, ctx: 0.0 if (name not in ctx or ctx.get(name) is None) else 1.0,
+}
 
 _KEYWORDS = {"and", "or"}
 _COMPARATORS = {">", ">=", "<", "<=", "==", "!="}
@@ -155,7 +165,16 @@ class _Parser:
 
     def operand(self) -> float:
         tok = self.next()
-        if tok in _COMPARATORS or tok in {"*", "/", "+", "-"} or tok in _KEYWORDS:
+        if tok in _FUNCS and self.peek() == "(":         # func(ident) — presence predicate
+            self.next()                                  # consume "("
+            name = self.next()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name):
+                raise DSLSyntaxError(f"expected an input name inside {tok}(), got {name!r}")
+            if self.peek() != ")":
+                raise DSLSyntaxError(f"missing ')' after {tok}({name}")
+            self.next()                                  # consume ")"
+            return _FUNCS[tok](name, self.ctx)
+        if tok in _COMPARATORS or tok in {"*", "/", "+", "-", "(", ")"} or tok in _KEYWORDS:
             raise DSLSyntaxError(f"expected operand, got {tok!r}")
         if re.fullmatch(r"0[xX][0-9a-fA-F]+|\d+\.\d+|\d+", tok):
             return _num(tok)

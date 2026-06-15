@@ -13,6 +13,9 @@ board:
   ddr_bytes: null
   primary_storage: nor
   flash_endurance_cycles: null   # UNKNOWN — external/removable storage; endurance is the medium's, not confirmed per-board
+  active_current_ma: 30
+  sleep_current_ua: null
+  min_voltage_v: 1.8
   boot_modes: [bootrom_usb, bootrom_flash]
   confidence: HIGH
 source:

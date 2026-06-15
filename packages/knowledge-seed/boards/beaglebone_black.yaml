@@ -13,6 +13,9 @@ board:
   ddr_bytes: 536870912
   primary_storage: emmc       # 4 GB on-board eMMC
   flash_endurance_cycles: null   # UNKNOWN — external/removable storage; endurance is the medium's, not confirmed per-board
+  active_current_ma: null   # UNCONFIRMED (no datasheet value on file)
+  sleep_current_ua: null
+  min_voltage_v: null
   boot_modes: [emmc, sd, uart, usb]
   confidence: HIGH
 source:

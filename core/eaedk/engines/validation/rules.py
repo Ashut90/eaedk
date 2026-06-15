@@ -66,6 +66,16 @@ def _ints(ctx: dict[str, Any], *keys: str) -> tuple[list[int | None], list[str]]
     return vals, missing
 
 
+def _as_float(value: Any) -> float | None:
+    """Coerce a number / numeric string to float (voltages are fractional). None if not coercible."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _region(ctx: dict[str, Any], key: str) -> tuple[int, int] | None:
     r = ctx.get(key)
     if not isinstance(r, dict):
@@ -517,6 +527,29 @@ def secure_boot_debug_locked(ctx):
                             "HIGH", used)
 
 
+@rule("POWER_SUPPLY_VOLTAGE", None, ("supply_voltage_v",), "HIGH")
+def power_supply_voltage(ctx):
+    """v3.0 P3: a supply below the board's minimum operating voltage is a hard feasibility FAIL —
+    the chip will not run reliably, so this gates feasibility (it is not a soft warning)."""
+    sup = _as_float(ctx.get("supply_voltage_v"))
+    vmin = _as_float(ctx.get("board.min_voltage_v"))
+    used = {"supply_voltage_v": ctx.get("supply_voltage_v"),
+            "board.min_voltage_v": ctx.get("board.min_voltage_v")}
+    if sup is None:
+        return ValidationResult("POWER_SUPPLY_VOLTAGE", UNKNOWN, "supply_voltage_v not set",
+                                "HIGH", used)
+    if vmin is None:
+        return ValidationResult("POWER_SUPPLY_VOLTAGE", UNKNOWN,
+                                "board minimum operating voltage is UNCONFIRMED for this board",
+                                "HIGH", used)
+    if sup < vmin:
+        return ValidationResult("POWER_SUPPLY_VOLTAGE", FAIL,
+                                f"supply {sup}V is below the board's minimum operating voltage "
+                                f"{vmin}V — the chip will not run reliably", "HIGH", used)
+    return ValidationResult("POWER_SUPPLY_VOLTAGE", PASS,
+                            f"supply {sup}V >= minimum {vmin}V", "HIGH", used)
+
+
 # Per-rule teach (mentor layer): what the field is, units, where to find it, the consequence.
 # Attached to any non-PASS result so a beginner is never left with a bare key name.
 RULE_TEACH: dict[str, str] = {
@@ -524,6 +557,10 @@ RULE_TEACH: dict[str, str] = {
         "Checks the firmware fits in flash. Needs estimated_image_size (your compiled .bin "
         "size in bytes) and the board's flash size (datasheet memory map, e.g. STM32F411RE = "
         "524288). Without it, image-fit checks and export cannot run.",
+    "POWER_SUPPLY_VOLTAGE":
+        "Checks your supply rail meets the chip's minimum operating voltage. Set supply_voltage_v "
+        "(volts) for your design; the board's min_voltage_v comes from the datasheet. Below the "
+        "minimum the chip browns out and runs unreliably or not at all.",
     "RAM_BUDGET":
         "Checks stack + heap + statics fit in RAM. Needs stack_size/heap_size/static_size "
         "(bytes) and the board's RAM size (datasheet, e.g. STM32F411RE = 131072). Without it, "

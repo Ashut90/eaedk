@@ -11,6 +11,9 @@ board:
   ram_bytes: 2048             # 2 KiB SRAM
   primary_storage: internal_flash
   flash_endurance_cycles: 10000   # ATmega328P flash: 10,000 write/erase cycles (Atmel datasheet)
+  active_current_ma: 12
+  sleep_current_ua: null
+  min_voltage_v: 1.8
   boot_modes: [flash, bootloader]
   confidence: HIGH
 source:

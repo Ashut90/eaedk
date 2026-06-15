@@ -11,6 +11,9 @@ board:
   ram_bytes: 20480            # 20 KiB SRAM
   primary_storage: internal_flash
   flash_endurance_cycles: 10000   # STM32F103 flash: 10,000 erase cycles (datasheet guaranteed min)
+  active_current_ma: 50
+  sleep_current_ua: 20
+  min_voltage_v: 2.0
   boot_modes: [flash, system_memory, sram]
   confidence: HIGH
 source:

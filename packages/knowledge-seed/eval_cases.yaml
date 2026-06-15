@@ -234,3 +234,39 @@
     board: "STM32F103-BluePill"
   expected:
     risks_absent: [FLASH_ENDURANCE, FLASH_ENDURANCE_INTERNAL]
+
+# --- v3.0 P3: behavioural hazards (timing / power / ISR-context stack) --------------------
+- name: timing_deadline_high_isr_rate
+  goal_type: bare_metal_app
+  inputs:
+    board: "STM32F103-BluePill"
+    isr_frequency_hz: 10000              # 10 kHz ISR, 20us budget -> deadline hazard
+    isr_budget_us: 20
+  expected:
+    risks_contains: [TIMING_DEADLINE]
+
+- name: power_budget_active_exceeds_target
+  goal_type: bare_metal_app
+  inputs:
+    board: "STM32F103-BluePill"          # active ~50mA
+    target_current_ma: 10                # budget 10mA -> exceeded
+  expected:
+    risks_contains: [POWER_BUDGET]
+
+- name: power_supply_below_min_voltage_fails
+  goal_type: bare_metal_app
+  inputs:
+    board: "ESP32-DevKitC"               # min operating ~3.0V
+    supply_voltage_v: 2.5                # below minimum -> hard FAIL
+  expected:
+    feasibility: not_feasible
+    validations:
+      POWER_SUPPLY_VOLTAGE: FAIL
+
+# Gate check: no ISR/power inputs -> the behavioural hazard rules stay silent.
+- name: behavioural_hazards_silent_without_inputs
+  goal_type: bare_metal_app
+  inputs:
+    board: "STM32F103-BluePill"
+  expected:
+    risks_absent: [TIMING_DEADLINE, TIMING_DEADLINE_RTOS, POWER_BUDGET, STACK_OVERFLOW_ISR]

@@ -47,3 +47,39 @@
   severity: HIGH
   explanation_tmpl: "{write_rate} write(s)/s to INTERNAL MCU flash is a wear hazard regardless of the exact rating — internal flash is rated for only ~10K-100K erase cycles and is not meant for high-frequency logging. At this rate the rated cycles are consumed in a fraction of the device's intended life."
   mitigation_tmpl: "Log to external storage (SD/eMMC/FRAM/EEPROM), batch and wear-level writes, or drop the write rate well below 100/s."
+
+# --- Behavioural hazards (v3.0 P3) --------------------------------------------------------
+# Timing, power, and ISR-context stack hazards — invisible to a pure capacity checker.
+- key: TIMING_DEADLINE
+  goal_type: null
+  requires: [isr_frequency_hz, isr_budget_us]
+  condition_dsl: "isr_frequency_hz > 1000 and isr_budget_us < 50"
+  severity: HIGH
+  explanation_tmpl: "At {isr_frequency_hz} interrupts/s with a {isr_budget_us}us budget, DMA contention, flash wait-states, or FPU context-save can push the ISR past its deadline and you start losing interrupts."
+  mitigation_tmpl: "Shorten the ISR (defer work to a task), raise the budget, lower the rate, or move the hot path to RAM. Measure worst-case ISR time on hardware."
+
+# Uses the v3.0 grammar extension unset(): fires only when the engineer gave a rate + RTOS but NO
+# budget — a prompt to supply isr_budget_us so timing margin can actually be validated.
+- key: TIMING_DEADLINE_RTOS
+  goal_type: null
+  requires: [isr_frequency_hz, has_rtos]
+  condition_dsl: "isr_frequency_hz > 0 and has_rtos == 1 and unset(isr_budget_us) == 1"
+  severity: MEDIUM
+  explanation_tmpl: "An RTOS tick adds scheduling jitter on top of your {isr_frequency_hz}/s interrupt, but no isr_budget_us was provided — timing margin cannot be validated."
+  mitigation_tmpl: "Provide isr_budget_us (your worst-case ISR execution time) so EAEDK can check it against the deadline."
+
+- key: POWER_BUDGET
+  goal_type: null
+  requires: [target_current_ma]
+  condition_dsl: "board.active_current_ma > target_current_ma"
+  severity: HIGH
+  explanation_tmpl: "This board's typical active current ({board.active_current_ma} mA) exceeds your {target_current_ma} mA power budget — at full activity it will not meet the budget."
+  mitigation_tmpl: "Duty-cycle the workload, use the chip's sleep/stop modes between bursts, or raise the budget. Confirm active current at your clock speed in the datasheet."
+
+- key: STACK_OVERFLOW_ISR
+  goal_type: null
+  requires: [isr_frequency_hz, stack_size]
+  condition_dsl: "isr_frequency_hz > 0 and stack_size < 512"
+  severity: HIGH
+  explanation_tmpl: "With interrupts active ({isr_frequency_hz}/s) and only {stack_size} B of stack, an ISR context-save on top of nested calls can overflow the stack and silently corrupt memory."
+  mitigation_tmpl: "Give the stack headroom for the worst-case ISR nesting (>=512 B as a floor), watch the stack high-water mark, and keep ISRs shallow."

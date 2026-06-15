@@ -108,4 +108,4 @@ def test_golden_eval_suite_all_pass(tmp_path):
     seed_all(conn, force=True)
     res = run_eval(conn)
     assert res["failed"] == 0, res["cases"]
-    assert res["total"] == 16         # 11 original + 3 secure-boot (v1.8.0) + 2 flash-endurance (v2.7 P2.5)
+    assert res["total"] == 20         # +3 secure-boot (v1.8.0) +2 flash-endurance (v2.7) +4 hazards (v3.0 P3)

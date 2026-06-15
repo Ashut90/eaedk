@@ -95,13 +95,15 @@ def _load_boards(conn: sqlite3.Connection) -> int:
         board_id = conn.execute(
             "INSERT INTO boards(soc_id,name,flash_base,flash_bytes,ram_base,ram_bytes,"
             "ddr_type,ddr_bytes,primary_storage,boot_modes_json,source_id,confidence,"
-            "flash_endurance_cycles) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "flash_endurance_cycles,active_current_ma,sleep_current_ua,min_voltage_v) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (soc_id, board["name"], board.get("flash_base"), board.get("flash_bytes"),
              board.get("ram_base"), board.get("ram_bytes"), board.get("ddr_type"),
              board.get("ddr_bytes"), board.get("primary_storage"),
              json.dumps(board.get("boot_modes", [])), source_id,
-             board.get("confidence", "HIGH"), board.get("flash_endurance_cycles")),
+             board.get("confidence", "HIGH"), board.get("flash_endurance_cycles"),
+             board.get("active_current_ma"), board.get("sleep_current_ua"),
+             board.get("min_voltage_v")),
         ).lastrowid
 
         for cap in data.get("capabilities", []):
