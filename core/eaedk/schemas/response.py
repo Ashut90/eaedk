@@ -20,6 +20,7 @@ class AssessResponse:
     facts: list[dict[str, Any]] = field(default_factory=list)
     assumptions: list[dict[str, Any]] = field(default_factory=list)
     unknowns: list[str] = field(default_factory=list)
+    input_warnings: list[str] = field(default_factory=list)   # unrecognized engineer inputs (v2.7 P4B)
     next_step: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -77,6 +78,10 @@ class AssessResponse:
         L.append("## Missing Information")
         L.extend([f"- {u}" for u in self.unknowns] or ["- (none)"])
         L.append("")
+        if self.input_warnings:                # P4B: inputs the engines do not recognise (ignored)
+            L.append("## Input Warnings")
+            L.extend(f"- {w}" for w in self.input_warnings)
+            L.append("")
         L.append("## Recommended Next Step")
         L.append(self.next_step or "Proceed.")
         return "\n".join(L)

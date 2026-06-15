@@ -189,3 +189,39 @@ def test_p4a_no_false_positive_board_mentions(tmp_path):
     active = _mentioned_boards(conn, [{"role": "user", "content": "I want to announce a megabyte buffer."}],
                                "STM32F103-BluePill")
     assert active == ["STM32F103-BluePill"]
+
+
+# --- P4B: validation key transparency -----------------------------------------------------
+
+def test_p4b_unrecognized_input_key_warns(tmp_path):
+    conn = _seeded(tmp_path)
+    resp = assess(conn, "bootloader",
+                  {"estimated_image_size": 32768, "vector_table_addr": 0x08000000,
+                   "flsah_size": 99999},                 # typo -> recognised by nothing
+                  board_name="Nucleo-F411RE")
+    assert any("flsah_size" in w for w in resp.input_warnings)
+    assert all("estimated_image_size" not in w for w in resp.input_warnings)  # real key: no warn
+
+
+def test_p4b_recognized_inputs_produce_no_warnings(tmp_path):
+    conn = _seeded(tmp_path)
+    resp = assess(conn, "bootloader",
+                  {"estimated_image_size": 32768, "vector_table_addr": 0x08000000,
+                   "stack_size": 8192, "heap_size": 16384, "static_size": 16384},
+                  board_name="Nucleo-F411RE")
+    assert resp.input_warnings == []                     # no false positives on real inputs
+
+
+def test_p4b_unknown_rule_names_missing_dependent_keys(tmp_path):
+    conn = _seeded(tmp_path)
+    resp = assess(conn, "uboot", {"kernel_load_addr": 0xC2000000}, board_name="STM32MP157")
+    needs = [u for u in resp.unknowns if "needs:" in u]
+    assert needs, resp.unknowns                          # UNKNOWN is never a dead end
+    assert any("dtb_load_addr" in u for u in needs)      # names a specific missing dependent key
+
+
+def test_p4b_warnings_render_in_markdown(tmp_path):
+    conn = _seeded(tmp_path)
+    resp = assess(conn, "bootloader", {"xyz_bogus": 1}, board_name="Nucleo-F411RE")
+    md = resp.to_markdown()
+    assert "## Input Warnings" in md and "xyz_bogus" in md

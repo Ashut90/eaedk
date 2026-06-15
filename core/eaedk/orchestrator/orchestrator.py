@@ -5,18 +5,55 @@ FAILs, and surfaces engaged UNKNOWNs as Missing Information (spec §4.1, §7 Q3)
 """
 from __future__ import annotations
 
+import inspect
+import re
 import sqlite3
 from typing import Any
 
-from ..context import build_context
+from ..context import build_context, GOAL_DEFAULTS
 from ..engines.risk.engine import evaluate_risks
 from ..engines.toolchain.engine import toolchain_checks
-from ..engines.validation.rules import run_validations, feasibility, UNKNOWN
+from ..engines.validation.rules import run_validations, feasibility, UNKNOWN, RULES
 from ..schemas.response import AssessResponse
 from .. import repo
 
 
-def _assemble(goal_type: str, ctx: dict[str, Any], results, risks,
+# --- Validation key transparency (v2.7 P4B) ------------------------------------------------------
+# Every engineer-facing input key the engines actually read. Auto-discovered so it never drifts:
+# each validation rule's declared user_inputs plus every snake_case string literal in its source
+# (rules read several keys via helpers like _ints(ctx, "ddr_base", ...), not just ctx.get).
+_LIT_RE = re.compile(r"""["']([a-z_][a-z0-9_]{2,})["']""")
+# Structural / derived keys that are legitimate inputs but not owned by a single rule.
+_STRUCTURAL_INPUTS = {"board", "storage_target", "projected_device_lifetime_seconds", "write_rate"}
+
+
+def _validation_input_keys() -> set[str]:
+    keys: set[str] = set()
+    for r in RULES.values():
+        keys |= set(r.user_inputs)
+        try:
+            keys |= set(_LIT_RE.findall(inspect.getsource(r.func)))
+        except (OSError, TypeError):
+            pass
+    return keys
+
+
+_VALIDATION_KEYS = _validation_input_keys()        # static: computed once from rule source
+
+
+def _recognized_input_keys(conn: sqlite3.Connection) -> set[str]:
+    """The full set of engineer inputs the engines recognise (validation rules + risk-rule idents +
+    goal defaults + structural keys). Anything an engineer supplies outside this set is ignored, and
+    P4B warns about it rather than silently dropping it."""
+    keys = set(_VALIDATION_KEYS) | set(_STRUCTURAL_INPUTS)
+    for rr in repo.load_risk_rules(conn):
+        keys |= set(re.findall(r"[A-Za-z_][A-Za-z0-9_.]*", rr.condition_dsl))
+    for d in GOAL_DEFAULTS.values():
+        keys |= set(d)
+    return {k for k in keys if not k.startswith(("board.", "soc.", "_")) and k not in ("and", "or")}
+
+
+def _assemble(conn: sqlite3.Connection, goal_type: str, ctx: dict[str, Any], results, risks,
               inputs: dict[str, Any], conf: dict[str, str],
               template: str | None, checklist_counts: dict[str, int]) -> AssessResponse:
     feas = feasibility(results)
@@ -43,8 +80,16 @@ def _assemble(goal_type: str, ctx: dict[str, Any], results, risks,
         entry = {"key": k, "value": v, "confidence": c}
         (facts if c == "HIGH" else assumptions).append(entry)
 
-    unknowns = [f"{r.check}: {r.reason}" for r in results
-                if r.status == UNKNOWN and r.engaged]
+    # P4B Case 2: an engaged UNKNOWN means the rule started but couldn't decide. Name the dependent
+    # input keys it still needs, so "UNKNOWN" is never a dead end.
+    provided = ctx.get("_provided", set())
+    unknowns = []
+    for r in results:
+        if r.status == UNKNOWN and r.engaged:
+            rule = RULES.get(r.check)
+            missing = [k for k in (rule.user_inputs if rule else ()) if k not in provided]
+            suffix = f" (needs: {', '.join(missing)})" if missing else ""
+            unknowns.append(f"{r.check}: {r.reason}{suffix}")
     unknowns += [f"risk {f.rule_key}: {f.explanation}" for f in risks
                  if f.severity == "UNKNOWN"]
 
@@ -68,10 +113,18 @@ def _assemble(goal_type: str, ctx: dict[str, Any], results, risks,
     else:
         next_step = "Validation clean — ready to export. Run `eaedk export`."
 
+    # P4B Case 1: an engineer input no rule reads is silently doing nothing. Warn, don't drop it.
+    recognized = _recognized_input_keys(conn)
+    input_warnings = [
+        f"Input '{k}' is not recognised by any validation or risk rule for goal '{goal_type}' and "
+        "was ignored — check the spelling, or whether it applies to this goal type."
+        for k in sorted(inputs) if k not in recognized]
+
     return AssessResponse(
         goal_type=goal_type, feasibility=feas, template=template,
         checklist_counts=checklist_counts, validations=validations, risks=risk_dicts,
-        facts=facts, assumptions=assumptions, unknowns=unknowns, next_step=next_step)
+        facts=facts, assumptions=assumptions, unknowns=unknowns,
+        input_warnings=input_warnings, next_step=next_step)
 
 
 def assess(conn: sqlite3.Connection, goal_type: str, inputs: dict[str, Any],
@@ -82,7 +135,7 @@ def assess(conn: sqlite3.Connection, goal_type: str, inputs: dict[str, Any],
     ctx = build_context(inputs, board, soc, goal_type)
     results = run_validations(ctx, goal_type, only=only)
     risks = evaluate_risks(ctx, repo.load_risk_rules(conn), goal_type)
-    return _assemble(goal_type, ctx, results, risks, inputs, conf or {}, None, {})
+    return _assemble(conn, goal_type, ctx, results, risks, inputs, conf or {}, None, {})
 
 
 def assess_project(conn: sqlite3.Connection, project: "sqlite3.Row",
@@ -118,4 +171,4 @@ def assess_project(conn: sqlite3.Connection, project: "sqlite3.Row",
                        [{"rule_key": f.rule_key, "severity": f.severity,
                          "explanation": f.explanation, "mitigation": f.mitigation}
                         for f in risks if f.fired])
-    return _assemble(goal_type, ctx, results, risks, inputs, conf, template, counts)
+    return _assemble(conn, goal_type, ctx, results, risks, inputs, conf, template, counts)
