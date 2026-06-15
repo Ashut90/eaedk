@@ -87,3 +87,31 @@ def test_2b_no_note_when_no_intent_mentioned(tmp_path):
     out = mentor_chat(conn, "STM32F103-BluePill",
                       [{"role": "user", "content": "how do I blink an LED?"}], use_llm=False)
     assert "Based on known cost data" not in out          # no false trigger on ordinary questions
+
+
+# --- v3.1 Gap 3: ML/AI intent is costed (TFLite baseline) ---------------------------------
+
+def test_gap3_ai_aliases_and_phrases_map_to_tflite():
+    for q in ("uses AI to recognize hand gestures", "I want a neural network", "tflite inference",
+              "machine learning on this", "edge ai gesture recognition", "object detection"):
+        assert "tflite_micro" in sc.parse_intent(q), q
+    assert sc.parse_intent("just blink an LED") == []     # no false positive
+
+
+def test_gap3_gesture_ai_is_infeasible_on_blue_pill(tmp_path):
+    conn = _seeded(tmp_path)
+    terms = sc.parse_intent("a robot that uses AI to recognize hand gestures")
+    res = sc.assess(conn, "STM32F103-BluePill", terms)
+    assert "tflite_micro" in [r["term"] for r in res["terms"]]
+    assert res["verdict"] == "FAIL"                       # 200-300KB flash vs 64KB
+    assert res["flash_min"] == 204800                     # TFLite-Micro min
+
+
+def test_gap3_chat_now_catches_ai_intent(tmp_path):
+    """The Prompt-1 miss: 'AI to recognize hand gestures' on a Blue Pill must now be flagged."""
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, "STM32F103-BluePill",
+                      [{"role": "user", "content": "I want a robot that uses AI to recognize hand "
+                        "gestures. Can I do that on my Blue Pill?"}], use_llm=False)
+    assert "Based on known cost data" in out
+    assert "will NOT fit" in out

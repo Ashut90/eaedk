@@ -24,11 +24,39 @@ _ALIASES = {
     "ssl": "tls_mbedtls", "https": "tls_mbedtls",
     "mqtt": "mqtt_paho", "paho": "mqtt_paho",
     "freertos": "freertos", "rtos": "freertos",
+    # Edge-AI / ML — all map to the TFLite-Micro cost baseline (v3.1 Gap 3).
     "tflite": "tflite_micro", "tflite_micro": "tflite_micro", "tensorflow": "tflite_micro",
-    "tinyml": "tflite_micro",
+    "tinyml": "tflite_micro", "ai": "tflite_micro", "ml": "tflite_micro", "cnn": "tflite_micro",
+    "dnn": "tflite_micro", "rnn": "tflite_micro", "edgeai": "tflite_micro", "edge-ai": "tflite_micro",
     "lwip": "lwip", "tcpip": "lwip", "tcp/ip": "lwip",
     "fatfs": "fatfs", "fat": "fatfs", "filesystem": "fatfs",
 }
+
+# Multi-word intents matched as phrases on the normalised text (single-token aliases can't catch
+# these). Edge-AI phrasing all maps to the TFLite-Micro cost baseline (v3.1 Gap 3).
+_PHRASES = {
+    "neural network": "tflite_micro", "machine learning": "tflite_micro",
+    "deep learning": "tflite_micro", "gesture recognition": "tflite_micro",
+    "recognize gesture": "tflite_micro", "recognize hand gesture": "tflite_micro",
+    "hand gesture": "tflite_micro", "image recognition": "tflite_micro",
+    "object detection": "tflite_micro", "image classification": "tflite_micro",
+    "computer vision": "tflite_micro", "edge ai": "tflite_micro", "edge inference": "tflite_micro",
+    "voice recognition": "tflite_micro", "keyword spotting": "tflite_micro",
+}
+
+
+def _norm(text: str) -> str:
+    return " " + " ".join(re.split(r"[^a-z0-9]+", (text or "").lower())) + " "
+
+
+def _phrase_terms(text: str) -> list[str]:
+    """Canonical terms named as multi-word phrases (v3.1 Gap 3)."""
+    norm = _norm(text)
+    out: list[str] = []
+    for phrase, term in _PHRASES.items():
+        if f" {phrase} " in norm and term not in out:
+            out.append(term)
+    return out
 
 
 def _fmt(n: int) -> str:
@@ -55,11 +83,14 @@ def canonical(token: str) -> str | None:
 
 
 def parse_intent(text: str) -> list[str]:
-    """Canonical *costed* terms named in free text, in first-seen order, deduped."""
+    """Canonical *costed* terms named in free text (single-token aliases + multi-word phrases)."""
     out: list[str] = []
     for tok in re.split(r"[^A-Za-z0-9_]+", (text or "").lower()):
         term = _ALIASES.get(tok)
         if term and term not in out:
+            out.append(term)
+    for term in _phrase_terms(text):                 # v3.1 Gap 3: "neural network", "hand gesture", …
+        if term not in out:
             out.append(term)
     return out
 
@@ -77,7 +108,7 @@ def detect_uncosted(text: str) -> list[str]:
 def classify_terms(text: str) -> tuple[list[str], list[str]]:
     """For an explicit `--intent` list: split into (known canonical terms, unknown requested tokens).
     Every deliberate token the user typed is accounted for — known ones costed, the rest flagged."""
-    known: list[str] = []
+    known: list[str] = list(_phrase_terms(text))     # v3.1 Gap 3: phrase intents first
     unknown: list[str] = []
     for tok in re.split(r"[^A-Za-z0-9_]+", (text or "").lower()):
         if not tok or tok in _STOPWORDS:
