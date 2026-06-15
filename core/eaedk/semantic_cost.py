@@ -272,3 +272,56 @@ def chat_note(conn: sqlite3.Connection, board_name: str, text: str) -> str:
         note += (" I don't have cost data for " + ", ".join(res["unknown_terms"])
                  + " — provide estimated_image_size and estimated_ram_usage for those.")
     return note
+
+
+def _fmt_opt(n: int | None) -> str:
+    return _fmt(n) if isinstance(n, int) else "UNKNOWN"
+
+
+def recommend_boards(conn: sqlite3.Connection, terms: list[str],
+                     unknown_terms: list[str] | None = None) -> dict[str, Any]:
+    """Rank EVERY seeded board by whether the named intent fits its VERIFIED flash/RAM + required
+    peripherals, using the same deterministic ``assess`` as validation. This is the grounded answer to
+    'which board suits best for X' — sourced from the board DB and the cost table, never the selected
+    board and never an LLM (which would invent board names)."""
+    unknown_terms = list(unknown_terms or [])
+    fits: list[dict[str, Any]] = []
+    maybe: list[dict[str, Any]] = []
+    no: list[dict[str, Any]] = []
+    for r in repo.list_boards(conn):
+        res = assess(conn, r["name"], terms, unknown_terms)
+        entry = {"board": r["name"], "verdict": res["verdict"],
+                 "flash": res["board_flash"], "ram": res["board_ram"]}
+        bucket = fits if res["verdict"] == "PASS" else (no if res["verdict"] == "FAIL" else maybe)
+        bucket.append(entry)
+    key = lambda e: (e["flash"] or 0, e["ram"] or 0)              # most headroom first
+    fits.sort(key=key, reverse=True)
+    maybe.sort(key=key, reverse=True)
+    no.sort(key=key, reverse=True)
+    return {"terms": list(terms), "unknown": unknown_terms, "fits": fits, "maybe": maybe, "no": no}
+
+
+def recommend_chat(conn: sqlite3.Connection, terms: list[str],
+                   unknown_terms: list[str] | None = None) -> str:
+    """Render the grounded board recommendation for the chat path."""
+    rec = recommend_boards(conn, terms, unknown_terms)
+    intent = ", ".join(rec["terms"] + rec["unknown"]) or "your goal"
+    L = [f"Which board suits {intent}? Here is how EAEDK's boards actually measure up — from their "
+         "verified flash/RAM and the seeded cost table, not a guess:", ""]
+    if rec["fits"]:
+        L.append("Fits comfortably:")
+        L += [f"  • {e['board']} — {_fmt_opt(e['flash'])} flash / {_fmt_opt(e['ram'])} RAM"
+              for e in rec["fits"][:6]]
+    if rec["maybe"]:
+        L.append("Maybe — depends on your exact model/config (measure, then confirm):")
+        L += [f"  • {e['board']} — {_fmt_opt(e['flash'])} flash / {_fmt_opt(e['ram'])} RAM"
+              for e in rec["maybe"][:5]]
+    if not rec["fits"] and not rec["maybe"]:
+        L.append("None of the seeded boards comfortably fit it — this likely needs an application-class "
+                 "(Linux-capable) SoC beyond the current set. Size your model first, then we can talk.")
+    if rec["no"]:
+        L.append("Too small for it: " + ", ".join(e["board"] for e in rec["no"][:8]) + ".")
+    L.append("")
+    L.append("Choose by the tightest constraint first — memory here — then the peripherals it needs, "
+             "power, and ecosystem. Tell me your model size or required peripherals and I'll narrow it.")
+    return "\n".join(L)

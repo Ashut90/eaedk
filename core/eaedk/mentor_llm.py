@@ -70,7 +70,10 @@ def mentor_ask(conn: sqlite3.Connection, board_name: str, question: str,
     path_lines = "\n".join(f"{s['step']}. {s['title']} — {s['why']}" for s in path)
     prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\nCapabilities:\n{cap_lines}\n"
               f"Learning path:\n{path_lines}\n\nQUESTION: {question}\n\nAnswer:")
-    raw = gw.provider.generate(_ASK_SYSTEM, prompt)
+    try:                                                 # a model timeout must degrade, not crash
+        raw = gw.provider.generate(_ASK_SYSTEM, prompt)
+    except Exception:
+        return body + "\n[mentor] LLM unreachable (timed out); showing the deterministic answer above."
     filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
     return f"{body}\n\n{filtered}\n[mentor] {removed} uncited hardware claim(s) removed."
 
@@ -290,6 +293,11 @@ _DIRECTION_PHRASES = (
     "start with", "begin with", "what should i learn first",
 )
 
+# Field-entry words — a direction question aimed at the DISCIPLINE (not a board or peripheral) is a
+# foundation question: "where to start in firmware / embedded / programming" → a learning path.
+_FIELD_ENTRY = (" firmware", " embedded", " programming", " programmin", " to program",
+                " coding", " to code", " software")
+
 # Generic English words filtered out of the curated grounding vocabulary so common filler in a
 # capability summary ("you turn on/off") never grounds an off-topic question.
 _VOCAB_STOP = frozenset((
@@ -316,9 +324,13 @@ class PurposeDecision:
 
 def _seeks_foundation(text: str) -> bool:
     """The learner wants to enter the field / become an engineer — a career/foundation framing, not a
-    specific grounded concept. Reuses the existing career detector plus the field-entry phrases."""
+    specific grounded concept. Career detector + field-entry phrases, plus a 'where do I start in
+    <firmware/embedded/programming>' direction question, which is field-entry, not a board start."""
     low = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
-    return _is_career(text) or any(p in low for p in _FOUNDATION_PHRASES)
+    if _is_career(text) or any(p in low for p in _FOUNDATION_PHRASES):
+        return True
+    direction = any(p in low for p in _DIRECTION_PHRASES)
+    return direction and any(w in low for w in _FIELD_ENTRY)
 
 
 def _grounding_vocab(conn: sqlite3.Connection) -> set[str]:
@@ -380,6 +392,19 @@ def _external_subject(text: str) -> str:
     return phrases[0] if phrases else ""
 
 
+def _subject_grounded(conn: sqlite3.Connection, subject: str, board_name: str) -> bool:
+    """Is the NAMED subject something EAEDK actually knows — a seeded board (by name or colloquialism),
+    a word in the curated peripheral/concept vocabulary, or a recognised semantic-cost intent (gRPC,
+    TLS, CoAP, …)? If none of these, it is out of scope."""
+    low = _norm_words(subject)
+    for r in repo.list_boards(conn):
+        if any(f" {a} " in low for a in _board_aliases(r["name"])):
+            return True
+    if _mentions_vocab(conn, subject):
+        return True
+    return bool(semantic_cost.parse_intent(subject) or semantic_cost.detect_uncosted(subject))
+
+
 def decide_purpose(conn: sqlite3.Connection, board_name: str, user_text: str,
                    page_context: dict, messages: list[dict] | None = None) -> PurposeDecision:
     """First-step gate: choose the turn's PURPOSE before any answer is generated (docs/29)."""
@@ -415,15 +440,22 @@ def decide_purpose(conn: sqlite3.Connection, board_name: str, user_text: str,
     if _seeks_foundation(msg) and not anchored:
         return PurposeDecision("REDIRECT_TO_FOUNDATION", "learner seeking a starting point")
 
-    # (3) Nothing resolves to grounded knowledge.
-    if not grounded:
+    # (3) An out-of-scope NAMED SUBJECT wins over weak grounding. A direction phrase ("where to
+    #     start") grounds the ACTION, not the SUBJECT — so "where to start in NVIDIA Jetson" must
+    #     still be declined. Skip when the question is anchored to a concept/topic/domain we teach
+    #     (e.g. "Zephyr or FreeRTOS" anchors the RTOS topic) or when the subject is a board / vocab
+    #     term EAEDK actually knows.
+    if not anchored:
         subject = _external_subject(msg)
-        if subject:
+        if subject and not _subject_grounded(conn, subject, board_name):
             return PurposeDecision("DECLINE_OUT_OF_SCOPE",
                                    "named subject outside grounded knowledge", subject)
+
+    # (4) Nothing resolves to grounded knowledge — and no named subject to decline.
+    if not grounded:
         return PurposeDecision("ASK_CLARIFICATION", "intent not resolvable")
 
-    # (4) Grounded AND intent understood — only now may the mentor answer.
+    # (5) Grounded AND intent understood — only now may the mentor answer.
     return PurposeDecision("ANSWER_NOW", "grounded; intent clear")
 
 
@@ -932,6 +964,16 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if purpose.purpose != "ANSWER_NOW":
         return render_purpose(conn, purpose, board_name, path, active_boards)
 
+    # Board SELECTION is fleet-wide: the user is asking WHICH board to choose, so the selected board is
+    # not the subject. Answer deterministically from every seeded board's verified geometry + the cost
+    # table — never the selected-board cost override, never the LLM (which would hallucinate boards).
+    if topic and topic.key == "board_selection":
+        sel_terms = semantic_cost.parse_intent(last_user)
+        sel_unknown = semantic_cost.detect_uncosted(last_user)
+        if sel_terms or sel_unknown:
+            return _feasibility_guard(conn, project) + semantic_cost.recommend_chat(
+                conn, sel_terms, sel_unknown)
+
     used = _used_try_this(messages)                    # P3: never repeat an experiment this session
     try_this = _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
     if try_this and not has_hardware and "wokwi" not in try_this.lower():
@@ -1041,8 +1083,13 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
         _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
-    # Actor pass — the model proposes.
-    raw = gw.provider.generate(system, prompt)
+    # Actor pass — the model proposes. A live-model hiccup (timeout, dropped connection, the model
+    # answered the availability ping but stalls on generation) must NEVER crash the request — degrade
+    # to the deterministic backbone, which is already a complete grounded answer.
+    try:
+        raw = gw.provider.generate(system, prompt)
+    except Exception:
+        return lead + backbone
     # Critic pass — the model reviews its own answer (P4; runs on every online response).
     grounding = f"{sem_line}{feas_line}Board: {board_name} ({soc['arch']}); peripherals: {have}."
     critiqued = arbiter.critic_review(gw, system, raw, grounding)
@@ -1081,6 +1128,9 @@ def mentor_explain(conn: sqlite3.Connection, board_name: str, concept: str,
     prompt = (f"Concept: {concept}\nBoard architecture: {soc['arch']}\n"
               f"Factual anchor (true; build on this): {anchor['anchor'] if anchor else '(none)'}\n"
               f"Explain in at most two sentences (what it is; what to check next):")
-    raw = gw.provider.generate(_EXPLAIN_SYSTEM, prompt)
+    try:                                                 # a model timeout must degrade, not crash
+        raw = gw.provider.generate(_EXPLAIN_SYSTEM, prompt)
+    except Exception:
+        return base + "\n[mentor] LLM unreachable (timed out); showing the deterministic anchor above."
     filtered, removed = filter_text(raw, build_board_allowlist(conn, board_name))
     return f"{base}\n\n{filtered}\n[mentor] {removed} uncited hardware claim(s) removed."

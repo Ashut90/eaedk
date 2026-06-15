@@ -1,7 +1,8 @@
 """Ollama provider adapter (offline, local). Uses stdlib urllib — no extra dependency.
 
 Default model: qwen2.5-coder:3b. Host via EAEDK_OLLAMA_HOST (default localhost:11434),
-model via EAEDK_LLM_MODEL.
+model via EAEDK_LLM_MODEL, generation timeout (seconds) via EAEDK_LLM_TIMEOUT (default 120) —
+raise it on a slow machine where a cold model load exceeds the default.
 """
 from __future__ import annotations
 
@@ -12,14 +13,22 @@ import urllib.request
 
 DEFAULT_MODEL = "qwen2.5-coder:3b"
 DEFAULT_HOST = "http://localhost:11434"
+DEFAULT_TIMEOUT = 120.0
+
+
+def _env_timeout(default: float) -> float:
+    try:
+        return float(os.environ.get("EAEDK_LLM_TIMEOUT", "") or default)
+    except ValueError:
+        return default
 
 
 class OllamaProvider:
     def __init__(self, model: str | None = None, host: str | None = None,
-                 timeout: float = 120.0):
+                 timeout: float | None = None):
         self.model = model or os.environ.get("EAEDK_LLM_MODEL", DEFAULT_MODEL)
         self.host = (host or os.environ.get("EAEDK_OLLAMA_HOST", DEFAULT_HOST)).rstrip("/")
-        self.timeout = timeout
+        self.timeout = timeout if timeout is not None else _env_timeout(DEFAULT_TIMEOUT)
 
     def available(self) -> bool:
         """True if the Ollama server is reachable and the target model is present."""
