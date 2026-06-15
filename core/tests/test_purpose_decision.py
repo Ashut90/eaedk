@@ -80,6 +80,18 @@ def test_case2_career_redirects_to_foundation_not_board_default(tmp_path):
 
 # --- Case 3: a grounded concept -> teach --------------------------------------------------------
 
+def test_field_entry_start_question_redirects_to_foundation(tmp_path):
+    """'where to start in firmware / programming' is field-entry (a learning path), not a board
+    start — even with typos. The same phrase with no field word ('where do I start?') still answers
+    on the board (regression: a beginner's field-entry question used to fall through to ANSWER_NOW)."""
+    conn = _seeded(tmp_path)
+    for q in ("as a begginer where to start in firmware in programmin",
+              "where do I start in embedded?"):
+        assert _decide(conn, q).purpose == "REDIRECT_TO_FOUNDATION"
+    assert _decide(conn, "where do I start?").purpose == "ANSWER_NOW"        # no field word → board start
+    assert _decide(conn, "where to start with SPI?").purpose == "ANSWER_NOW"  # anchored concept
+
+
 def test_case3_spi_is_answer_now(tmp_path):
     conn = _seeded(tmp_path)
     d = _decide(conn, "What is SPI?")

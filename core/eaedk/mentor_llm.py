@@ -293,6 +293,11 @@ _DIRECTION_PHRASES = (
     "start with", "begin with", "what should i learn first",
 )
 
+# Field-entry words — a direction question aimed at the DISCIPLINE (not a board or peripheral) is a
+# foundation question: "where to start in firmware / embedded / programming" → a learning path.
+_FIELD_ENTRY = (" firmware", " embedded", " programming", " programmin", " to program",
+                " coding", " to code", " software")
+
 # Generic English words filtered out of the curated grounding vocabulary so common filler in a
 # capability summary ("you turn on/off") never grounds an off-topic question.
 _VOCAB_STOP = frozenset((
@@ -319,9 +324,13 @@ class PurposeDecision:
 
 def _seeks_foundation(text: str) -> bool:
     """The learner wants to enter the field / become an engineer — a career/foundation framing, not a
-    specific grounded concept. Reuses the existing career detector plus the field-entry phrases."""
+    specific grounded concept. Career detector + field-entry phrases, plus a 'where do I start in
+    <firmware/embedded/programming>' direction question, which is field-entry, not a board start."""
     low = " " + re.sub(r"\s+", " ", (text or "").lower()) + " "
-    return _is_career(text) or any(p in low for p in _FOUNDATION_PHRASES)
+    if _is_career(text) or any(p in low for p in _FOUNDATION_PHRASES):
+        return True
+    direction = any(p in low for p in _DIRECTION_PHRASES)
+    return direction and any(w in low for w in _FIELD_ENTRY)
 
 
 def _grounding_vocab(conn: sqlite3.Connection) -> set[str]:
