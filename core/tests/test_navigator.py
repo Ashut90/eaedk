@@ -92,8 +92,23 @@ def test_live_kernel_routes_to_learning_map_not_generic(tmp_path):
     assert "learning-direction question" in out          # framed as direction
     assert "route that works, in order" in out           # gives a route
     assert "First step to prove you're moving" in out     # one first step
-    assert "cannot run Linux" in out                      # grounded: this board can't run Linux
+    assert "If you mean Linux kernel/driver work" in out  # conditional, not absolute
+    assert "If you mean MCU peripheral drivers" in out   # shows the board is fine for other paths
     assert "Blink an LED" not in out                      # NOT the generic board default
+    # New: sorts ambiguity — mentions non-Linux kernel meanings
+    assert "RTOS kernel internals" in out                 # broader sorting, not Linux-only
+    assert "MCU peripheral drivers" in out               # covers bare-metal/HAL driver context
+    assert "toy OS" in out or "teaching kernel" in out   # covers OS/kernel learning
+    assert "Are you aiming for embedded Linux drivers, MCU peripheral drivers, RTOS kernel" in out
+
+
+def test_live_driver_development_sorts_ambiguity(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, BOARD, [{"role": "user", "content": "driver development"}], use_llm=False)
+    assert "learning-direction question" in out
+    assert "MCU peripheral drivers" in out               # specifically covers MCU context
+    assert "Linux kernel DRIVER" in out or "Linux kernel/driver" in out
+    assert "Are you aiming" in out                       # clarifying question sorts the fork
 
 
 def test_live_uart_still_proof_path(tmp_path):

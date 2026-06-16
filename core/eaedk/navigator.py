@@ -114,9 +114,11 @@ def render_learning_map(conn, lm: LearningMap, board_name: str | None = None) ->
     if lm.needs_linux and board_name:
         _board, soc = repo.load_board(conn, board_name)
         if soc is not None and not mentor.supports_linux(soc):
-            L.append(f"First, a grounding fact: {board_name} is a microcontroller (no MMU), so it "
-                     f"cannot run Linux — {lm.title} needs a Linux-class board (a Cortex-A SBC). If "
-                     "that's a surprise, settling that is itself step zero.")
+            L.append(f"If you mean Linux kernel/driver work: {board_name} is a microcontroller (no MMU), "
+                     "so it cannot run Linux and you would need a Linux-class board (a Cortex-A SBC) "
+                     "for that path.")
+            L.append(f"If you mean MCU peripheral drivers or RTOS kernel internals: {board_name} "
+                     "works fine for those paths — no Linux required.")
             L.append("")
 
     L.append("What people actually mean by this:")
@@ -143,37 +145,45 @@ def render_learning_map(conn, lm: LearningMap, board_name: str | None = None) ->
 
 _EMBEDDED_LINUX = LearningMap(
     name="embedded_linux",
-    title="embedded Linux / kernel & driver development",
+    title="kernel / driver / embedded development",
     match_groups=(
         ("kernel", "driver development", "device driver", "char device", "device tree", "devicetree",
          "kernel module", "linux driver", "embedded linux", "write a driver", "writing drivers",
          "probe", "platform driver"),
     ),
     possible_meanings=(
-        "writing a Linux kernel DRIVER for a device (the most common goal)",
-        "understanding how the kernel boots and schedules (theory)",
-        "configuring/booting a board's existing kernel (board bring-up, not driver writing)",
+        "writing MCU peripheral drivers (GPIO, UART, SPI, I2C) in bare metal or a vendor HAL",
+        "writing a Linux kernel DRIVER for a device (the most common Linux goal)",
+        "understanding RTOS kernel internals (FreeRTOS, Zephyr — tasks, scheduling, IPC)",
+        "learning OS/kernel internals generally, or writing a toy OS / teaching kernel",
+        "embedded Linux board support / kernel configuration / device tree",
     ),
     prerequisites=(
-        "solid C and pointers", "how a process/syscall reaches the kernel",
-        "comfort on the Linux command line and with a cross-compiler",
+        "solid C and pointers",
+        "a clear sense of which context you are in — MCU bare-metal, RTOS, or Linux",
+        "comfort with a cross-compiler and reading a datasheet or reference manual",
     ),
     recommended_route=(
-        "Boot a stock kernel on a Linux-class board and get a shell — prove the platform works.",
-        "Write a trivial char-device module (insmod/rmmod, printk) — learn the module lifecycle.",
-        "Bind a platform driver to a device-tree node — learn probe() and the of_match_table.",
-        "Drive one real peripheral (GPIO/I2C) from your driver — the first useful driver.",
+        "First, confirm your context: MCU peripheral driver, RTOS kernel internals, or Linux kernel/driver.",
+        "For MCU peripheral drivers: read the peripheral chapter in your MCU's reference manual, enable "
+        "the peripheral clock, configure the pin's alternate function, and write a register-level init.",
+        "For RTOS kernel internals: pick FreeRTOS or Zephyr, build the hello-world task example, then "
+        "study the scheduler source for the task-create and context-switch path.",
+        "For Linux kernel/drivers: boot a stock kernel on a Linux-class board, write a trivial char-device "
+        "module (insmod/rmmod, printk), then bind a platform driver to a device-tree node.",
     ),
     wrong_starts=(
-        "reading the whole kernel source front-to-back",
-        "starting with a complex subsystem (networking, USB) before a char device",
-        "trying it on a microcontroller — there is no Linux there",
+        "reading the whole kernel source front-to-back in any context — kernel, RTOS, or MCU",
+        "starting with a complex subsystem (networking, USB) before a char device in Linux",
+        "writing an MCU peripheral driver while thinking you are writing a Linux kernel driver — "
+        "the register names and init sequence are completely different",
+        "trying Linux kernel/driver work on a microcontroller — there is no Linux there",
     ),
-    first_step="On a Linux-class board, build and `insmod` a hello-world module that printk's, and read "
-               "it back with `dmesg`. That one loop proves your toolchain, kernel headers, and module "
-               "lifecycle all work.",
-    clarifying_question="are you trying to WRITE a driver, or to BOOT/configure Linux on a board? Those "
-                        "are different routes.",
+    first_step="Before any code, settle which context you are in: MCU peripheral driver, RTOS kernel "
+               "internals, or Linux kernel/driver. Each has a different datasheet, toolchain, and first "
+               "step. Tell me which fits, and I will give you the exact first move.",
+    clarifying_question="Are you aiming for embedded Linux drivers, MCU peripheral drivers, RTOS kernel "
+                        "internals, or toy OS/kernel learning? These are different routes.",
     needs_linux=True,
 )
 

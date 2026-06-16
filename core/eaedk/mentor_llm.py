@@ -681,6 +681,82 @@ def _career_roadmap(board_name: str, path: list, active_boards: list[str] | None
             "bootloader. Master one board deeply; the reasoning transfers everywhere.")
 
 
+# --- TEACH / concept Navigator framework (MATCH → SORT → CONFIRM → ORGANIZE → COMPARE → HELP) ---
+#
+# Curated concept explanations that use the Navigator structure. Each concept carries the six
+# framework axes so EAEDK teaches the pattern, not the definition. Fallback: the bare anchor string.
+
+_TEACH_CONCEPTS: dict[str, dict] = {
+    "spi": {
+        "match": "SPI is a synchronous serial bus where one controller talks to one or more peripherals using a shared clock, two data lines, and a separate chip-select wire per device.",
+        "sort": ("The signals that matter:\n"
+                 "  - SCLK (serial clock) — the controller drives this; everything synchronises to it.\n"
+                 "  - MOSI (master out, slave in) — data from the controller to the peripheral.\n"
+                 "  - MISO (master in, slave out) — data from the peripheral to the controller.\n"
+                 "  - CS / SS (chip-select, one per device) — the controller pulls this low to talk "
+                 "to that specific peripheral; all others ignore the bus.\n"
+                 "  - CPOL and CPHA (clock polarity and phase) — define when data is sampled. "
+                 "Controller and peripheral must agree. There are four 'SPI modes' (0, 1, 2, 3)."),
+        "confirm": "What are you trying to do?\n"
+                   "  - Learn the concept — I'll give you the structure and a practice exercise.\n"
+                   "  - Bring up SPI on hardware — I'll ask for pins and guide the bring-up.\n"
+                   "  - Compare SPI vs I2C/UART — I'll lay out the trade-offs.\n"
+                   "  - Debug an SPI problem — I'll ask for the symptoms.\n\n"
+                   "Which of these fits your goal?",
+        "organize": ("A useful order to think about SPI:\n"
+                     "  1. Understand the four signals (clock, two data lines, chip-select) and how "
+                     "they work together.\n"
+                     "  2. Understand device selection: each peripheral needs its own CS line.\n"
+                     "  3. Understand clock polarity and phase (CPOL/CPHA) — controller and "
+                     "peripheral must use the same mode.\n"
+                     "  4. Try a simple transfer: send a byte and confirm it arrives.\n"
+                     "  5. Then connect a real peripheral."),
+        "compare": ("How SPI compares with other buses:\n"
+                    "  - SPI vs I2C: SPI is faster (no addressing overhead) and full-duplex (send "
+                    "and receive simultaneously), but needs more wires (4+ vs 2). I2C is slower but "
+                    "uses only two wires (SDA, SCL) and addressing lets you hang many devices on the "
+                    "same pair. SPI has no built-in flow control or acknowledgement; I2C does.\n"
+                    "  - SPI vs UART: UART is asynchronous — no clock line — and is a simple "
+                    "point-to-point link between two devices. It needs matching baud rates. SPI is "
+                    "synchronous (has a clock) and can talk to many devices, but needs more pins."),
+        "help": ("Your next step — choose one:\n"
+                 "  If learning: draw the four SPI signals for one controller and one peripheral "
+                 "and trace how a single byte (0x55) is sent: each bit on the clock edge.\n"
+                 "  If practicing: connect the controller's MOSI to its MISO (loopback), send a "
+                 "known byte, and verify the received byte matches. That proves the SPI block and "
+                 "your init are correct before any external hardware is connected.\n\n"
+                 "Which path fits you?"),
+    },
+}
+
+
+def _render_teach_concept(concept) -> str | None:
+    """Render a concept through the MATCH → SORT → CONFIRM → ORGANIZE → COMPARE → HELP Navigator
+    framework. Returns None when the concept has no curated teaching data (fall back to anchor).
+    Accepts sqlite3.Row or dict."""
+    try:
+        name = (concept["name"] or "").strip().lower()
+    except (KeyError, TypeError, IndexError):
+        return None
+    data = _TEACH_CONCEPTS.get(name)
+    if data is None:
+        return None
+    L = [
+        f"MATCH — {data['match']}",
+        "",
+        f"SORT — {data['sort']}",
+        "",
+        f"CONFIRM — {data['confirm']}",
+        "",
+        f"ORGANIZE — {data['organize']}",
+        "",
+        f"COMPARE — {data['compare']}",
+        "",
+        f"HELP — {data['help']}",
+    ]
+    return "\n".join(L)
+
+
 # --- One self-contained few-shot prompt per role (the model never decides which role to play) ----
 
 _ARCH_GUARD = ("\nNote: the register names and AF numbers in the examples are STM32 teaching values. "
@@ -935,11 +1011,23 @@ _PROOF_VOICE_SYSTEM = (
     "- State NO board-specific fact — no pin names, register names, UART/USART instance numbers, clock "
     "frequencies, addresses, or MCU-specific setup — unless it appears verbatim in the packet. If the "
     "learner needs those, ASK for them (the packet lists what to ask).\n"
+    "- The packet may include a `user_reported_evidence` section listing hardware tokens the learner "
+    "themselves mentioned (pins, instances, clocks, etc.). You may QUOTE these as \u2018you said "
+    "PA9\u2019 or \u2018you reported that\u2019 \u2014 but you may NOT assert them as instructions or "
+    "verified facts (\u2018Configure PA9\u2019, \u2018Use SPI2\u2019). The learner\u2019s own report "
+    "is evidence, not truth.\n"
+    "- The packet may include external field experience. Treat it as UNVERIFIED, source-backed "
+    "CONFIRM/COMPARE support only: the local proof step remains primary; community verification "
+    "steps are secondary CONFIRM support only; compare/speculated cases cannot drive HELP; source "
+    "links are provenance, not the answer; do not turn community details into verified board facts; "
+    "do not turn community pins/registers/clocks into instructions; do not choose or alter "
+    "confidence.\n"
     "- Talk like a person: a few short sentences, no tables. End with the packet's follow-up (ask for "
     "the listed evidence on the first step, or ask them to report the result on a branch).")
 
 
-def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | None) -> str:
+def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | None,
+                      community_report=None) -> str:
     """Voice the proof-path node as a mentor when a model is available; otherwise (and whenever the
     voiced answer invents a board-specific fact) fall back to the deterministic, already-safe render.
     The engine's node/branch/proof-step are authoritative — the model only changes the voice."""
@@ -949,7 +1037,7 @@ def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | 
     gw = gateway or Gateway()
     if not gw.available():
         return deterministic
-    packet = problem_patterns.build_packet(state, board_name)
+    packet = problem_patterns.build_packet(state, board_name, community_report=community_report)
     prompt = problem_patterns.render_packet_for_prompt(packet) + "\n\nVoice this now, as the mentor:"
     try:
         voiced = gw.provider.generate(_PROOF_VOICE_SYSTEM, prompt).strip()
@@ -1052,7 +1140,15 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     elif domain:
         head = _domain_reasoning(domain, cap_set, fam, board_name)
     elif concept is not None:
-        head = f"{concept['anchor']}"
+        rendered = _render_teach_concept(concept)
+        if rendered is not None:
+            head = rendered
+            # Suppress board-specific Try This and followup — the HELPsection already has the
+            # next step and a closing question.
+            try_this = None
+            question = ""
+        else:
+            head = f"{concept['anchor']}"
     elif path:
         head = (f"Good question. For {board_name}, the place to start is '{path[0]['title']}' — "
                 f"{path[0]['why']}")

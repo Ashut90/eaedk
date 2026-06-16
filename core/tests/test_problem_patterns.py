@@ -6,7 +6,8 @@ from eaedk.store.db import connect
 from eaedk.store.migrate import migrate
 from eaedk.seed import seed_all
 from eaedk import problem_patterns as pp
-from eaedk.mentor_llm import mentor_chat
+from eaedk.mentor_llm import mentor_chat, _voice_proof_path
+from eaedk.community_cases import CommunityCase, rank_community_cases
 
 BOARD = "STM32F103-BluePill"
 
@@ -141,6 +142,46 @@ class _FakeGw:
         return self.text
 
 
+class _CaptureGw(_FakeGw):
+    """Capture proof-path voicing prompts while returning a safe mentor voice."""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.system = ""
+        self.prompt = ""
+
+    def generate(self, system, prompt):
+        self.system = system
+        self.prompt = prompt
+        return self.text
+
+
+def _community_case(**overrides):
+    defaults = dict(
+        source="EE Stack Exchange",
+        source_type="stackexchange",
+        symptom="TX pin silent",
+        context="",
+        suspected_cause="wrong pinmux or alternate-function setting",
+        confirmed_cause="",
+        verification_step="Scope showed no activity on PA9; GPIOA->AFR confirmed AF1 in register dump",
+        fix="Changed the alternate-function setting",
+        evidence_quality="proven",
+        confidence=0.9,
+        reference_link="https://electronics.stackexchange.com/q/100",
+    )
+    defaults.update(overrides)
+    return CommunityCase(**defaults)
+
+
+def _community_report(*cases):
+    return rank_community_cases(
+        list(cases),
+        local_evidence={"tx_activity": "absent"},
+        local_symptoms=("TX is silent",),
+    )
+
+
 def test_packet_is_board_agnostic_and_keeps_the_proof_step():
     st = pp.resolve(_convo("my UART is not working"))
     pk = pp.build_packet(st, "STM32F103-BluePill")
@@ -150,6 +191,165 @@ def test_packet_is_board_agnostic_and_keeps_the_proof_step():
     blob = pp.render_packet_for_prompt(pk)
     import re
     assert not re.search(r"\bP[A-K]\d", blob) and "MHz" not in blob and "USART1" not in blob
+
+
+def test_packet_attaches_reduced_community_report_fields():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    report = _community_report(_community_case())
+    pk = pp.build_packet(st, "Board", community_report=report)
+
+    assert pk["community_confirm_cases"]
+    assert pk["community_compare_cases"] == []
+    assert pk["best_external_verification_step"]
+    assert pk["source_links"] == ["https://electronics.stackexchange.com/q/100"]
+    assert pk["community_summary_reason"]
+    assert pk["has_actionable_external_experience"] is True
+
+
+def test_community_report_does_not_change_local_proof_path_fields():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    local = pp.build_packet(st, "Board")
+    report = _community_report(_community_case(verification_step="External check that must not replace local step"))
+    with_community = pp.build_packet(st, "Board", community_report=report)
+
+    for key in ("proof_step", "stage", "candidates", "rules_out", "observed",
+                "board_name", "user_reported_evidence"):
+        assert with_community.get(key) == local.get(key)
+
+
+def test_empty_community_report_has_empty_fields_and_no_prompt_section():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    report = rank_community_cases([])
+    pk = pp.build_packet(st, "Board", community_report=report)
+
+    assert pk["community_confirm_cases"] == []
+    assert pk["community_compare_cases"] == []
+    assert pk["best_external_verification_step"] == ""
+    assert pk["source_links"] == []
+    assert pk["community_summary_reason"] == ""
+    assert pk["has_actionable_external_experience"] is False
+    assert "External field experience" not in pp.render_packet_for_prompt(pk)
+
+
+def test_speculated_community_case_is_compare_only_and_never_best_step():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    report = _community_report(_community_case(
+        evidence_quality="speculated",
+        confidence=0.8,
+        verification_step="Maybe configure PA9 as USART1 TX",
+        reference_link="https://stackoverflow.com/q/200",
+    ))
+    pk = pp.build_packet(st, "Board", community_report=report)
+
+    assert pk["community_confirm_cases"] == []
+    assert pk["community_compare_cases"]
+    assert pk["best_external_verification_step"] == ""
+    assert pk["has_actionable_external_experience"] is False
+
+
+def test_community_prompt_labels_unverified_field_experience_and_provenance():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    pk = pp.build_packet(st, "Board", community_report=_community_report(_community_case()))
+    prompt = pp.render_packet_for_prompt(pk)
+
+    assert "External field experience — unverified, source-backed, for CONFIRM/COMPARE only" in prompt
+    assert "these cases are not verified board facts" in prompt
+    assert "local proof step remains primary" in prompt
+    assert "source links are provenance, not the answer" in prompt
+    assert "speculated cases cannot drive HELP" in prompt
+    assert "source links (provenance only, not the answer)" in prompt
+    assert "https://electronics.stackexchange.com/q/100" in prompt
+
+
+def test_community_packet_does_not_create_verified_board_facts_or_verifier_allowlist():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    pk = pp.build_packet(st, "Board", community_report=_community_report(_community_case()))
+    prompt = pp.render_packet_for_prompt(pk)
+
+    assert all("verified" not in key and "board_fact" not in key for key in pk)
+    assert "PA9" not in prompt and "GPIOA->AFR" not in prompt and "AF1" not in prompt
+
+    safe, violations = pp.verify_voiced(
+        "A community case says configure PA9 and write GPIOA->AFR.", pk)
+    assert not safe
+    assert any("PA9" in v for v in violations)
+
+
+def test_voice_proof_path_accepts_community_report_in_prompt():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    report = _community_report(_community_case())
+    voice = ("You reported no activity on the TX pin. Next, drive that exact pin as a plain GPIO "
+             "output and tell me if it moves.")
+    gw = _CaptureGw(voice)
+
+    out = _voice_proof_path(st, "Board", use_llm=True, gateway=gw, community_report=report)
+
+    assert out == voice
+    assert "External field experience — unverified, source-backed, for CONFIRM/COMPARE only" in gw.prompt
+    assert "CONFIRM support cases:" in gw.prompt
+    assert "https://electronics.stackexchange.com/q/100" in gw.prompt
+
+
+def test_voice_proof_path_keeps_local_step_primary_and_external_step_secondary():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    report = _community_report(_community_case(verification_step="External scope check"))
+    gw = _CaptureGw("Run the local proof step first: drive that exact pin as a plain GPIO output.")
+
+    _voice_proof_path(st, "Board", use_llm=True, gateway=gw, community_report=report)
+
+    local_line = f"next proof step (keep the ACTION intact): {st.node.proof_step}"
+    assert local_line in gw.prompt
+    assert "local proof step remains primary" in gw.prompt
+    assert "best external verification step (secondary CONFIRM support only):" in gw.prompt
+    assert gw.prompt.index(local_line) < gw.prompt.index("best external verification step")
+
+
+def test_voice_proof_path_speculated_compare_cases_cannot_drive_help():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    report = _community_report(_community_case(
+        evidence_quality="speculated",
+        confidence=0.8,
+        verification_step="Maybe configure PA9 as USART1 TX",
+        reference_link="https://stackoverflow.com/q/200",
+    ))
+    gw = _CaptureGw("Run the local proof step and report what the pin does.")
+
+    _voice_proof_path(st, "Board", use_llm=True, gateway=gw, community_report=report)
+
+    assert "COMPARE support cases:" in gw.prompt
+    assert "evidence speculated" in gw.prompt
+    assert "speculated cases cannot drive HELP" in gw.prompt
+    assert "best external verification step" not in gw.prompt
+    assert "source links (provenance only, not the answer):" in gw.prompt
+    assert "https://stackoverflow.com/q/200" in gw.prompt
+
+
+def test_proof_voice_system_marks_community_as_unverified_support():
+    st = pp.resolve(_convo("my UART is not working", "TX is silent"))
+    gw = _CaptureGw("Run the local proof step and report the result.")
+
+    _voice_proof_path(st, "Board", use_llm=True, gateway=gw,
+                      community_report=_community_report(_community_case()))
+
+    assert "external field experience" in gw.system
+    assert "UNVERIFIED" in gw.system
+    assert "local proof step remains primary" in gw.system
+    assert "community verification steps are secondary CONFIRM support only" in gw.system
+    assert "compare/speculated cases cannot drive HELP" in gw.system
+    assert "source links are provenance, not the answer" in gw.system
+    assert "do not turn community details into verified board facts" in gw.system
+    assert "do not turn community pins/registers/clocks into instructions" in gw.system
+    assert "do not choose or alter confidence" in gw.system
+
+
+def test_proof_path_voice_modules_add_no_web_or_rag_imports():
+    import eaedk.mentor_llm as ml
+    import re
+    source = open(ml.__file__).read()
+    web_imports = re.findall(r"^\s*(?:import|from)\s+(?:http|requests|urllib|aiohttp|httpx)",
+                             source, re.MULTILINE)
+    assert not web_imports
+    assert not re.findall(r"^\s*(?:import|from)\s+.*rag", source, re.MULTILINE | re.I)
 
 
 def test_verifier_passes_clean_voice_and_allows_generic_terms():
@@ -246,3 +446,93 @@ def test_pattern_can_declare_extra_sensitive_terms():
     pk["sensitive_terms"] = [r"\bvTaskDelay\b", r"\besp_wifi_init\b"]
     safe, viol = pp.verify_voiced("Just call vTaskDelay() and esp_wifi_init().", pk)
     assert not safe and any("vTaskDelay" in v for v in viol)
+
+
+# --- User-reported evidence provenance (docs/31 extension) ---------------------------------------
+#
+# User-reported hardware tokens (pins, instances, clocks) are allowed ONLY when phrased as quotes:
+# "you said PA9", "you reported SPI2". The same tokens are BLOCKED when phrased as instructions.
+
+def _urevidence_convo(*user_msgs):
+    """Build a transcript: first turn matches the UART pattern, subsequent turns carry user-reported
+    hardware tokens. Returns the transcript."""
+    msgs = []
+    for i, t in enumerate(("my UART is not working",) + user_msgs):
+        if i:
+            msgs.append({"role": "assistant", "content": "..."})
+        msgs.append({"role": "user", "content": t})
+    return msgs
+
+
+# Test 1: User reports PA9 → LLM says "You said TX is on PA9." → ALLOWED
+def test_user_reported_pin_quoted_is_allowed():
+    msgs = _urevidence_convo("I use PA9 for TX")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    safe, violations = pp.verify_voiced("You said TX is on PA9.", pk)
+    assert safe, f"Expected ALLOWED, got violations: {violations}"
+
+
+# Test 2: User reports PA9 → LLM says "Configure PA9 as USART1 TX." → BLOCKED
+def test_user_reported_pin_asserted_is_blocked():
+    msgs = _urevidence_convo("I use PA9 for TX")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    safe, violations = pp.verify_voiced("Configure PA9 as USART1 TX.", pk)
+    assert not safe, "Expected BLOCKED, got no violations"
+    assert any("PA9" in v for v in violations)
+
+
+# Test 3: User reports SPI2/PB13/PB14/PB15 → LLM says "You reported…" → ALLOWED
+def test_user_reported_spi_quoted_is_allowed():
+    msgs = _urevidence_convo("SPI2 on PB13/PB14/PB15")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    safe, violations = pp.verify_voiced("You reported SPI2 on PB13/PB14/PB15.", pk)
+    assert safe, f"Expected ALLOWED, got violations: {violations}"
+
+
+# Test 4: User did NOT report SPI2 → LLM says "Use SPI2…" → BLOCKED
+def test_unreported_peripheral_asserted_is_blocked():
+    msgs = _urevidence_convo("TX is silent")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    safe, violations = pp.verify_voiced("Use SPI2 on PB13/PB14/PB15.", pk)
+    assert not safe, "Expected BLOCKED, got no violations"
+    assert any("SPI2" in v for v in violations)
+
+
+# Test 5: User reports 10MHz clock → LLM says "You reported a 10MHz clock." → ALLOWED
+def test_user_reported_clock_quoted_is_allowed():
+    msgs = _urevidence_convo("the clock is 10MHz")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    safe, violations = pp.verify_voiced("You reported a 10MHz clock.", pk)
+    assert safe, f"Expected ALLOWED, got violations: {violations}"
+
+
+# Test 6: User did NOT report a clock → LLM says "Set the clock to 10MHz." → BLOCKED
+def test_unreported_clock_asserted_is_blocked():
+    msgs = _urevidence_convo("TX is silent")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    safe, violations = pp.verify_voiced("Set the clock to 10MHz.", pk)
+    assert not safe, "Expected BLOCKED, got no violations"
+    assert any("10MHz" in v for v in violations)
+
+
+def test_user_reported_evidence_in_packet():
+    """The packet carries user_reported_evidence from the transcript."""
+    msgs = _urevidence_convo("I use PA9 for TX")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    assert "user_reported_evidence" in pk
+    assert "PA9" in pk["user_reported_evidence"]
+
+
+def test_user_reported_evidence_empty_when_none_given():
+    """No user hardware tokens → user_reported_evidence is empty."""
+    msgs = _urevidence_convo("I'm not sure what I see")
+    st = pp.resolve(msgs)
+    pk = pp.build_packet(st, "Board")
+    assert pk.get("user_reported_evidence", []) == []

@@ -66,6 +66,9 @@ class ProofPathState:
     node: DecisionNode | None = None
     evidence: dict[str, str] = field(default_factory=dict)
     awaiting: bool = False                   # asked for proof, reply did not resolve it yet
+    # User-reported hardware tokens from the transcript (pins, instances, registers, clocks, addresses).
+    # These are NOT verified facts — only quotable as "you said X".
+    user_reported_evidence: list[str] = field(default_factory=list)
 
 
 # --- The engine (generic over every pattern) ----------------------------------------------------
@@ -97,6 +100,20 @@ def extract_evidence(pattern: ProblemPattern, message: str) -> dict[str, str]:
     return out
 
 
+def extract_user_reported_evidence(message: str) -> dict[str, list[str]]:
+    """Extract raw hardware tokens the user reported — pins, peripheral instances, registers, clock
+    frequencies, addresses. These are NOT verified facts; they can only be quoted as "you said X".
+
+    Uses the same generic categories as the verifier, so a user saying "PA9" can be quoted but not
+    asserted as a verified truth. Returns {token_type: [raw_token, ...]} mapping with ALL tokens."""
+    low = message or ""
+    out: dict[str, list[str]] = {}
+    for label, rx in _GENERIC_CHECKS:
+        for m in re.finditer(rx, low):
+            out.setdefault(label, []).append(m.group(0))
+    return out
+
+
 def resolve(messages: list[dict]) -> ProofPathState:
     """Rebuild the proof-path state from the whole transcript (minimal, robust session state — no new
     storage, survives restarts). MATCH on the first user turn that fits a pattern, then replay every
@@ -115,15 +132,22 @@ def resolve(messages: list[dict]) -> ProofPathState:
 
     node = pattern.nodes[pattern.entry]
     evidence: dict[str, str] = {}
+    user_evidence: list[str] = []
     for msg in users[matched_at + 1:]:
         evidence.update(extract_evidence(pattern, msg))
+        # Collect user-reported hardware tokens (pins, instances, registers, clocks, addresses)
+        # from each turn — these are quotable but not verified.
+        extracted = extract_user_reported_evidence(msg)
+        for tokens in extracted.values():
+            user_evidence.extend(tokens)
         while node.expects and node.expects in evidence:        # advance as far as evidence allows
             nxt = node.branches.get(evidence[node.expects])
             if not nxt or nxt not in pattern.nodes:
                 break
             node = pattern.nodes[nxt]
     awaiting = matched_at < len(users) - 1 and node.id == pattern.entry
-    return ProofPathState(matched=True, pattern=pattern, node=node, evidence=evidence, awaiting=awaiting)
+    return ProofPathState(matched=True, pattern=pattern, node=node, evidence=evidence,
+                          awaiting=awaiting, user_reported_evidence=user_evidence)
 
 
 # --- Rendering (deterministic, board-agnostic; addresses the board by name only) ----------------
@@ -188,7 +212,8 @@ def _observed(state: ProofPathState) -> str:
 # never states them), so a correct voice has no board fact to invent — and the verifier blocks any it
 # does invent, falling back to the deterministic render.
 
-def build_packet(state: ProofPathState, board_name: str | None = None) -> dict:
+def build_packet(state: ProofPathState, board_name: str | None = None,
+                 community_report=None) -> dict:
     """The approved proof-path packet — exactly what the LLM is allowed to voice for this node."""
     p, node = state.pattern, state.node
     pk: dict = {"pattern_title": p.title, "board_name": board_name or "",
@@ -206,6 +231,11 @@ def build_packet(state: ProofPathState, board_name: str | None = None) -> dict:
         pk["rules_out"] = node.rules_out
         pk["candidates"] = list(node.candidates)
     pk["sensitive_terms"] = list(p.sensitive_terms)      # pattern-declared extra forbidden claims
+    # User-reported evidence provenance — raw tokens the user mentioned (pins, instances, etc.).
+    # These are NOT verified facts; the LLM may only quote them as "you said X".
+    pk["user_reported_evidence"] = list(state.user_reported_evidence)
+    if community_report is not None:
+        pk.update(_community_report_packet_fields(community_report))
     return pk
 
 
@@ -239,6 +269,31 @@ def render_packet_for_prompt(pk: dict) -> str:
     else:  # reask
         L.append("  stage: RE-ASK — the reply didn't resolve the step; gently re-ask, no new content")
         L.append(f"  proof step to repeat: {pk['proof_step']}")
+    if pk.get("community_confirm_cases") or pk.get("community_compare_cases"):
+        L += [
+            "",
+            "External field experience — unverified, source-backed, for CONFIRM/COMPARE only:",
+            "  these cases are not verified board facts",
+            "  local proof step remains primary; do NOT replace or rewrite it",
+            "  source links are provenance, not the answer",
+            "  speculated cases cannot drive HELP",
+        ]
+        if pk.get("community_summary_reason"):
+            L.append(f"  summary: {pk['community_summary_reason']}")
+        if pk.get("best_external_verification_step"):
+            L.append("  best external verification step (secondary CONFIRM support only): "
+                     f"{pk['best_external_verification_step']}")
+        if pk.get("community_confirm_cases"):
+            L.append("  CONFIRM support cases:")
+            for c in pk["community_confirm_cases"]:
+                L.append(_render_community_case_line(c))
+        if pk.get("community_compare_cases"):
+            L.append("  COMPARE support cases:")
+            for c in pk["community_compare_cases"]:
+                L.append(_render_community_case_line(c))
+        if pk.get("source_links"):
+            L.append("  source links (provenance only, not the answer):")
+            L += [f"    - {link}" for link in pk["source_links"]]
     return "\n".join(L)
 
 
@@ -263,20 +318,147 @@ _GENERIC_CHECKS = (
     ("address", r"\b0x[0-9a-fA-F]{3,}\b"),
 )
 
+_COMMUNITY_PACKET_KEYS = (
+    "community_confirm_cases",
+    "community_compare_cases",
+    "best_external_verification_step",
+    "source_links",
+    "community_summary_reason",
+    "has_actionable_external_experience",
+)
+
+_COMMUNITY_EXTRA_REDACTIONS = (
+    ("alternate-function value", r"\bAF\s?\d+\b"),
+)
+
+
+def _redact_unverified_community_text(text: str) -> str:
+    """Remove board-specific tokens from unverified community snippets before packet rendering.
+
+    Community material is useful as field experience, but it must not teach the verifier that a pin,
+    register, clock, address or peripheral instance is allowed grounding.
+    """
+    out = str(text or "")
+    redactions = list(_GENERIC_CHECKS) + list(_COMMUNITY_EXTRA_REDACTIONS)
+    for label, rx in redactions:
+        out = re.sub(rx, f"[field-reported {label}]", out, flags=re.I)
+    return out
+
+
+def _evidence_quality_from_reason(reason: str) -> str:
+    m = re.search(r"evidence_quality=([a-z_]+)", reason or "")
+    return m.group(1) if m else ""
+
+
+def _community_match_packet(match, include_step: bool) -> dict:
+    return {
+        "matched_facts": [_redact_unverified_community_text(x)
+                          for x in getattr(match, "matched_facts", ())],
+        "differing_facts": [_redact_unverified_community_text(x)
+                            for x in getattr(match, "differing_facts", ())],
+        "case_confidence": getattr(match, "case_confidence", 0.0),
+        "evidence_quality": _evidence_quality_from_reason(getattr(match, "reason", "")),
+        "suggested_verification_step": (
+            _redact_unverified_community_text(
+                getattr(match, "suggested_verification_step", ""))
+            if include_step else ""
+        ),
+    }
+
+
+def _community_report_packet_fields(report) -> dict:
+    confirm = tuple(getattr(report, "confirm_cases", ()) or ())
+    compare = tuple(getattr(report, "compare_cases", ()) or ())
+    usable = bool(confirm or compare)
+    return {
+        "community_confirm_cases": [_community_match_packet(m, include_step=True)
+                                    for m in confirm[:3]],
+        "community_compare_cases": [_community_match_packet(m, include_step=False)
+                                    for m in compare[:3]],
+        "best_external_verification_step": (
+            _redact_unverified_community_text(
+                getattr(report, "best_verification_step", "") or "")
+            if confirm else ""
+        ),
+        "source_links": list(dict.fromkeys(getattr(report, "top_reference_links", ()) or ()))
+                        if usable else [],
+        "community_summary_reason": (
+            _redact_unverified_community_text(getattr(report, "summary_reason", "") or "")
+            if usable else ""
+        ),
+        "has_actionable_external_experience": bool(
+            getattr(report, "has_actionable_external_experience", False) and confirm
+        ),
+    }
+
+
+def _render_community_case_line(case: dict) -> str:
+    bits = [f"confidence {case.get('case_confidence', 0.0)}"]
+    if case.get("evidence_quality"):
+        bits.append(f"evidence {case['evidence_quality']}")
+    if case.get("matched_facts"):
+        bits.append("matched " + "; ".join(case["matched_facts"]))
+    if case.get("differing_facts"):
+        bits.append("differs " + "; ".join(case["differing_facts"]))
+    if case.get("suggested_verification_step"):
+        bits.append("external step " + case["suggested_verification_step"])
+    return "    - " + "; ".join(bits)
+
+
+def _packet_for_verifier_allowlist(packet: dict) -> dict:
+    """Strip unverified community fields before deriving verifier grounding."""
+    pk = dict(packet)
+    for key in _COMMUNITY_PACKET_KEYS:
+        pk.pop(key, None)
+    return pk
+
 
 def verify_voiced(response: str, packet: dict) -> tuple[bool, list[str]]:
     """Check a voiced answer for invented board/peripheral-specific facts not present in the approved
     packet. Generic across peripherals and vendors (pins, registers, instances, clocks, addresses),
     plus any extra forbidden patterns the pattern declared. Returns (safe, violations); unsafe answers
-    are blocked by the caller in favour of the deterministic render."""
-    allowed = render_packet_for_prompt(packet).lower()
+    are blocked by the caller in favour of the deterministic render.
+
+    User-reported evidence (tokens the user mentioned in their messages) is ALLOWED only when
+    phrased as a quote — e.g. "you said PA9", "you reported SPI2", "you reported a 10MHz clock".
+    If the same token is phrased as an instruction or assertion ("Configure PA9", "Use SPI2"),
+    it is BLOCKED unless verified in the packet. The provenance categories are:
+      - verified_fact        — from DB / board facts / pattern object (can be stated as fact)
+      - user_reported_evidence — from transcript (quotable as "you said", never asserted as truth)
+      - pattern_guidance      — from ProblemPattern/DecisionNode (general proof-path guidance)
+      - unsupported_claim     — invented by LLM (blocked/fallback)"""
+    allowed = render_packet_for_prompt(_packet_for_verifier_allowlist(packet)).lower()
     checks = list(_GENERIC_CHECKS) + [("pattern-sensitive claim", rx)
                                       for rx in packet.get("sensitive_terms", ())]
+
+    # Collect user-reported tokens from the packet — these are quotable but not assertable.
+    user_tokens: set[str] = set()
+    for token in packet.get("user_reported_evidence", []):
+        user_tokens.add(token.strip().lower())
+
     violations: list[str] = []
     for label, rx in checks:
         for m in re.finditer(rx, response, re.I):
-            if m.group(0).lower() not in allowed:
-                violations.append(f"{label}: {m.group(0)}")
+            token = m.group(0)
+            token_lower = token.lower()
+
+            # Token already in the allowed text (packet rendering) — always fine.
+            if token_lower in allowed:
+                continue
+
+            # User-reported token: only allowed if phrased as a quote ("you said", "you reported")
+            if token_lower in user_tokens:
+                # Check the surrounding context for quote phrasing (within 60 chars before)
+                start = max(0, m.start() - 60)
+                prefix = response[start:m.start()].lower()
+                if any(q in prefix for q in ("you said", "you reported", "you note",
+                                              "you mention", "based on your", "you told me",
+                                              "as you noted", "you reported that")):
+                    continue
+
+            # If it wasn't in user_tokens OR it was but not phrased as a quote — violate
+            violations.append(f"{label}: {token}")
+
     return (not violations, violations)
 
 
