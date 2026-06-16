@@ -10,7 +10,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from . import repo, mentor, reasoning, semantic_cost, arbiter
+from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
 from .llm.gateway import Gateway
 from .llm.postfilter import build_board_allowlist, filter_text
 
@@ -681,6 +681,82 @@ def _career_roadmap(board_name: str, path: list, active_boards: list[str] | None
             "bootloader. Master one board deeply; the reasoning transfers everywhere.")
 
 
+# --- TEACH / concept Navigator framework (MATCH → SORT → CONFIRM → ORGANIZE → COMPARE → HELP) ---
+#
+# Curated concept explanations that use the Navigator structure. Each concept carries the six
+# framework axes so EAEDK teaches the pattern, not the definition. Fallback: the bare anchor string.
+
+_TEACH_CONCEPTS: dict[str, dict] = {
+    "spi": {
+        "match": "SPI is a synchronous serial bus where one controller talks to one or more peripherals using a shared clock, two data lines, and a separate chip-select wire per device.",
+        "sort": ("The signals that matter:\n"
+                 "  - SCLK (serial clock) — the controller drives this; everything synchronises to it.\n"
+                 "  - MOSI (master out, slave in) — data from the controller to the peripheral.\n"
+                 "  - MISO (master in, slave out) — data from the peripheral to the controller.\n"
+                 "  - CS / SS (chip-select, one per device) — the controller pulls this low to talk "
+                 "to that specific peripheral; all others ignore the bus.\n"
+                 "  - CPOL and CPHA (clock polarity and phase) — define when data is sampled. "
+                 "Controller and peripheral must agree. There are four 'SPI modes' (0, 1, 2, 3)."),
+        "confirm": "What are you trying to do?\n"
+                   "  - Learn the concept — I'll give you the structure and a practice exercise.\n"
+                   "  - Bring up SPI on hardware — I'll ask for pins and guide the bring-up.\n"
+                   "  - Compare SPI vs I2C/UART — I'll lay out the trade-offs.\n"
+                   "  - Debug an SPI problem — I'll ask for the symptoms.\n\n"
+                   "Which of these fits your goal?",
+        "organize": ("A useful order to think about SPI:\n"
+                     "  1. Understand the four signals (clock, two data lines, chip-select) and how "
+                     "they work together.\n"
+                     "  2. Understand device selection: each peripheral needs its own CS line.\n"
+                     "  3. Understand clock polarity and phase (CPOL/CPHA) — controller and "
+                     "peripheral must use the same mode.\n"
+                     "  4. Try a simple transfer: send a byte and confirm it arrives.\n"
+                     "  5. Then connect a real peripheral."),
+        "compare": ("How SPI compares with other buses:\n"
+                    "  - SPI vs I2C: SPI is faster (no addressing overhead) and full-duplex (send "
+                    "and receive simultaneously), but needs more wires (4+ vs 2). I2C is slower but "
+                    "uses only two wires (SDA, SCL) and addressing lets you hang many devices on the "
+                    "same pair. SPI has no built-in flow control or acknowledgement; I2C does.\n"
+                    "  - SPI vs UART: UART is asynchronous — no clock line — and is a simple "
+                    "point-to-point link between two devices. It needs matching baud rates. SPI is "
+                    "synchronous (has a clock) and can talk to many devices, but needs more pins."),
+        "help": ("Your next step — choose one:\n"
+                 "  If learning: draw the four SPI signals for one controller and one peripheral "
+                 "and trace how a single byte (0x55) is sent: each bit on the clock edge.\n"
+                 "  If practicing: connect the controller's MOSI to its MISO (loopback), send a "
+                 "known byte, and verify the received byte matches. That proves the SPI block and "
+                 "your init are correct before any external hardware is connected.\n\n"
+                 "Which path fits you?"),
+    },
+}
+
+
+def _render_teach_concept(concept) -> str | None:
+    """Render a concept through the MATCH → SORT → CONFIRM → ORGANIZE → COMPARE → HELP Navigator
+    framework. Returns None when the concept has no curated teaching data (fall back to anchor).
+    Accepts sqlite3.Row or dict."""
+    try:
+        name = (concept["name"] or "").strip().lower()
+    except (KeyError, TypeError, IndexError):
+        return None
+    data = _TEACH_CONCEPTS.get(name)
+    if data is None:
+        return None
+    L = [
+        f"MATCH — {data['match']}",
+        "",
+        f"SORT — {data['sort']}",
+        "",
+        f"CONFIRM — {data['confirm']}",
+        "",
+        f"ORGANIZE — {data['organize']}",
+        "",
+        f"COMPARE — {data['compare']}",
+        "",
+        f"HELP — {data['help']}",
+    ]
+    return "\n".join(L)
+
+
 # --- One self-contained few-shot prompt per role (the model never decides which role to play) ----
 
 _ARCH_GUARD = ("\nNote: the register names and AF numbers in the examples are STM32 teaching values. "
@@ -922,6 +998,57 @@ def _feasibility_guard(conn, project_name: str | None) -> str:
             "above or move to a larger board before anything else.\n\n")
 
 
+# Milestone 2 (docs/31): voice the deterministic proof-path packet as a human mentor. Single pass,
+# no Actor-Critic. The engine already chose the pattern, node, branch and proof step — the model only
+# adds tone, reassurance, and wording, and may NOT invent any board-specific fact.
+_PROOF_VOICE_SYSTEM = (
+    "You are a senior firmware mentor guiding a beginner through a debugging PROOF PATH. You are given "
+    "an APPROVED proof-path packet from a deterministic engine. Voice it as a warm, concise, human "
+    "mentor — you choose the tone, a short reassurance, the wording, and the follow-up phrasing.\n"
+    "HARD RULES — you may NOT change the engineering:\n"
+    "- Keep the proof step's ACTION exactly as given (reword for flow, never change what to do).\n"
+    "- Do not change which problem this is, which causes remain, or what comes next.\n"
+    "- State NO board-specific fact — no pin names, register names, UART/USART instance numbers, clock "
+    "frequencies, addresses, or MCU-specific setup — unless it appears verbatim in the packet. If the "
+    "learner needs those, ASK for them (the packet lists what to ask).\n"
+    "- The packet may include a `user_reported_evidence` section listing hardware tokens the learner "
+    "themselves mentioned (pins, instances, clocks, etc.). You may QUOTE these as \u2018you said "
+    "PA9\u2019 or \u2018you reported that\u2019 \u2014 but you may NOT assert them as instructions or "
+    "verified facts (\u2018Configure PA9\u2019, \u2018Use SPI2\u2019). The learner\u2019s own report "
+    "is evidence, not truth.\n"
+    "- The packet may include external field experience. Treat it as UNVERIFIED, source-backed "
+    "CONFIRM/COMPARE support only: the local proof step remains primary; community verification "
+    "steps are secondary CONFIRM support only; compare/speculated cases cannot drive HELP; source "
+    "links are provenance, not the answer; do not turn community details into verified board facts; "
+    "do not turn community pins/registers/clocks into instructions; do not choose or alter "
+    "confidence.\n"
+    "- Talk like a person: a few short sentences, no tables. End with the packet's follow-up (ask for "
+    "the listed evidence on the first step, or ask them to report the result on a branch).")
+
+
+def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | None,
+                      community_report=None) -> str:
+    """Voice the proof-path node as a mentor when a model is available; otherwise (and whenever the
+    voiced answer invents a board-specific fact) fall back to the deterministic, already-safe render.
+    The engine's node/branch/proof-step are authoritative — the model only changes the voice."""
+    deterministic = problem_patterns.render_proof_path(state, board_name)
+    if not use_llm:
+        return deterministic
+    gw = gateway or Gateway()
+    if not gw.available():
+        return deterministic
+    packet = problem_patterns.build_packet(state, board_name, community_report=community_report)
+    prompt = problem_patterns.render_packet_for_prompt(packet) + "\n\nVoice this now, as the mentor:"
+    try:
+        voiced = gw.provider.generate(_PROOF_VOICE_SYSTEM, prompt).strip()
+    except Exception:
+        return deterministic
+    safe, _violations = problem_patterns.verify_voiced(voiced, packet)
+    if not safe or len(voiced) < 20:
+        return deterministic                 # blocked: invented board fact → safe deterministic render
+    return voiced
+
+
 def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 use_llm: bool = False, gateway: Gateway | None = None,
                 project: str | None = None, has_hardware: bool = False,
@@ -954,15 +1081,23 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     career = _is_career(last_user)                     # P3: career -> roadmap, suppress 'Try this'
     active_boards = _mentioned_boards(conn, messages, board_name)  # P4A: every board in the convo
 
-    # First-step Purpose gate (docs/29): decide WHAT this turn is for BEFORE generating any answer.
-    # Anything but ANSWER_NOW returns a non-answer outcome — the proof the mentor is not an answer
-    # engine, and that the user's question (not the selected board) is the subject. ANSWER_NOW falls
-    # through to the existing pipeline below.
+    # First-step Purpose gate (docs/29): the COARSE confusion classifier.
     purpose = decide_purpose(conn, board_name, last_user,
                              {"page_type": page_type, "current_code": current_code or extra_context},
                              messages)
-    if purpose.purpose != "ANSWER_NOW":
+
+    # Central Navigator (docs/32): classify the user's CONFUSION TYPE and route to the right KIND of
+    # guidance. The five modes are first-class; adding a topic/pattern/map is DATA, not router code.
+    route = navigator.classify(purpose, messages)
+    if route.mode == navigator.PROOF_PATH:                    # broken-system → guided proof path
+        return _voice_proof_path(route.proof_state, board_name, use_llm, gateway)
+    if route.mode == navigator.LEARNING_MAP:                  # learning-direction → a route, not a dump
+        if route.learning_map is not None:
+            return navigator.render_learning_map(conn, route.learning_map, board_name)
+        return render_purpose(conn, purpose, board_name, path, active_boards)   # foundation / career
+    if route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
         return render_purpose(conn, purpose, board_name, path, active_boards)
+    # DECISION_MAP (a seeded reasoning.Topic) and TEACH continue into the decision/teaching pipeline.
 
     # Board SELECTION is fleet-wide: the user is asking WHICH board to choose, so the selected board is
     # not the subject. Answer deterministically from every seeded board's verified geometry + the cost
@@ -1005,7 +1140,15 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     elif domain:
         head = _domain_reasoning(domain, cap_set, fam, board_name)
     elif concept is not None:
-        head = f"{concept['anchor']}"
+        rendered = _render_teach_concept(concept)
+        if rendered is not None:
+            head = rendered
+            # Suppress board-specific Try This and followup — the HELPsection already has the
+            # next step and a closing question.
+            try_this = None
+            question = ""
+        else:
+            head = f"{concept['anchor']}"
     elif path:
         head = (f"Good question. For {board_name}, the place to start is '{path[0]['title']}' — "
                 f"{path[0]['why']}")
