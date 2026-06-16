@@ -122,3 +122,83 @@ def test_non_pattern_conversation_is_unaffected(tmp_path):
     conn = _seeded(tmp_path)
     out = mentor_chat(conn, BOARD, _convo("should I use HAL or bare metal?"), use_llm=False)
     assert "trade-off" in out.lower() and "UART bring-up problem" not in out
+
+
+# --- Milestone 2: LLM-voiced proof path with verifier -------------------------------------------
+
+class _FakeGw:
+    """A gateway whose model returns a fixed string — to test voicing + verifier deterministically."""
+    model = "fake"
+
+    def __init__(self, text):
+        self.text = text
+        self.provider = self
+
+    def available(self):
+        return True
+
+    def generate(self, system, prompt):
+        return self.text
+
+
+def test_packet_is_board_agnostic_and_keeps_the_proof_step():
+    st = pp.resolve(_convo("my UART is not working"))
+    pk = pp.build_packet(st, "STM32F103-BluePill")
+    assert pk["stage"] == "intro"
+    assert pk["proof_step"] == st.node.proof_step       # the engine's step, verbatim
+    # the packet never states a board fact — only asks for them
+    blob = pp.render_packet_for_prompt(pk)
+    import re
+    assert not re.search(r"\bP[A-K]\d", blob) and "MHz" not in blob and "USART1" not in blob
+
+
+def test_verifier_passes_clean_voice_and_allows_generic_terms():
+    pk = pp.build_packet(pp.resolve(_convo("my UART is not working")), "Board")
+    clean = ("Okay, this is a UART bring-up problem — let's not chase everything at once. Send 0x55 in "
+             "a loop and watch the TX pin with a scope. Which board and serial port are you on?")
+    safe, violations = pp.verify_voiced(clean, pk)
+    assert safe and violations == []
+
+
+def test_verifier_blocks_invented_board_facts():
+    pk = pp.build_packet(pp.resolve(_convo("my UART is not working")), "Board")
+    dirty = "Set PA9 to USART1 alternate function, enable RCC on APB2, the clock is 72MHz at 0x40013800."
+    safe, violations = pp.verify_voiced(dirty, pk)
+    assert not safe
+    joined = " ".join(violations)
+    assert "PA9" in joined and "USART1" in joined and "72MHz" in joined and "0x40013800" in joined
+
+
+def test_live_voiced_answer_is_used_when_clean(tmp_path):
+    conn = _seeded(tmp_path)
+    voice = ("Okay — this is a UART bring-up problem, and we'll take it one zone at a time. First, send "
+             "0x55 in a loop and watch the TX pin on a scope. Tell me which board, serial instance, and "
+             "TX/RX pins you're using?")
+    out = mentor_chat(conn, BOARD, _convo("my UART is not working"),
+                      use_llm=True, gateway=_FakeGw(voice))
+    assert out == voice                                  # the mentor voice is shown
+
+
+def test_live_voiced_answer_is_blocked_and_falls_back_when_unsafe(tmp_path):
+    conn = _seeded(tmp_path)
+    dirty = "Easy — just set PA9 as USART1 TX, turn on RCC APB2, it runs at 72MHz. Done."
+    out = mentor_chat(conn, BOARD, _convo("my UART is not working"),
+                      use_llm=True, gateway=_FakeGw(dirty))
+    assert "PA9" not in out and "72MHz" not in out       # invented facts never reach the user
+    assert "First proof step" in out and "0x55" in out   # safe deterministic render instead
+
+
+def test_live_branch_authority_stays_with_engine_even_when_voicing(tmp_path):
+    """The branch/next-step come from the DecisionNode, not the model: a dirty voice on a branch turn
+    is blocked and the deterministic branch (RX-not-relevant, GPIO step) is what the user sees."""
+    conn = _seeded(tmp_path)
+    dirty = "It's PB6 on USART2 at 115200, clock 48MHz."
+    out = mentor_chat(conn, BOARD, _convo("my UART is not working", "TX pin is silent"),
+                      use_llm=True, gateway=_FakeGw(dirty))
+    assert "RX wiring and baud are NOT the problem" in out and "plain GPIO output" in out
+
+
+def test_offline_still_deterministic(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, BOARD, _convo("my UART is not working"), use_llm=False)
+    assert "UART bring-up problem" in out and "First proof step" in out

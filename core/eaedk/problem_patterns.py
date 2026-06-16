@@ -15,6 +15,7 @@ is ever asserted (the proof path ASKS for pins/instances, so there is nothing to
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -174,6 +175,91 @@ def _observed(state: ProofPathState) -> str:
         if var and value in var.labels:
             bits.append(var.labels[value])
     return ("You reported " + "; ".join(bits) + ".") if bits else ""
+
+
+# --- LLM-voiced proof path (docs/31): engine approves a packet → LLM voices → verifier guards -----
+#
+# The engine stays the authority: pattern, node, branch and proof step are deterministic. The packet
+# is the ONLY thing the LLM may speak from. The packet is board-AGNOSTIC (it asks for pins/instances,
+# never states them), so a correct voice has no board fact to invent — and the verifier blocks any it
+# does invent, falling back to the deterministic render.
+
+def build_packet(state: ProofPathState, board_name: str | None = None) -> dict:
+    """The approved proof-path packet — exactly what the LLM is allowed to voice for this node."""
+    p, node = state.pattern, state.node
+    pk: dict = {"pattern_title": p.title, "board_name": board_name or "",
+                "proof_step": node.proof_step, "why": node.why}
+    if state.awaiting:
+        pk["stage"] = "reask"
+    elif node.id == p.entry:
+        pk["stage"] = "intro"
+        pk["zones"] = [f"{z} — {d}" for z, d in p.zones]
+        pk["required_evidence"] = list(p.required_evidence)
+        pk["trap"] = p.beginner_traps[0] if p.beginner_traps else ""
+    else:
+        pk["stage"] = "branch"
+        pk["observed"] = _observed(state)
+        pk["rules_out"] = node.rules_out
+        pk["candidates"] = list(node.candidates)
+    return pk
+
+
+def render_packet_for_prompt(pk: dict) -> str:
+    L = ["APPROVED PROOF-PATH PACKET (voice this; never change the engineering):",
+         f"  problem: {pk['pattern_title']}"]
+    if pk.get("board_name"):
+        L.append(f"  board (address by name only — state NO fact about it): {pk['board_name']}")
+    if pk["stage"] == "intro":
+        L.append("  stage: FIRST step — frame the problem into zones, then give the first proof step")
+        L.append("  zones:")
+        L += [f"    - {z}" for z in pk["zones"]]
+        L.append(f"  first proof step (keep the ACTION intact): {pk['proof_step']}")
+        L.append(f"  why this first: {pk['why']}")
+        L.append("  ask the learner for this evidence:")
+        L += [f"    - {e}" for e in pk["required_evidence"]]
+        if pk.get("trap"):
+            L.append(f"  one trap worth a mention: {pk['trap']}")
+    elif pk["stage"] == "branch":
+        L.append("  stage: BRANCH — acknowledge the evidence, say what's ruled out, give the next step")
+        if pk.get("observed"):
+            L.append(f"  observed (normalised — narrate this, not the user's words): {pk['observed']}")
+        if pk.get("rules_out"):
+            L.append(f"  ruled out: {pk['rules_out']}")
+        if pk.get("candidates"):
+            L.append("  remaining causes (do NOT add to or change this list):")
+            L += [f"    - {c}" for c in pk["candidates"]]
+        L.append(f"  next proof step (keep the ACTION intact): {pk['proof_step']}")
+        L.append(f"  why: {pk['why']}")
+        L.append("  end by asking them to run it and report the result")
+    else:  # reask
+        L.append("  stage: RE-ASK — the reply didn't resolve the step; gently re-ask, no new content")
+        L.append(f"  proof step to repeat: {pk['proof_step']}")
+    return "\n".join(L)
+
+
+# Board-specific tokens the engine NEVER puts in a packet, so any of these in a voiced answer that is
+# not present verbatim in the packet is invented and must be blocked.
+_INVENTED_CHECKS = (
+    ("invented pin", r"\bP[A-K]\d{1,2}\b"),
+    ("invented GPIO port", r"\bGPIO[A-K]\b"),
+    ("invented UART/USART instance", r"\b(?:USART|UART)[\s-]?\d\b"),
+    ("invented register/bus", r"\b(?:RCC|MODER|AFRL|AFRH|APB[12]|AHB[12]|BRR|CR1|IDR|ODR)\b"),
+    ("invented clock frequency", r"\b\d+(?:\.\d+)?\s?[MG]Hz\b"),
+    ("invented address", r"\b0x[0-9a-fA-F]{3,}\b"),
+)
+
+
+def verify_voiced(response: str, packet: dict) -> tuple[bool, list[str]]:
+    """Check a voiced answer for invented board-specific facts (pins, registers, UART instance, clock,
+    address) not present in the approved packet. Returns (safe, violations). Safe answers are shown;
+    unsafe ones are blocked by the caller in favour of the deterministic render."""
+    allowed = render_packet_for_prompt(packet).lower()
+    violations: list[str] = []
+    for label, rx in _INVENTED_CHECKS:
+        for m in re.finditer(rx, response, re.I):
+            if m.group(0).lower() not in allowed:
+                violations.append(f"{label}: {m.group(0)}")
+    return (not violations, violations)
 
 
 # ================================================================================================

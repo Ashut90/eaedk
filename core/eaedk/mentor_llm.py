@@ -922,6 +922,45 @@ def _feasibility_guard(conn, project_name: str | None) -> str:
             "above or move to a larger board before anything else.\n\n")
 
 
+# Milestone 2 (docs/31): voice the deterministic proof-path packet as a human mentor. Single pass,
+# no Actor-Critic. The engine already chose the pattern, node, branch and proof step — the model only
+# adds tone, reassurance, and wording, and may NOT invent any board-specific fact.
+_PROOF_VOICE_SYSTEM = (
+    "You are a senior firmware mentor guiding a beginner through a debugging PROOF PATH. You are given "
+    "an APPROVED proof-path packet from a deterministic engine. Voice it as a warm, concise, human "
+    "mentor — you choose the tone, a short reassurance, the wording, and the follow-up phrasing.\n"
+    "HARD RULES — you may NOT change the engineering:\n"
+    "- Keep the proof step's ACTION exactly as given (reword for flow, never change what to do).\n"
+    "- Do not change which problem this is, which causes remain, or what comes next.\n"
+    "- State NO board-specific fact — no pin names, register names, UART/USART instance numbers, clock "
+    "frequencies, addresses, or MCU-specific setup — unless it appears verbatim in the packet. If the "
+    "learner needs those, ASK for them (the packet lists what to ask).\n"
+    "- Talk like a person: a few short sentences, no tables. End with the packet's follow-up (ask for "
+    "the listed evidence on the first step, or ask them to report the result on a branch).")
+
+
+def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | None) -> str:
+    """Voice the proof-path node as a mentor when a model is available; otherwise (and whenever the
+    voiced answer invents a board-specific fact) fall back to the deterministic, already-safe render.
+    The engine's node/branch/proof-step are authoritative — the model only changes the voice."""
+    deterministic = problem_patterns.render_proof_path(state, board_name)
+    if not use_llm:
+        return deterministic
+    gw = gateway or Gateway()
+    if not gw.available():
+        return deterministic
+    packet = problem_patterns.build_packet(state, board_name)
+    prompt = problem_patterns.render_packet_for_prompt(packet) + "\n\nVoice this now, as the mentor:"
+    try:
+        voiced = gw.provider.generate(_PROOF_VOICE_SYSTEM, prompt).strip()
+    except Exception:
+        return deterministic
+    safe, _violations = problem_patterns.verify_voiced(voiced, packet)
+    if not safe or len(voiced) < 20:
+        return deterministic                 # blocked: invented board fact → safe deterministic render
+    return voiced
+
+
 def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 use_llm: bool = False, gateway: Gateway | None = None,
                 project: str | None = None, has_hardware: bool = False,
@@ -969,7 +1008,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # the branch signal here. The gate stays the COARSE match; the pattern is the fine, stateful one.
     pstate = problem_patterns.resolve(messages)
     if pstate.matched:
-        return problem_patterns.render_proof_path(pstate, board_name)
+        return _voice_proof_path(pstate, board_name, use_llm, gateway)
 
     if purpose.purpose != "ANSWER_NOW":
         return render_purpose(conn, purpose, board_name, path, active_boards)
