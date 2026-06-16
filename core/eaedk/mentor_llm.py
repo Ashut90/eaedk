@@ -10,7 +10,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from . import repo, mentor, reasoning, semantic_cost, arbiter
+from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns
 from .llm.gateway import Gateway
 from .llm.postfilter import build_board_allowlist, filter_text
 
@@ -961,6 +961,16 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     purpose = decide_purpose(conn, board_name, last_user,
                              {"page_type": page_type, "current_code": current_code or extra_context},
                              messages)
+
+    # Fine MATCH (docs/30): is this conversation inside a known engineering PROBLEM PATTERN (UART
+    # bring-up, …)? The pattern engine is CONVERSATION-aware (it replays the whole transcript), so it
+    # takes precedence over the Purpose gate, which only sees the latest message in isolation — mid
+    # proof-path a bare evidence reply ("TX is silent") looks out-of-scope to the gate but is exactly
+    # the branch signal here. The gate stays the COARSE match; the pattern is the fine, stateful one.
+    pstate = problem_patterns.resolve(messages)
+    if pstate.matched:
+        return problem_patterns.render_proof_path(pstate, board_name)
+
     if purpose.purpose != "ANSWER_NOW":
         return render_purpose(conn, purpose, board_name, path, active_boards)
 
