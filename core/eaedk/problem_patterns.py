@@ -53,6 +53,10 @@ class ProblemPattern:
     entry: str
     nodes: dict[str, DecisionNode]
     evidence_vars: dict[str, EvidenceVar]
+    # Optional extra forbidden-claim regexes this pattern wants blocked on top of the generic,
+    # peripheral-agnostic categories (e.g. a vendor API or board-specific setup string). Most
+    # patterns need none — the generic categories already cover pins/registers/instances/clocks.
+    sensitive_terms: tuple[str, ...] = ()
 
 
 @dataclass
@@ -201,6 +205,7 @@ def build_packet(state: ProofPathState, board_name: str | None = None) -> dict:
         pk["observed"] = _observed(state)
         pk["rules_out"] = node.rules_out
         pk["candidates"] = list(node.candidates)
+    pk["sensitive_terms"] = list(p.sensitive_terms)      # pattern-declared extra forbidden claims
     return pk
 
 
@@ -237,25 +242,38 @@ def render_packet_for_prompt(pk: dict) -> str:
     return "\n".join(L)
 
 
-# Board-specific tokens the engine NEVER puts in a packet, so any of these in a voiced answer that is
-# not present verbatim in the packet is invented and must be blocked.
-_INVENTED_CHECKS = (
-    ("invented pin", r"\bP[A-K]\d{1,2}\b"),
-    ("invented GPIO port", r"\bGPIO[A-K]\b"),
-    ("invented UART/USART instance", r"\b(?:USART|UART)[\s-]?\d\b"),
-    ("invented register/bus", r"\b(?:RCC|MODER|AFRL|AFRH|APB[12]|AHB[12]|BRR|CR1|IDR|ODR)\b"),
-    ("invented clock frequency", r"\b\d+(?:\.\d+)?\s?[MG]Hz\b"),
-    ("invented address", r"\b0x[0-9a-fA-F]{3,}\b"),
+# Generic, peripheral- and vendor-AGNOSTIC categories of board-specific claims. The engine never puts
+# any of these in a packet, so any that a voiced answer states without it being in the packet (or a
+# verified board fact carried there) is invented. These are CATEGORIES — a peripheral family + a
+# number, several pin conventions, register forms — not a UART/STM32 token list. A pattern may add
+# more via ProblemPattern.sensitive_terms.
+_PERIPHERAL = ("UART", "USART", "LPUART", "SPI", "QSPI", "I2C", "IIC", "I2S", "SAI", "ADC", "DAC",
+               "TIM", "TIMER", "PWM", "CAN", "FDCAN", "RTC", "DMA", "USB", "SDIO", "SDMMC", "COMP",
+               "OPAMP", "DCMI", "LTDC", "ETH")
+_GENERIC_CHECKS = (
+    # PeripheralX — any peripheral family immediately followed by an instance number (SPI2, I2C1, …)
+    ("peripheral instance", r"\b(?:" + "|".join(_PERIPHERAL) + r")\s?\d+\b"),
+    # pins across conventions: STM32/AVR PA9·PB6, ESP32 GPIO21, Arduino D13
+    ("pin", r"\bP[A-L]\d{1,2}\b|\bGPIO\s?\d{1,2}\b|\bD\d{1,2}\b"),
+    # registers: vendor underscore form (SPI_CR1, I2C_CR2), struct-access (GPIOA->ODR), AVR port
+    # registers (PORTB, DDRB), and common bare register/bus/clock-domain names across families
+    ("register", r"\b[A-Z][A-Z0-9]*_[A-Z][A-Z0-9]+\b|\b[A-Z]\w*->\w+\b|\bPORT[A-L]\d?\b|\bDDR[A-L]\b|"
+                 r"\b(?:RCC|MODER|ODR|IDR|AFRL?|AFRH?|BRR|APB\d|AHB\d|CR[12]|CCR|PSC|ARR)\b"),
+    ("clock frequency", r"\b\d+(?:\.\d+)?\s?[kMG]?Hz\b"),
+    ("address", r"\b0x[0-9a-fA-F]{3,}\b"),
 )
 
 
 def verify_voiced(response: str, packet: dict) -> tuple[bool, list[str]]:
-    """Check a voiced answer for invented board-specific facts (pins, registers, UART instance, clock,
-    address) not present in the approved packet. Returns (safe, violations). Safe answers are shown;
-    unsafe ones are blocked by the caller in favour of the deterministic render."""
+    """Check a voiced answer for invented board/peripheral-specific facts not present in the approved
+    packet. Generic across peripherals and vendors (pins, registers, instances, clocks, addresses),
+    plus any extra forbidden patterns the pattern declared. Returns (safe, violations); unsafe answers
+    are blocked by the caller in favour of the deterministic render."""
     allowed = render_packet_for_prompt(packet).lower()
+    checks = list(_GENERIC_CHECKS) + [("pattern-sensitive claim", rx)
+                                      for rx in packet.get("sensitive_terms", ())]
     violations: list[str] = []
-    for label, rx in _INVENTED_CHECKS:
+    for label, rx in checks:
         for m in re.finditer(rx, response, re.I):
             if m.group(0).lower() not in allowed:
                 violations.append(f"{label}: {m.group(0)}")

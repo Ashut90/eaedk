@@ -202,3 +202,47 @@ def test_offline_still_deterministic(tmp_path):
     conn = _seeded(tmp_path)
     out = mentor_chat(conn, BOARD, _convo("my UART is not working"), use_llm=False)
     assert "UART bring-up problem" in out and "First proof step" in out
+
+
+# --- Verifier generalization: peripheral- and vendor-agnostic (no SPI pattern needed) ------------
+
+import pytest
+
+
+@pytest.mark.parametrize("voiced, needle, category", [
+    ("Use SPI2 on PB13/PB14/PB15.",        "SPI2",        "peripheral instance"),
+    ("Set I2C1 on PB6/PB7.",               "I2C1",        "peripheral instance"),
+    ("On ESP32 just use GPIO21.",          "GPIO21",      "pin"),
+    ("Set the SPI clock to 10MHz.",        "10MHz",       "clock frequency"),
+    ("Write register SPI_CR1 to enable.",  "SPI_CR1",     "register"),
+    ("Use address 0x40013000 for the peripheral.", "0x40013000", "address"),
+    ("Configure PORTB and DDRB on the AVR.",       "PORTB",      "register"),
+    ("Wire it to Arduino pin D13.",        "D13",         "pin"),
+])
+def test_verifier_blocks_invented_non_uart_claims(voiced, needle, category):
+    """A UART packet is enough — the verifier is pattern-independent. These prove it protects future
+    SPI/I2C/ESP32/AVR/Arduino patterns with no peripheral-specific code and no SPI pattern added."""
+    pk = pp.build_packet(pp.resolve(_convo("my UART is not working")), "Board")
+    safe, violations = pp.verify_voiced(voiced, pk)
+    assert not safe
+    assert any(needle.lower() in v.lower() for v in violations)
+    assert any(category in v for v in violations)
+
+
+def test_verifier_allows_generic_peripheral_talk_without_specifics():
+    """Naming a peripheral family WITHOUT an instance number / pin / register is fine — the mentor may
+    say 'check your SPI bus', just not invent 'SPI2 on PB13'."""
+    pk = pp.build_packet(pp.resolve(_convo("my UART is not working")), "Board")
+    safe, violations = pp.verify_voiced(
+        "Check your SPI bus and the I2C lines, then watch the timer output.", pk)
+    assert safe and violations == []
+
+
+def test_pattern_can_declare_extra_sensitive_terms():
+    """A ProblemPattern may declare its own forbidden claims (e.g. a vendor API). build_packet carries
+    them; verify_voiced enforces them — the per-pattern extension point, no engine change."""
+    assert pp.build_packet(pp.resolve(_convo("my UART is not working")), "B")["sensitive_terms"] == []
+    pk = pp.build_packet(pp.resolve(_convo("my UART is not working")), "B")
+    pk["sensitive_terms"] = [r"\bvTaskDelay\b", r"\besp_wifi_init\b"]
+    safe, viol = pp.verify_voiced("Just call vTaskDelay() and esp_wifi_init().", pk)
+    assert not safe and any("vTaskDelay" in v for v in viol)
