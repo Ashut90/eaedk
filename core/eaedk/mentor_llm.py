@@ -10,7 +10,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns
+from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
 from .llm.gateway import Gateway
 from .llm.postfilter import build_board_allowlist, filter_text
 
@@ -993,25 +993,23 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     career = _is_career(last_user)                     # P3: career -> roadmap, suppress 'Try this'
     active_boards = _mentioned_boards(conn, messages, board_name)  # P4A: every board in the convo
 
-    # First-step Purpose gate (docs/29): decide WHAT this turn is for BEFORE generating any answer.
-    # Anything but ANSWER_NOW returns a non-answer outcome — the proof the mentor is not an answer
-    # engine, and that the user's question (not the selected board) is the subject. ANSWER_NOW falls
-    # through to the existing pipeline below.
+    # First-step Purpose gate (docs/29): the COARSE confusion classifier.
     purpose = decide_purpose(conn, board_name, last_user,
                              {"page_type": page_type, "current_code": current_code or extra_context},
                              messages)
 
-    # Fine MATCH (docs/30): is this conversation inside a known engineering PROBLEM PATTERN (UART
-    # bring-up, …)? The pattern engine is CONVERSATION-aware (it replays the whole transcript), so it
-    # takes precedence over the Purpose gate, which only sees the latest message in isolation — mid
-    # proof-path a bare evidence reply ("TX is silent") looks out-of-scope to the gate but is exactly
-    # the branch signal here. The gate stays the COARSE match; the pattern is the fine, stateful one.
-    pstate = problem_patterns.resolve(messages)
-    if pstate.matched:
-        return _voice_proof_path(pstate, board_name, use_llm, gateway)
-
-    if purpose.purpose != "ANSWER_NOW":
+    # Central Navigator (docs/32): classify the user's CONFUSION TYPE and route to the right KIND of
+    # guidance. The five modes are first-class; adding a topic/pattern/map is DATA, not router code.
+    route = navigator.classify(purpose, messages)
+    if route.mode == navigator.PROOF_PATH:                    # broken-system → guided proof path
+        return _voice_proof_path(route.proof_state, board_name, use_llm, gateway)
+    if route.mode == navigator.LEARNING_MAP:                  # learning-direction → a route, not a dump
+        if route.learning_map is not None:
+            return navigator.render_learning_map(conn, route.learning_map, board_name)
+        return render_purpose(conn, purpose, board_name, path, active_boards)   # foundation / career
+    if route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
         return render_purpose(conn, purpose, board_name, path, active_boards)
+    # DECISION_MAP (a seeded reasoning.Topic) and TEACH continue into the decision/teaching pipeline.
 
     # Board SELECTION is fleet-wide: the user is asking WHICH board to choose, so the selected board is
     # not the subject. Answer deterministically from every seeded board's verified geometry + the cost
