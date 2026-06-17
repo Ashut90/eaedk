@@ -313,6 +313,13 @@ _VOCAB_STOP = frozenset((
 
 # Capitalised pronoun forms that are never an external subject.
 _SUBJECT_STOP = {"i", "im", "ive", "id", "ill"}
+# Question/clause starters that are NOT proper nouns even when capitalised at a sentence boundary.
+# A capital alone is not a "this is a hardware subject" signal — these must never trigger a decline.
+_QUESTION_STARTERS = {
+    "how", "where", "what", "when", "why", "who", "which", "should", "can", "could", "would",
+    "is", "are", "am", "do", "does", "did", "will", "may", "might", "my", "the", "a", "an",
+    "this", "that", "these", "those", "we", "you", "they", "it", "and", "but", "so", "or", "if",
+}
 
 
 @dataclass
@@ -369,27 +376,26 @@ def _has_evidence(low: str, code: str) -> bool:
 
 def _external_subject(text: str) -> str:
     """A mid-sentence, capitalised proper-noun phrase the question is really about (e.g. 'Nvidia
-    Jetson'). Empty when it names no such entity. A named-entity signal, NOT a blocklist: sentence-
-    initial capitals and the pronoun 'I' are ignored. Only consulted once a question has already
-    failed to resolve to any grounded EAEDK knowledge."""
-    phrases: list[str] = []
-    cur: list[str] = []
-    at_start = True
-    for tok in re.findall(r"[A-Za-z0-9][A-Za-z0-9.+#'-]*|[.?!]", text or ""):
-        if tok in ".?!":
-            if cur:
-                phrases.append(" ".join(cur)); cur = []
-            at_start = True
-            continue
-        proper = tok[:1].isupper() and not at_start and tok.lower().rstrip(".") not in _SUBJECT_STOP
-        if proper:
-            cur.append(tok)
-        elif cur:
-            phrases.append(" ".join(cur)); cur = []
-        at_start = False
-    if cur:
-        phrases.append(" ".join(cur))
-    return phrases[0] if phrases else ""
+    Jetson'). Empty when it names no such entity. A named-entity signal, NOT a blocklist.
+
+    Sentence boundaries (. ? !) are detected FIRST and per-sentence, so a capital that merely STARTS
+    the next sentence ('… libraries. How should I start?') is never mistaken for a subject. Sentence-
+    initial capitals, the pronoun 'I', and question/clause starters (How/Where/What/Should/…) are
+    ignored. A capital alone is not treated as a proper noun."""
+    for sentence in re.split(r"[.?!]+", text or ""):
+        words = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#'-]*", sentence)   # '.' is a boundary, not in-word
+        cur: list[str] = []
+        for idx, w in enumerate(words):
+            proper = (w[:1].isupper() and idx > 0                      # never the sentence-initial word
+                      and w.lower() not in _SUBJECT_STOP
+                      and w.lower() not in _QUESTION_STARTERS)
+            if proper:
+                cur.append(w)
+            elif cur:
+                return " ".join(cur)
+        if cur:
+            return " ".join(cur)
+    return ""
 
 
 def _subject_grounded(conn: sqlite3.Connection, subject: str, board_name: str) -> bool:
@@ -624,6 +630,22 @@ _BOARD_ALIASES = {
     "RTL8722DM":              ("rtl8722", "ameba"),
 }
 
+# Chip FAMILIES EAEDK can classify even when the exact part is not a seeded board. Specific aliases
+# (Pico) before general (Raspberry Pi). These carry the board-CLASS only — the per-board facts still
+# come from the DB; this is a context-precedence guard, not a board database.
+_CHIP_FAMILIES = (
+    ("RP2040",       "mcu_no_linux",  ("rp2040", "raspberry pi pico", "pico w", "pico")),
+    ("STM32F103",    "mcu_no_linux",  ("stm32f103", "blue pill", "bluepill")),
+    ("nRF52840",     "mcu_no_linux",  ("nrf52840", "nrf52832", "nrf52 dk", "nrf52", "nordic nrf")),
+    ("ESP32",        "mcu_no_linux",  ("esp32 s3", "esp32-s3", "esp32s3", "esp32")),
+    ("Raspberry Pi", "linux_capable", ("raspberry pi", "rpi4", "rpi", "pi 4", "pi4")),
+    ("BeagleBone",   "linux_capable", ("beaglebone", "beagle bone", "bbb")),
+    ("Jetson",       "linux_capable", ("jetson", "nvidia jetson")),
+)
+
+# A chip-like part we recognise but cannot classify — used to ASK rather than hijack the selected board.
+_CHIP_TOKEN = re.compile(r"\b(stm32\w+|nrf5\d{3,4}|esp32\w*|imx\w+|rp\d{4}|am335\w*|msp430\w*|sam[dex]\w*)\b")
+
 
 def _norm_words(s: str) -> str:
     """Lowercase, drop punctuation to spaces, collapse — so ' uno ' matches but 'announce' doesn't."""
@@ -648,6 +670,43 @@ def _mentioned_boards(conn: sqlite3.Connection, messages: list[dict], selected: 
         if any(f" {a} " in text for a in _board_aliases(n)):
             active.append(n)
     return active
+
+
+def _explicit_board_target(conn: sqlite3.Connection, text: str, selected: str) -> dict | None:
+    """A board/chip the user explicitly named in THIS turn. The selected UI board is context; an
+    explicit target in the sentence is the subject. Detection order, deterministic and LLM-free:
+      1+2. a SEEDED board (by alias) — class DERIVED from the DB SoC (general, not hardcoded);
+      3.   a common chip FAMILY not seeded (nRF52840, ESP32-S3, a bare "Raspberry Pi", …);
+      4.   a recognised chip PART we cannot classify — ask, never hijack the selected board.
+    """
+    low = _norm_words(text)
+
+    def target(label: str, board_class: str, canonical: str | None) -> dict:
+        differs = True if canonical is None else (canonical != selected)
+        return {"label": label, "board_class": board_class, "canonical": canonical,
+                "selected_board": selected, "selected_differs": differs}
+
+    def family_label(default: str) -> str:               # prefer the clean chip-family name
+        for label, _klass, aliases in _CHIP_FAMILIES:
+            if any(f" {_norm_words(a).strip()} " in low for a in aliases):
+                return label
+        return default
+
+    for r in repo.list_boards(conn):                     # 1+2: seeded board, class from the DB SoC
+        name = r["name"]
+        if any(f" {a} " in low for a in _board_aliases(name)):
+            _b, soc = repo.load_board(conn, name)
+            klass = "linux_capable" if (soc and mentor.supports_linux(soc)) else "mcu_no_linux"
+            return target(family_label(name), klass, name)
+
+    for label, klass, aliases in _CHIP_FAMILIES:         # 3: common family not in the DB
+        if any(f" {_norm_words(a).strip()} " in low for a in aliases):
+            return target(label, klass, None)
+
+    m = _CHIP_TOKEN.search(low)                          # 4: recognised part, unknown class → ask
+    if m:
+        return target(m.group(1).upper(), "unknown", None)
+    return None
 
 
 def _and_join(items: list[str]) -> str:
@@ -1080,6 +1139,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                                           "current_code": current_code})
     career = _is_career(last_user)                     # P3: career -> roadmap, suppress 'Try this'
     active_boards = _mentioned_boards(conn, messages, board_name)  # P4A: every board in the convo
+    explicit_target = _explicit_board_target(conn, last_user, board_name)
 
     # First-step Purpose gate (docs/29): the COARSE confusion classifier.
     purpose = decide_purpose(conn, board_name, last_user,
@@ -1091,12 +1151,28 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     route = navigator.classify(purpose, messages)
     if route.mode == navigator.PROOF_PATH:                    # broken-system → guided proof path
         return _voice_proof_path(route.proof_state, board_name, use_llm, gateway)
+    # The selected board is "anchored" (in scope) only when the user named a board/chip, has an active
+    # project, or says "this board" — never for a bare board-less direction/career question.
+    board_anchored = (explicit_target is not None or bool(project)
+                      or any(p in last_user.lower() for p in ("this board", "my board", "selected board")))
+
     if route.mode == navigator.LEARNING_MAP:                  # learning-direction → a route, not a dump
         if route.learning_map is not None:
-            return navigator.render_learning_map(conn, route.learning_map, board_name)
-        return render_purpose(conn, purpose, board_name, path, active_boards)   # foundation / career
+            return navigator.render_learning_map(conn, route.learning_map, board_name,
+                                                 explicit_target, last_user, board_anchored)
+        # foundation / career: board-less → a board-INDEPENDENT firmware direction (no selected board)
+        if not board_anchored:
+            return navigator.firmware_direction_map()
+        return render_purpose(conn, purpose, board_name, path, active_boards)   # board-anchored career
     if route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
         return render_purpose(conn, purpose, board_name, path, active_boards)
+
+    # P2 — a board-LESS broad-direction question must NOT be answered as if it were about the selected
+    # board: a domain question gets honest scoped uncertainty; a bare 'where do I start?' asks for the
+    # direction instead of dumping the selected board's blink roadmap.
+    if (route.mode == navigator.TEACH and not board_anchored and concept is None
+            and navigator.is_broad_direction(last_user)):
+        return navigator.scoped_uncertainty(last_user) if domain else navigator.direction_clarify()
     # DECISION_MAP (a seeded reasoning.Topic) and TEACH continue into the decision/teaching pipeline.
 
     # Board SELECTION is fleet-wide: the user is asking WHICH board to choose, so the selected board is
