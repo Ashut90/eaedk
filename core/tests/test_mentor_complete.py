@@ -154,7 +154,7 @@ def test_grounded_confirmations_catch_real_fault(tmp_path):
 def test_chat_backbone_always_has_answer_try_and_question(tmp_path):
     conn = _seeded(tmp_path)
     a = mentor_chat(conn, "STM32F103-BluePill",
-                    [{"role": "user", "content": "where do I start?"}], use_llm=False)
+                    [{"role": "user", "content": "where do I start on this board?"}], use_llm=False)
     assert "Try this:" in a
     assert a.rstrip().endswith("?") or "Question:" in a   # always ends with an action
     assert len(a) > 40
