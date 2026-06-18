@@ -610,8 +610,600 @@ UART_BRINGUP = ProblemPattern(
 )
 
 
-# The pattern registry. Add the next curated pattern here (SPI / I2C / HardFault / …); the engine
-# above is already general over all of them.
+# ================================================================================================
+# SEED PATTERN #2 — I2C bring-up failure (curated, deterministic). Encodes the real debugging
+# order: open-drain/pull-ups first (the #1 cause), then addressing, then the 7/8-bit shift vs the
+# device-or-master-clock split.
+# ================================================================================================
+
+_BUS_IDLE = EvidenceVar(
+    name="bus_idle",
+    values={
+        "low": ("stuck low", "stays low", "held low", "pulled low", "line is low", "lines are low",
+                "sda is low", "scl is low", "sda low", "scl low", "won't go high", "wont go high",
+                "not going high", "never goes high", "reads 0v", "at 0v", "stuck at 0", "bus is low",
+                "can't pull high", "cant pull high", "low at idle"),
+        "high": ("idle high", "idles high", "high at idle", "both high", "lines are high",
+                 "sitting high", "sit high", "at 3.3", "at 3v3", "at vdd", "both at 3.3",
+                 "idle at 3.3", "sitting at 3.3", "lines idle high", "resting high"),
+    },
+    labels={"low": "one or both I2C lines stuck low at idle (the bus can't be released)",
+            "high": "both SDA and SCL idling high — the electrical base is good"},
+)
+
+_SCAN_RESULT = EvidenceVar(
+    name="scan_result",
+    values={
+        "found": ("acks at", "ack at", "shows up at", "shows up", "found at", "detected at",
+                  "appears at", "responds at", "it's at 0x", "its at 0x", "scan shows",
+                  "scanner finds", "scan finds a", "device found", "found a device", "sees it at",
+                  "i see it at", "shows at"),
+        "none": ("no ack", "nacks", "no device", "nothing shows", "nothing responds", "no response",
+                 "finds nothing", "scan finds nothing", "empty scan", "scans empty", "not detected",
+                 "no devices", "doesn't show up", "doesnt show up", "nothing acks", "no one acks"),
+    },
+    labels={"found": "the bus scan finds a device (possibly at an unexpected address)",
+            "none": "the bus scan finds no device at any address"},
+)
+
+_I2C_NODES = {
+    "bus_idle_check": DecisionNode(
+        id="bus_idle_check", zone="Bus electrical (pull-ups)",
+        proof_step="With the bus idle (no transfers running), measure SDA and SCL against ground. "
+                   "Both should sit at Vdd (e.g. 3.3 V).",
+        why="I2C is open-drain: devices can only pull the lines LOW, and pull-up resistors are what "
+            "pull them HIGH. If either line isn't resting high at idle, the bus can never be "
+            "released — so addressing, ACK and data are all downstream of this and irrelevant until "
+            "it is fixed.",
+        expects="bus_idle",
+        branches={"low": "lines_low", "high": "addr_probe"}),
+    "lines_low": DecisionNode(
+        id="lines_low", zone="pull-ups / stuck device / wiring",
+        rules_out="A line stuck low at idle is electrical — so the device address, ACK and your "
+                  "transfer code are NOT the problem yet; nothing can work until the line is released.",
+        candidates=("missing pull-up resistors (open-drain cannot pull high on its own)",
+                    "pull-ups too weak/strong, or tied to the wrong rail",
+                    "one device holding the line (unpowered, stuck, or clock-stretching forever)",
+                    "SDA/SCL shorted together, swapped, or shorted to ground"),
+        proof_step="Confirm a pull-up (typically 2.2k-4.7k) sits on BOTH SDA and SCL to the bus "
+                   "voltage. Then remove devices one at a time — if a line springs back high when one "
+                   "comes off, that device was holding it.",
+        why="A permanently-low line is a wiring/electrical fault, not software. Checking the pull-ups "
+            "and pulling devices one at a time separates 'no pull-up' from 'a device is holding the "
+            "bus' before any code matters."),
+    "addr_probe": DecisionNode(
+        id="addr_probe", zone="addressing / ACK",
+        rules_out="Both lines idle high, so pull-ups and the bus electrical layer are good — the fault "
+                  "is now addressing or the device itself.",
+        candidates=("the address in code doesn't match the device (7-bit vs 8-bit shift)",
+                    "the device isn't powered or its address pins are wrong",
+                    "the master isn't actually clocking SCL"),
+        proof_step="Run an I2C bus scan (probe every 7-bit address from 0x08 to 0x77) and note whether "
+                   "ANY address ACKs.",
+        why="With the electrical base proven good, a scan is the one test that splits 'wrong address' "
+            "(something ACKs, just not where you expected) from 'nothing answers at all' (device or "
+            "master clock).",
+        expects="scan_result",
+        branches={"found": "addr_mismatch", "none": "no_ack"}),
+    "addr_mismatch": DecisionNode(
+        id="addr_mismatch", zone="address format (7-bit vs 8-bit)",
+        rules_out="A device ACKs on the scan, so wiring, pull-ups, clocking and the peripheral are all "
+                  "working — the fault is the address constant in your code.",
+        candidates=("using the datasheet's 8-bit read/write address where the driver wants the 7-bit "
+                    "address",
+                    "the classic <<1 shift: your value is double (or half) the scanned address",
+                    "wrong A0/A1/A2 address-strap pins on the device"),
+        proof_step="Compare the address the scan reported with the one in your code. If they differ by "
+                   "a factor of two (one is the other shifted left by 1), that is the 7-bit/8-bit "
+                   "mismatch — use the form your HAL expects (most want the 7-bit address).",
+        why="A scan hit at address X while your code uses 2X (or X/2) is the canonical 7-bit-vs-8-bit "
+            "shift bug: the device is fine, the constant is wrong."),
+    "no_ack": DecisionNode(
+        id="no_ack", zone="device power / SCL clocking",
+        rules_out="The lines idle high, so this is NOT the missing-pull-up fault; with nothing "
+                  "answering, the silence is the device or the master's clock.",
+        candidates=("the target device isn't powered (or its enable/reset pin is wrong)",
+                    "SCL never actually clocks — the I2C peripheral clock isn't enabled, or the pins "
+                    "aren't on the I2C alternate function",
+                    "the wrong I2C instance/pins are configured",
+                    "bus speed set faster than the device supports"),
+        proof_step="Confirm the device has power and its address/enable pins are set, then scope SCL "
+                   "during a transfer. No pulses on SCL → the fault is the master/peripheral side; "
+                   "clean clock but still no ACK → the device side.",
+        why="With the electrical base good and nothing answering, you must separate 'the master never "
+            "clocks' from 'the device never answers' — scoping SCL during a transfer is the single "
+            "measurement that splits them."),
+}
+
+I2C_BRINGUP = ProblemPattern(
+    name="i2c_bringup",
+    title="I2C bring-up problem",
+    match_groups=(
+        ("i2c", "i²c", "iic", "sda", "scl", "two-wire", "sccb"),
+        ("not working", "isn't working", "isnt working", "doesn't work", "doesnt work", "no ack",
+         "nack", "not responding", "no response", "not respond", "won't respond", "wont respond",
+         "not detected", "isn't detected", "can't find", "cant find", "not found", "no device",
+         "reads 0xff", "all 0xff", "reads ff", "stuck low", "bus stuck", "bus hang", "hangs",
+         "no data", "garbage", "won't ack", "wont ack", "not getting", "can't read", "cant read",
+         "device is dead", "not showing"),
+    ),
+    zones=(
+        ("Bus electrical (pull-ups)", "SDA and SCL idle HIGH via pull-ups — open-drain only pulls low"),
+        ("Addressing", "7-bit vs 8-bit address; the <<1 shift and the R/W bit"),
+        ("Device power / enable", "the target is powered and its address-strap pins are set"),
+        ("Clocking / pinmux", "the I2C peripheral is clocked and SDA/SCL are on the I2C alt function"),
+        ("Bus contention / speed", "clock-stretching, a stuck device, or a speed the slave can't meet"),
+    ),
+    required_evidence=(
+        "Which board / MCU and which I2C instance?",
+        "What is the device and its datasheet address (7-bit or 8-bit)?",
+        "What pull-up resistors are on SDA/SCL (value, to what voltage)?",
+        "How many devices are on the bus?",
+        "What bus speed (100 kHz / 400 kHz)?",
+    ),
+    beginner_traps=(
+        "I2C is open-drain — with no pull-ups the lines never go high and nothing works (the #1 cause)",
+        "using the datasheet's 8-bit read/write address directly when the driver wants the 7-bit "
+        "address (the <<1 shift)",
+        "leaving the device's address-select pins (A0/A1/A2) floating",
+        "driving SDA/SCL as plain GPIO instead of the I2C alternate function",
+        "one stuck or unpowered device holding a line low kills the whole bus",
+    ),
+    entry="bus_idle_check",
+    nodes=_I2C_NODES,
+    evidence_vars={"bus_idle": _BUS_IDLE, "scan_result": _SCAN_RESULT},
+)
+
+
+# ================================================================================================
+# SEED PATTERN #3 — SPI bring-up / silent-data failure (curated, deterministic). Encodes the real
+# debugging order: chip-select first (a deaf slave), then the clock, then CPOL/CPHA-vs-MISO.
+# ================================================================================================
+
+_CS_STATE = EvidenceVar(
+    name="cs_state",
+    values={
+        "not_asserted": ("stays high", "cs stays high", "cs is high", "never goes low",
+                         "cs never", "chip select stays high", "cs high the whole", "cs floating",
+                         "nss high", "cs not asserting", "cs doesn't go low", "cs doesnt go low",
+                         "cs stuck high", "ss stays high"),
+        "asserted": ("cs goes low", "cs asserts", "cs drops", "goes low", "nss low", "cs is low",
+                     "cs pulses low", "asserts low", "cs low during", "chip select goes low",
+                     "ss goes low"),
+    },
+    labels={"not_asserted": "chip-select never asserts (the slave is never selected)",
+            "asserted": "chip-select asserts correctly for the transfer"},
+)
+
+_SCLK_STATE = EvidenceVar(
+    name="sclk_state",
+    values={
+        "present": ("sclk toggles", "clock toggles", "sck toggles", "see the clock", "i see sclk",
+                    "clock pulses", "8 clocks", "clock is present", "clock looks", "sclk is toggling",
+                    "clock edges"),
+        "absent": ("no clock", "no sclk", "sclk is dead", "clock is dead", "no sck", "sclk flat",
+                   "clock not toggling", "no clock pulses", "no edges", "dead clock", "sck is dead",
+                   "sclk stays"),
+    },
+    labels={"present": "SCLK is clocking the slave (clean edges during the transfer)",
+            "absent": "SCLK never clocks — no edges leave the master"},
+)
+
+_SPI_NODES = {
+    "cs_check": DecisionNode(
+        id="cs_check", zone="Chip-select (CS/NSS)",
+        proof_step="Scope the slave's CS (NSS/SS) pin during a transfer. It must go LOW for the whole "
+                   "transaction and return HIGH after.",
+        why="An SPI slave only listens and drives MISO while CS is asserted (almost always active-low). "
+            "If CS never goes low — still a GPIO, the wrong pin, software never toggling it, or inverted "
+            "polarity — the slave is electrically deaf and MISO just floats. Mode and data are moot "
+            "until CS asserts.",
+        expects="cs_state",
+        branches={"not_asserted": "cs_fault", "asserted": "clk_check"}),
+    "cs_fault": DecisionNode(
+        id="cs_fault", zone="CS pin / polarity / control",
+        rules_out="CS never asserting means the slave is never selected — so SPI mode, MOSI data and "
+                  "the MISO line are NOT the problem yet.",
+        candidates=("CS still configured as a plain GPIO, or never driven",
+                    "software never pulls CS low around the transfer (hardware-NSS vs software-NSS mix-up)",
+                    "the wrong pin is being used for CS",
+                    "inverted polarity — the slave wants active-low but CS is driven the other way"),
+        proof_step="Drive CS explicitly low in software immediately before the transfer and high after "
+                   "(or confirm hardware NSS is enabled and mapped to the right pin), and confirm the "
+                   "slave's CS is active-low.",
+        why="A slave that never sees CS asserted can do nothing; fixing selection is a precondition for "
+            "any clock, mode or data debugging."),
+    "clk_check": DecisionNode(
+        id="clk_check", zone="Clock (SCLK)",
+        rules_out="CS asserts, so the slave is selected — selection is not the fault.",
+        candidates=("the SPI peripheral clock isn't enabled",
+                    "SCLK is on the wrong pin / not the SPI alternate function",
+                    "the wrong SPI instance, or the peripheral isn't in master mode"),
+        proof_step="With CS asserting, scope SCLK during the transfer — it must show the expected edges "
+                   "(8 per byte).",
+        why="With the slave selected, no clock means no data can move. A dead SCLK is the master's "
+            "clock generation — peripheral clock, pinmux, instance, or not actually in master mode.",
+        expects="sclk_state",
+        branches={"absent": "clk_fault", "present": "mode_or_miso"}),
+    "clk_fault": DecisionNode(
+        id="clk_fault", zone="peripheral clock / pinmux / master mode",
+        rules_out="CS asserts but SCLK is dead — so this is the master's clock generation, not the slave "
+                  "and not the data lines.",
+        candidates=("the SPI peripheral clock is not enabled before configuration",
+                    "the SCLK pin is left as GPIO or on the wrong alternate function",
+                    "the wrong SPI instance is configured",
+                    "the peripheral is not actually in master mode"),
+        proof_step="Enable the SPI peripheral clock, confirm SCLK is on the SPI alternate function and "
+                   "the right instance, and that the peripheral is configured as master; re-scope SCLK.",
+        why="A selected slave with no clock is always the master side; isolating clock/pinmux/instance "
+            "before touching mode keeps you from chasing the data when nothing is even clocking."),
+    "mode_or_miso": DecisionNode(
+        id="mode_or_miso", zone="SPI mode (CPOL/CPHA) / MISO return",
+        rules_out="CS selects the slave and SCLK clocks it, so selection and clocking are fine — the "
+                  "fault is the data itself: SPI mode or the MISO return path.",
+        candidates=("CPOL/CPHA (SPI mode 0-3) mismatch — bytes come back shifted or garbled",
+                    "MISO floating (reads all 0xFF) or stuck (all 0x00) — the slave isn't driving it",
+                    "MSB-first vs LSB-first mismatch",
+                    "MOSI not carrying the command the slave expects (so it returns nothing useful)"),
+        proof_step="Match the SPI mode (CPOL/CPHA) to the slave's datasheet exactly, then scope MISO "
+                   "during a read: all-0xFF means nothing drives it (slave not selected/powered or wrong "
+                   "pin), all-0x00 likewise, and garbled-but-present means a mode or bit-order mismatch.",
+        why="A selected, clocked slave returning wrong data is almost always a CPOL/CPHA mismatch or a "
+            "MISO nobody is driving — the datasheet's mode and a scope on MISO separate the two."),
+}
+
+SPI_BRINGUP = ProblemPattern(
+    name="spi_bringup",
+    title="SPI bring-up problem",
+    match_groups=(
+        ("spi", "mosi", "miso", "sclk", " sck ", "chip select", "chip-select", "nss"),
+        ("not working", "isn't working", "isnt working", "doesn't work", "doesnt work", "no data",
+         "reads all 0xff", "all 0xff", "reads 0xff", "reads all zeros", "all zeros", "reads 0x00",
+         "all 0x00", "garbage", "garbled", "no response", "not responding", "miso floating",
+         "miso is floating", "nothing back", "nothing comes back", "no miso", "silent", "not reading",
+         "won't read", "wont read", "reads ff", "reads nothing", "shifted", "corrupt", "broken",
+         "not getting", "dead"),
+    ),
+    zones=(
+        ("Chip-select (CS/NSS)", "CS must assert (usually low) for the whole transfer or the slave is deaf"),
+        ("Clock (SCLK)", "the master must actually generate SCLK edges — 8 per byte"),
+        ("SPI mode (CPOL/CPHA)", "both ends must agree on mode 0-3 or data is shifted/garbled"),
+        ("Data lines (MOSI/MISO)", "MOSI carries the command; MISO must be driven by a selected slave"),
+        ("Bit order / speed", "MSB vs LSB first, and a clock the slave can keep up with"),
+    ),
+    required_evidence=(
+        "Which board / MCU and which SPI instance?",
+        "What is the slave device and its SPI mode (CPOL/CPHA)?",
+        "Which pins for SCLK / MOSI / MISO / CS?",
+        "Is CS hardware-NSS or driven in software?",
+        "What does MISO read — all 0x00, all 0xFF, or garbled?",
+    ),
+    beginner_traps=(
+        "leaving CS as a plain GPIO or never pulling it low around the transfer (the slave never wakes)",
+        "a CPOL/CPHA mode mismatch — the data is there but shifted, so it reads garbled",
+        "reading all 0xFF means nothing is driving MISO — usually CS not asserted or the slave unpowered",
+        "MSB-first vs LSB-first mismatch between master and slave",
+        "clocking the bus faster than the slave's maximum SCLK",
+    ),
+    entry="cs_check",
+    nodes=_SPI_NODES,
+    evidence_vars={"cs_state": _CS_STATE, "sclk_state": _SCLK_STATE},
+)
+
+
+# ================================================================================================
+# SEED PATTERN #4 — unexpected reset / brown-out (curated, deterministic). Encodes the five-whys:
+# read the reset-cause flag first, then brown-out (inrush → decoupling) vs watchdog vs reset-pin.
+# ================================================================================================
+
+_RESET_CAUSE = EvidenceVar(
+    name="reset_cause",
+    values={
+        "brownout": ("brown-out", "brownout", "bor flag", "bor reset", " bor ", "voltage drop",
+                     "voltage sag", "voltage dip", "rail drops", "rail sags", "power drop",
+                     "under load", "when wifi", "when the wifi", "when wi-fi", "when the motor",
+                     "when the radio", "sd card write", "resets under load", "dips below", "sags"),
+        "watchdog": ("watchdog", "iwdg", "wwdg", " wdt ", "wdt reset", "watchdog reset",
+                     "during a long", "during flash", "flash write", "flash erase", "long loop",
+                     "blocking", "busy-wait", "busy wait", "long operation"),
+        "pin": ("reset pin", "nrst", "floating reset", "reset line", "noise on reset",
+                "external reset", "pin reset", "reset is floating", "glitch on reset"),
+    },
+    labels={"brownout": "the reset cause is a brown-out (the supply rail sagged)",
+            "watchdog": "the reset cause is the watchdog timer firing",
+            "pin": "the reset is coming from the external reset pin"},
+)
+
+_CAP_TEST = EvidenceVar(
+    name="cap_test",
+    values={
+        # Outcome words only — naming the apparatus ("a bench supply") is NOT a positive result;
+        # "still resets even with a bench supply" must read as no_change, not helped.
+        "helped": ("cap helped", "that helped", "cap fixed", "capacitor fixed", "fixed it",
+                   "that fixed", "stops with", "goes away with", "no longer resets", "solved it",
+                   "stopped when i added"),
+        "no_change": ("still resets", "still resetting", "no change", "didn't help", "didnt help",
+                      "even with", "same with a bench", "persists", "still happens",
+                      "doesn't help", "no difference"),
+    },
+    labels={"helped": "adding bulk capacitance / a stiff supply stops the resets",
+            "no_change": "the resets persist even with a stiff supply"},
+)
+
+_RESET_NODES = {
+    "reset_cause_check": DecisionNode(
+        id="reset_cause_check", zone="Reset cause",
+        proof_step="After a reset, read the MCU's reset-cause / status flags (e.g. the reset flags in "
+                   "the power or clock status register) BEFORE clearing them, and note which is set: "
+                   "brown-out, watchdog, pin, or software.",
+        why="Every reset feels identical from outside, but the silicon records WHY. The reset-cause "
+            "flag splits the whole problem in one read — power (brown-out) vs a watchdog timeout vs an "
+            "external pin vs your own software reset — so you debug the real cause instead of guessing.",
+        expects="reset_cause",
+        branches={"brownout": "power_sag", "watchdog": "watchdog_starve", "pin": "reset_pin"}),
+    "power_sag": DecisionNode(
+        id="power_sag", zone="Power delivery (inrush / decoupling)",
+        rules_out="The flag says brown-out, so the rail is sagging — this is power delivery, not the "
+                  "watchdog, the reset pin, or (yet) your firmware.",
+        candidates=("a current spike (Wi-Fi TX, motor start, SD write) the supply can't deliver fast "
+                    "enough",
+                    "insufficient bulk/local decoupling near the hungry load",
+                    "an undersized or dropping-out regulator",
+                    "a weak source (a thin USB port or nearly-flat battery)"),
+        proof_step="Scope the Vdd rail DURING the triggering event (Wi-Fi TX / motor / SD write) and "
+                   "watch for a dip below the brown-out threshold. Then add bulk capacitance "
+                   "(e.g. 100uF + 0.1uF) close to the load, or power from a stiff bench supply, and see "
+                   "if the resets stop.",
+        why="A brown-out under load is the rail dipping below the BOR threshold when an inrush spike "
+            "hits a supply that can't keep up. Scoping the rail proves the sag; the cap / bench-supply "
+            "swap proves whether it is delivery (decoupling/inrush) or something stiffer can't fix.",
+        expects="cap_test",
+        branches={"helped": "decoupling_confirmed", "no_change": "supply_or_short"}),
+    "decoupling_confirmed": DecisionNode(
+        id="decoupling_confirmed", zone="Decoupling / inrush",
+        rules_out="A stiff supply or extra bulk capacitance stops it — so the root cause is delivery: "
+                  "inrush vs decoupling, not the regulator's headroom or a short.",
+        candidates=("too little bulk capacitance for the load's inrush",
+                    "decoupling caps too far from the hungry chip",
+                    "the RF/motor rail sharing a weak supply with the MCU"),
+        proof_step="Size the bulk cap to the inrush, place 0.1uF decoupling right at the load's power "
+                   "pins, and consider a separate or stiffer regulator for the RF/motor rail; keep the "
+                   "high-current traces short.",
+        why="Once a cap fixes it, the engineering is delivery: enough local energy storage, close "
+            "enough, on a rail stiff enough for the peak draw."),
+    "supply_or_short": DecisionNode(
+        id="supply_or_short", zone="Regulator headroom / short / firmware",
+        rules_out="The resets persist even with a stiff supply — so it is NOT just decoupling/inrush.",
+        candidates=("the regulator can't supply the peak current (undersized or dropping out)",
+                    "a partial short pulling the rail down",
+                    "the brown-out threshold set higher than the rail's normal level",
+                    "a firmware fault/assert that reboots and looks like a hardware reset"),
+        proof_step="Measure the regulator's input vs output under load, compare its current rating to "
+                   "the peak draw, and check for shorts; then confirm the firmware isn't faulting (read "
+                   "the fault registers) before blaming hardware.",
+        why="When a stiff supply doesn't help, the fault is upstream of decoupling — regulator headroom, "
+            "a short, a mis-set threshold, or software masquerading as a reset."),
+    "watchdog_starve": DecisionNode(
+        id="watchdog_starve", zone="Watchdog timing",
+        rules_out="The flag says watchdog, so this is a starved kick, not power and not the reset pin.",
+        candidates=("a long blocking operation (flash erase/write is the classic one) outruns the "
+                    "timeout",
+                    "the watchdog isn't kicked inside that path",
+                    "the timeout is set too short for the real work"),
+        proof_step="Find the longest blocking section (flash write/erase, a busy-wait, a long ISR) and "
+                   "either kick the watchdog inside it, lengthen the timeout to cover it, or move the "
+                   "work off the blocking path. Temporarily disable the watchdog — if the resets stop, "
+                   "it is confirmed.",
+        why="A watchdog reset during long work is a feeding problem, not a hardware fault; the disable "
+            "test confirms it and the fix is to feed it or shorten the work."),
+    "reset_pin": DecisionNode(
+        id="reset_pin", zone="Reset pin / external",
+        rules_out="The flag says an external pin reset — so it is not brown-out and not the watchdog.",
+        candidates=("NRST floating or noisy (missing pull-up / cap)",
+                    "a reset supervisor misfiring",
+                    "a debugger/programmer asserting reset",
+                    "ESD or coupling onto the reset line"),
+        proof_step="Confirm NRST has its pull-up and a small cap to ground, disconnect the debugger, "
+                   "and scope NRST for glitches during the resets.",
+        why="An external-pin reset is electrical noise or a misbehaving supervisor/debugger on NRST — "
+            "scoping the pin separates a real assert from a flag set for another reason."),
+}
+
+POWER_RESET = ProblemPattern(
+    name="power_reset",
+    title="unexpected-reset / brown-out problem",
+    match_groups=(
+        ("reset", "resets", "resetting", "reboot", "reboots", "rebooting", "restart", "restarts",
+         "restarting", "brown-out", "brownout", "watchdog", "boot loop", "bootloop", "power cycl",
+         "keeps dying"),
+        ("random", "randomly", "by itself", "on its own", "unexpected", "keeps", "whenever",
+         "when wifi", "when the motor", "under load", "every time", "intermittent", "won't stay",
+         "wont stay", "spontaneous", "for no reason", "all of a sudden", "keeps happening",
+         "crashes and reboot", "keeps rebooting"),
+    ),
+    zones=(
+        ("Reset cause", "read the reset-cause flag — brown-out vs watchdog vs pin vs software"),
+        ("Power delivery", "inrush vs decoupling vs regulator headroom on the rail that sags"),
+        ("Watchdog timing", "long blocking work (flash write) outrunning the watchdog kick"),
+        ("Reset pin", "NRST pull-up/cap, a supervisor, the debugger, or noise"),
+        ("Firmware fault", "a fault handler or assert that reboots can masquerade as a reset"),
+    ),
+    required_evidence=(
+        "When does it reset — at boot, randomly, or under a specific load (Wi-Fi/motor/SD)?",
+        "What does the reset-cause register say (brown-out / watchdog / pin / software)?",
+        "How is the board powered (USB, regulator, battery) and what is the peak current draw?",
+        "Is a watchdog enabled, and what is its timeout?",
+        "Does a stiffer supply or extra bulk capacitance change it?",
+    ),
+    beginner_traps=(
+        "blaming firmware when the reset-cause flag would say brown-out or watchdog in one read",
+        "a current spike (Wi-Fi TX, motor start, SD write) sagging the rail below the brown-out level",
+        "a long flash erase/write outrunning the watchdog timeout because the kick is starved",
+        "NRST left floating with no pull-up/cap, catching noise",
+        "powering a hungry board from a weak USB port or an undersized regulator",
+    ),
+    entry="reset_cause_check",
+    nodes=_RESET_NODES,
+    evidence_vars={"reset_cause": _RESET_CAUSE, "cap_test": _CAP_TEST},
+)
+
+
+# ================================================================================================
+# SEED PATTERN #5 — HardFault / memory crash (curated, deterministic). Encodes the real order:
+# decode the fault registers FIRST (CFSR/HFSR + stacked PC), then bus vs usage/unaligned vs stack.
+# Boundary: it fires only on a fault WITH a concrete mechanism — a bare "my code crashed" or a
+# symptom-only "crashed with HardFault_Handler" stays with the Purpose gate (ask for evidence).
+# ================================================================================================
+
+_FAULT_TYPE = EvidenceVar(
+    name="fault_type",
+    values={
+        "bus": ("busfault", "bus fault", "bus error", "imprecise", "precise bus", "bfar",
+                "bad address", "bad pointer", "null pointer", "nonexistent", "non-existent",
+                "unclocked", "peripheral not clocked", "accessing memory that"),
+        "usage": ("usagefault", "usage fault", "unaligned", "divide by zero", "div by zero",
+                  "undefined instruction", "ufsr", "divbyzero", "bad function pointer", "thumb bit"),
+        "stack": ("memmanage", "mem manage", "stack overflow", "stack grew", "mmfar",
+                  "stack corrupt", "mpu violation", "stack into", "blew the stack", "stack smash"),
+    },
+    labels={"bus": "a bus fault — an access to memory/peripheral that didn't answer",
+            "usage": "a usage fault — an illegal instruction (alignment, divide, undefined)",
+            "stack": "a stack/memmanage fault — the stack itself is the problem"},
+)
+
+_STACK_EVIDENCE = EvidenceVar(
+    name="stack_evidence",
+    values={
+        "overlap": ("linker", ".map", "map file", "stack overlaps", "stack region", "too small",
+                    "grew into", "collides", "_estack", "ebss", "into the heap", "stack size"),
+        "runaway": ("recursion", "recursive", "deep call", "big buffer", "large array",
+                    "local array", "huge local", "stack allocated", "alloca", "infinite recursion",
+                    "deep nesting"),
+    },
+    labels={"overlap": "the linker map shows the stack region colliding or undersized",
+            "runaway": "an adequate stack is blown by recursion or a large local"},
+)
+
+_FAULT_NODES = {
+    "fault_decode": DecisionNode(
+        id="fault_decode", zone="Fault decode (CFSR/HFSR + stacked PC)",
+        proof_step="In the fault handler, read SCB->CFSR and SCB->HFSR and recover the stacked PC and "
+                   "LR from the exception frame (the SP at fault). The CFSR bits name the fault; the "
+                   "stacked PC names the faulting instruction.",
+        why="A HardFault is just the CPU saying 'something illegal happened.' The fault status "
+            "registers say exactly WHAT (bus, usage/unaligned, or memmanage/stack) and the stacked PC "
+            "says WHERE. Decoding them turns a blind crash into a named fault at a known instruction — "
+            "the one step that ends the guessing.",
+        expects="fault_type",
+        branches={"bus": "bad_pointer", "usage": "usage_fault", "stack": "stack_check"}),
+    "bad_pointer": DecisionNode(
+        id="bad_pointer", zone="Bad pointer / bus access",
+        rules_out="The CFSR says a bus fault — so this is an access to memory that isn't there, not an "
+                  "alignment problem and not the stack.",
+        candidates=("dereferencing a null or uninitialised pointer",
+                    "touching a peripheral whose clock isn't enabled (the bus never answers)",
+                    "an address outside valid RAM/flash/peripheral space",
+                    "a pointer corrupted earlier and only faulting now"),
+        proof_step="Look up the stacked PC in your .map / disassembly to find the exact access, then "
+                   "check what it touches: is the pointer valid, and is that peripheral's clock enabled "
+                   "before you touch it?",
+        why="A bus fault is almost always a bad pointer or an unclocked peripheral; the stacked PC takes "
+            "you to the exact instruction so you can check the address it used."),
+    "usage_fault": DecisionNode(
+        id="usage_fault", zone="Usage fault (alignment / divide / undefined)",
+        rules_out="The CFSR says a usage fault — so it is the instruction itself, not a bad bus address "
+                  "and not the stack.",
+        candidates=("an unaligned word/halfword access (a packed struct or a cast pointer)",
+                    "divide-by-zero with the trap enabled",
+                    "an undefined instruction (a bad function pointer or a wrong Thumb bit)"),
+        proof_step="From the stacked PC, inspect the faulting instruction: an unaligned LDR/STR points "
+                   "to a misaligned pointer/packed field; a UDIV points to divide-by-zero; a garbage "
+                   "opcode points to a corrupted or Thumb-bit-wrong function pointer.",
+        why="A usage fault names the illegal operation; the stacked instruction tells you which of "
+            "alignment / divide / bad-call it actually was."),
+    "stack_check": DecisionNode(
+        id="stack_check", zone="Stack (overlap vs runaway)",
+        rules_out="The fault points at the stack — so it is not a stray bus access and not an alignment "
+                  "fault; the stack itself is the problem.",
+        candidates=("the stack grew into .bss/heap (regions too close, or the stack too small)",
+                    "runaway recursion or a huge stack-allocated buffer blew an adequate stack"),
+        proof_step="Open the linker map: compare the stack region against _ebss / heap end to see if "
+                   "they collide or the stack is undersized; and check the faulting call path for deep "
+                   "recursion or large local buffers.",
+        why="Stack faults are either layout (the map shows overlap/too-small) or usage (a function eats "
+            "more stack than budgeted) — the map and the call path separate the two.",
+        expects="stack_evidence",
+        branches={"overlap": "linker_overlap", "runaway": "runaway_stack"}),
+    "linker_overlap": DecisionNode(
+        id="linker_overlap", zone="Linker layout",
+        rules_out="The map shows the stack colliding with .bss/heap (or simply too small) — so it is a "
+                  "layout/budget problem, not a single runaway function.",
+        candidates=("the stack size in the linker script is too small for the worst-case depth",
+                    "stack and heap/.bss placed too close with no guard",
+                    "no stack-overflow detection (MPU guard / fill pattern) to catch it early"),
+        proof_step="Increase the stack region in the linker script to cover the worst-case depth, "
+                   "separate it from heap/.bss, and add a guard (an MPU region or a fill-pattern check) "
+                   "so the next overflow is caught at the boundary instead of as a random fault.",
+        why="When the map shows the collision, the fix is budget and separation in the linker script "
+            "plus a guard so it fails loudly next time."),
+    "runaway_stack": DecisionNode(
+        id="runaway_stack", zone="Stack usage (recursion / large locals)",
+        rules_out="The stack region is adequately sized but a specific call path blows it — so it is "
+                  "usage, not layout.",
+        candidates=("unbounded or deep recursion in the faulting path",
+                    "a large buffer allocated on the stack (a big local array)",
+                    "deep nested calls with heavy frames on a small stack"),
+        proof_step="Bound or remove the recursion (make it iterative or cap the depth), move large "
+                   "buffers off the stack (static or heap), and re-measure peak stack use with a "
+                   "fill-pattern high-water mark.",
+        why="When the budget is fine but one path overflows, the fix is in the code path that eats the "
+            "stack, not the linker."),
+}
+
+HARDFAULT = ProblemPattern(
+    name="hardfault",
+    title="HardFault / crash problem",
+    match_groups=(
+        ("hardfault", "hard fault", "usagefault", "usage fault", "busfault", "bus fault", "memmanage",
+         "fault handler", "segfault", "crash", "crashes", "crashing", "stack overflow", "stack smash"),
+        ("jumps to", "ends up in", "stuck in the fault", "lands in", "goes to the fault",
+         "hangs in the fault", "fault handler every", "keeps crashing", "unaligned", "null pointer",
+         "bad pointer", "dereferenc", "wild pointer", "dangling pointer", "out of bounds",
+         "buffer overflow", "writes past", "divide by zero", "div by zero", "imprecise", "bus error",
+         "use after free", "double free", "at 0x", "on boot every"),
+    ),
+    zones=(
+        ("Fault decode", "read CFSR/HFSR + the stacked PC — name the fault and the instruction"),
+        ("Bus access", "a bad pointer or an unclocked peripheral the bus can't answer"),
+        ("Usage fault", "unaligned access, divide-by-zero, or an undefined instruction"),
+        ("Stack", "overflow into .bss/heap, or a runaway call path"),
+        ("Linker layout", "stack size and separation in the linker script, plus a guard"),
+    ),
+    required_evidence=(
+        "What does CFSR/HFSR say, and what is the stacked PC (the faulting instruction)?",
+        "Is it a bus, usage/unaligned, or memmanage/stack fault?",
+        "Does it fault on boot, randomly, or in a specific function?",
+        "What is the stack size in the linker script vs the worst-case depth?",
+        "Any recursion or large stack-allocated buffers in the faulting path?",
+    ),
+    beginner_traps=(
+        "guessing instead of reading CFSR/HFSR + the stacked PC, which name the fault and the line",
+        "dereferencing a null/uninitialised pointer, or touching an unclocked peripheral (bus fault)",
+        "an unaligned access through a packed struct or a cast pointer (usage fault)",
+        "the stack growing into .bss/heap because the linker stack size is too small",
+        "runaway recursion or a giant local array blowing an otherwise-adequate stack",
+    ),
+    entry="fault_decode",
+    nodes=_FAULT_NODES,
+    evidence_vars={"fault_type": _FAULT_TYPE, "stack_evidence": _STACK_EVIDENCE},
+)
+
+
+# The pattern registry. The engine above is already general over all of these.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
+    I2C_BRINGUP.name: I2C_BRINGUP,
+    SPI_BRINGUP.name: SPI_BRINGUP,
+    POWER_RESET.name: POWER_RESET,
+    HARDFAULT.name: HARDFAULT,
 }
