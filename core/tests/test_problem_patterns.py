@@ -304,6 +304,39 @@ def test_voice_proof_path_keeps_local_step_primary_and_external_step_secondary()
     assert gw.prompt.index(local_line) < gw.prompt.index("best external verification step")
 
 
+# --- Defect 1 (Stage 1): user-supplied values are grounded by provenance, not "invented" ----------
+
+_PKT = "Communication systems: wired buses (UART/SPI/I2C/CAN) and wireless links (BLE/Wi-Fi/LoRa)."
+
+
+def test_flag_invented_claims_allows_user_supplied_value():
+    # QA case 3.3: the LLM echoes the clock value the USER themselves gave → not an invention.
+    user = "I'm using I2C with 10 sensors, 2.2k pull-ups at 400kHz — is that in range?"
+    resp = "You're using 400kHz, so 2.2k pull-ups are reasonable."
+    assert pp.flag_invented_claims(resp, _PKT, user) == (True, [])
+
+
+def test_flag_invented_claims_allows_user_supplied_value_case_2():
+    # QA case 3.2.
+    user = "I have one I2C sensor with a 10k pull-up at 100kHz — is that fine?"
+    resp = "A 10k pull-up at 100kHz with one device is fine."
+    assert pp.flag_invented_claims(resp, _PKT, user) == (True, [])
+
+
+def test_flag_invented_claims_still_blocks_true_inventions():
+    # The LLM fabricates a pin and a clock the user never mentioned → still blocked.
+    user = "I have an I2C bus."
+    resp = "Also set PA9 and clock it to 72MHz."
+    safe, violations = pp.flag_invented_claims(resp, _PKT, user)
+    assert safe is False
+    assert any("PA9" in v for v in violations) and any("72MHz" in v for v in violations)
+
+
+def test_flag_invented_claims_backward_compatible_without_user_text():
+    # Existing callers that pass no user_text behave exactly as before.
+    assert pp.flag_invented_claims("Set PA9.", _PKT) == (False, ["pin: PA9"])
+
+
 def test_voice_proof_path_speculated_compare_cases_cannot_drive_help():
     st = pp.resolve(_convo("my UART is not working", "TX is silent"))
     report = _community_report(_community_case(

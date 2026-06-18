@@ -462,6 +462,33 @@ def verify_voiced(response: str, packet: dict) -> tuple[bool, list[str]]:
     return (not violations, violations)
 
 
+def flag_invented_claims(response: str, allowed_text: str,
+                         user_text: str = "") -> tuple[bool, list[str]]:
+    """General verifier for a conversationally-taught answer: flag any board/peripheral-specific claim
+    (pin, register, instance, clock, address) that is NOT present in ``allowed_text`` (the verified
+    fact packet the LLM was told to teach from). Reuses the same generic, vendor-agnostic checks as
+    verify_voiced. Returns (safe, violations); the caller falls back to the deterministic render when
+    unsafe so an invented hardware fact never reaches the learner.
+
+    USER PROVENANCE: a hardware token the user themselves supplied in ``user_text`` (the current and
+    immediately preceding turn) is grounded by the user — it is not an invention, so the LLM may
+    restate and reason about it. Only tokens present in NEITHER the packet NOR the user's own words
+    are flagged. This avoids suppressing a legitimate answer just because it echoes the user's value
+    (e.g. the user says "400kHz" and the teach repeats it)."""
+    allowed = (allowed_text or "").lower()
+    user_supplied = {t.lower()
+                     for tokens in extract_user_reported_evidence(user_text or "").values()
+                     for t in tokens}
+    violations: list[str] = []
+    for label, rx in _GENERIC_CHECKS:
+        for m in re.finditer(rx, response, re.I):
+            tok = m.group(0).lower()
+            if tok in allowed or tok in user_supplied:
+                continue
+            violations.append(f"{label}: {m.group(0)}")
+    return (not violations, violations)
+
+
 # ================================================================================================
 # SEED PATTERN #1 — UART bring-up failure (curated, deterministic). The only seeded pattern for now.
 # ================================================================================================

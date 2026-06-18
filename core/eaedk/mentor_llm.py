@@ -6,12 +6,14 @@ the model elaborates and the post-filter strips any uncited hardware value.
 """
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 from dataclasses import dataclass
 
 from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
 from .llm.gateway import Gateway
+from .llm.ollama import OllamaProvider
 from .llm.postfilter import build_board_allowlist, filter_text
 
 # Role A — System Architect. Reason about goal/scope/trade-off before recommending anything.
@@ -1108,6 +1110,61 @@ def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | 
     return voiced
 
 
+# --- Conversational mentor (docs/34): the engine GROUNDS + VERIFIES, the LLM TEACHES -------------
+# One path so far (communication_systems). Unlike the deterministic renders, the LLM generates the
+# explanation from a verified fact packet, in the context of the whole conversation (multi-turn), and
+# offers follow-up moves. The verifier blocks invented board facts; offline / unsafe falls back to the
+# deterministic render so it never dead-ends. Teaching model is capable by default (the 3B can't teach).
+_MENTOR_MODEL = os.environ.get("EAEDK_MENTOR_MODEL", "llama3.1:8b")
+
+_TEACH_SYSTEM = (
+    "You are a senior embedded-systems mentor in a real, ongoing conversation with an engineer — not a "
+    "FAQ and not a lecture. The engine hands you a VERIFIED FACT PACKET for the area they asked about. "
+    "TEACH from it: answer THEIR exact question in your own words, match the depth to what they asked, "
+    "and continue the thread naturally using the conversation so far.\n"
+    "RULES:\n"
+    "- Ground every engineering claim in the packet. Do NOT invent board-specific facts — no pin names, "
+    "register names, peripheral instance numbers, clock frequencies, or addresses. If one is needed, "
+    "say which datasheet to check or ask which board they have.\n"
+    "- When they list several options, COMPARE them and recommend by THEIR constraint (range, power, "
+    "data rate, wiring, determinism). Always leave them with ONE concrete next step.\n"
+    "- Talk like a person: a few short paragraphs, no template headers, no filler words. Don't dump the "
+    "whole topic — answer what they actually asked and offer to go further.")
+
+
+def _teach_learning_map(conn: sqlite3.Connection, lm, messages: list[dict], board_name: str | None,
+                        gateway: Gateway | None) -> str:
+    """Conversationally TEACH a learning-map topic from its verified packet, in the context of the
+    whole conversation. Falls back to the deterministic render when the model is unavailable, errors,
+    or states an invented board fact — so the answer is always grounded and never a dead end."""
+    last_user = next((m.get("content", "") for m in reversed(messages or [])
+                      if m.get("role") == "user"), "")
+    deterministic = navigator.render_learning_map(conn, lm, board_name, None, last_user)
+    gw = gateway or Gateway(provider=OllamaProvider(model=_MENTOR_MODEL))
+    if not gw.available():
+        return deterministic
+    packet = navigator.teach_packet(lm)
+    history = "\n".join(f"{m.get('role', 'user').upper()}: {m.get('content', '')}"
+                        for m in (messages or [])[-8:])
+    prompt = (f"{packet}\n\nCONVERSATION SO FAR:\n{history}\n\n"
+              "Teach the learner now — answer their latest message conversationally, grounded only in "
+              "the packet above:")
+    try:
+        taught = gw.provider.generate(_TEACH_SYSTEM, prompt).strip()
+    except Exception:
+        return deterministic
+    # User-supplied parameters (this + the immediately preceding user turn) are grounded by provenance,
+    # so echoing them is not an invention — only genuinely fabricated hardware facts force the fallback.
+    user_msgs = [m.get("content", "") for m in (messages or []) if m.get("role") == "user"]
+    user_text = " ".join(user_msgs[-2:])
+    safe, _violations = problem_patterns.flag_invented_claims(taught, packet, user_text)
+    if not safe or len(taught) < 40:
+        return deterministic                              # invented a board fact → safe deterministic
+    if getattr(lm, "followups", ()):
+        taught += "\n\nWhere next? You could ask:\n" + "\n".join(f"  • {f}" for f in lm.followups)
+    return taught
+
+
 def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 use_llm: bool = False, gateway: Gateway | None = None,
                 project: str | None = None, has_hardware: bool = False,
@@ -1158,6 +1215,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
 
     if route.mode == navigator.LEARNING_MAP:                  # learning-direction → a route, not a dump
         if route.learning_map is not None:
+            # Conversational mentor (docs/34) — ONE path so far: the LLM teaches from the verified
+            # packet, multi-turn; offline / unsafe falls back to the deterministic render below.
+            if route.learning_map.name == "communication_systems" and use_llm:
+                return _teach_learning_map(conn, route.learning_map, messages, board_name, gateway)
             return navigator.render_learning_map(conn, route.learning_map, board_name,
                                                  explicit_target, last_user, board_anchored)
         # foundation / career: board-less → a board-INDEPENDENT firmware direction (no selected board)

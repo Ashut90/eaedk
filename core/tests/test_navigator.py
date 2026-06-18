@@ -388,3 +388,64 @@ def test_explicit_stm32_where_do_i_start_keeps_named_board(tmp_path):
     out = mentor_chat(conn, BOARD, [{"role": "user", "content":
         "I have STM32F103 BluePill. Where should I start?"}], use_llm=False)
     assert "STM32F103-BluePill" in out                               # the named board → board-specific
+
+
+# --- Conversational mentor (docs/34): one path = communication_systems --------------------------
+
+class _TeachGw:
+    """Fake gateway that records the prompt and returns a fixed teaching answer."""
+    model = "fake"
+
+    def __init__(self, text):
+        self.text = text
+        self.provider = self
+        self.calls = []
+
+    def available(self):
+        return True
+
+    def generate(self, system, prompt):
+        self.calls.append((system, prompt))
+        return self.text
+
+
+_COMMS_Q = ("I am confused between UART, SPI, I2C, CAN, Ethernet, BLE, Wi-Fi, and LoRa. "
+            "Which direction should I follow?")
+
+
+def test_comms_is_taught_by_llm_with_followups(tmp_path):
+    conn = _seeded(tmp_path)
+    teach = ("Let's cut through it. For chip-to-chip use a wired bus; for device-to-device go wireless; "
+             "to a host use networking. Start by writing down your range, power, and data-rate budget.")
+    out = mentor_chat(conn, BOARD, [{"role": "user", "content": _COMMS_Q}],
+                      use_llm=True, gateway=_TeachGw(teach))
+    assert teach in out                                  # the LLM's own teaching, not a template
+    assert "This is a communication systems direction" not in out   # NOT the deterministic render
+    assert "Where next? You could ask:" in out and "Compare BLE vs Wi-Fi vs LoRa" in out  # follow-ups
+
+
+def test_comms_teach_blocks_invented_board_fact_and_falls_back(tmp_path):
+    conn = _seeded(tmp_path)
+    dirty = "Easy — just put SPI2 on PB13/PB14 and set the clock to 10MHz at 0x40013800."
+    out = mentor_chat(conn, BOARD, [{"role": "user", "content": _COMMS_Q}],
+                      use_llm=True, gateway=_TeachGw(dirty))
+    assert "PB13" not in out and "10MHz" not in out and "0x40013800" not in out   # invented → blocked
+    assert "This is a communication systems direction" in out                     # safe deterministic
+
+
+def test_comms_offline_is_deterministic(tmp_path):
+    conn = _seeded(tmp_path)
+    out = mentor_chat(conn, BOARD, [{"role": "user", "content": _COMMS_Q}], use_llm=False)
+    assert "This is a communication systems direction" in out and "Where next?" not in out
+
+
+def test_comms_teach_is_multi_turn_history_aware(tmp_path):
+    conn = _seeded(tmp_path)
+    gw = _TeachGw("Sure — BLE vs LoRa for a battery sensor: LoRa wins on range and power.")
+    msgs = [{"role": "user", "content": _COMMS_Q},
+            {"role": "assistant", "content": "...the three layers..."},
+            {"role": "user", "content": "compare BLE vs LoRa for a battery sensor"}]
+    mentor_chat(conn, BOARD, msgs, use_llm=True, gateway=gw)
+    _system, prompt = gw.calls[0]
+    assert "battery sensor" in prompt and "UART, SPI, I2C" in prompt   # full conversation reached the model
+    assert "VERIFIED FACT PACKET" in prompt                            # grounded teach, not freeform
