@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from . import problem_patterns, reasoning, repo, mentor, structural_router
+from . import problem_patterns, reasoning, repo, mentor
 
 PROOF_PATH = "PROOF_PATH"
 DECISION_MAP = "DECISION_MAP"
@@ -94,76 +94,21 @@ def match_learning(message: str) -> LearningMap | None:
 
 def classify(purpose, messages: list[dict]) -> Route:
     """The central router. ``purpose`` is the coarse Purpose-gate decision the caller computed.
-
-    **Stage 3 — structural master controller**: the structural router
-    (structural_router.py) runs FIRST as a pure, deterministic text classifier.
-    For definitive domain intents it validates with the corresponding legacy
-    detector and returns immediately — bypassing the full cascade.  For
-    ambiguous / abstract intents (career roadmaps, foundation redirects,
-    unknown chips, meta-system queries) the legacy cascade acts as a scoped
-    fallback sub-routine.
-
-    Precedence:
-      structural PROOF_PATH  + pattern match → PROOF_PATH
-      structural DECISION_MAP + topic match  → DECISION_MAP
-      structural LEARNING_MAP + map match    → LEARNING_MAP
-      structural TEACH                       → TEACH (no legacy check needed)
-      legacy cascade (fallback)              → varies
-
-    SAFETY GATE: user-provenance in ``flag_invented_claims`` (Stage 1 fix) is
-    applied downstream in ``mentor_chat`` / ``_teach_learning_map`` regardless
-    of which path produced this Route — so user-supplied metrics (e.g. 400 kHz)
-    are permanently safe from false-positive flags across ALL execution routes.
-    """
+    Precedence: a live proof path wins (it's conversation-aware); then a seeded decision; then a
+    learning area; then the Purpose gate's foundation/decline/clarify; else teach."""
     last = _last_user(messages)
 
-    # ── Structural router: master controller ─────────────────────────────────────
-    # Pure text analysis, zero conversation state — determines the DOMAIN before
-    # any expensive or stateful detector runs.
-    shadow = structural_router.shadow_route(last)
-
-    # Conversation-aware proof-path state (needed for PROOF_PATH, computed once).
-    ps = problem_patterns.resolve(messages)
-
-    # Fast path: structural router's definitive domain signal confirms a
-    # legacy detector.  Intercept immediately and bypass the full cascade.
-    if shadow == structural_router.PROOF_PATH and ps.matched:
-        return Route(PROOF_PATH, proof_state=ps,
-                     reason="structural: fault pattern matched")
-
-    if shadow == structural_router.DECISION_MAP:
-        topic = reasoning.detect_topic(last)
-        if topic is not None:
-            return Route(DECISION_MAP, purpose=purpose, decision_topic=topic,
-                         reason=f"structural: decision, topic:{topic.key}")
-
-    if shadow == structural_router.LEARNING_MAP:
-        lm = match_learning(last)
-        if lm is not None:
-            return Route(LEARNING_MAP, purpose=purpose, learning_map=lm,
-                         reason=f"structural: direction, learning:{lm.name}")
-
-    if shadow == structural_router.TEACH:
-        return Route(TEACH, purpose=purpose,
-                     reason="structural: concept definition")
-    # ── End structural fast-path ─────────────────────────────────────────────────
-
-    # ── Legacy fallback: CLARIFY / VAGUE, or structural didn't confirm ───────────
-    # Handles career roadmaps, foundation redirects, unknown chips,
-    # meta-system queries, and any edge case the structural router flagged as
-    # needing the full context-rich cascade.
+    ps = problem_patterns.resolve(messages)                  # conversation-aware, replays transcript
     if ps.matched:
         return Route(PROOF_PATH, proof_state=ps, reason="problem pattern matched")
 
-    topic = reasoning.detect_topic(last)
+    topic = reasoning.detect_topic(last)                     # the curated decision/trade-off library
     if topic is not None:
-        return Route(DECISION_MAP, purpose=purpose, decision_topic=topic,
-                     reason=f"topic:{topic.key}")
+        return Route(DECISION_MAP, purpose=purpose, decision_topic=topic, reason=f"topic:{topic.key}")
 
-    lm = match_learning(last)
+    lm = match_learning(last)                                # a broad learning-direction area
     if lm is not None:
-        return Route(LEARNING_MAP, purpose=purpose, learning_map=lm,
-                     reason=f"learning:{lm.name}")
+        return Route(LEARNING_MAP, purpose=purpose, learning_map=lm, reason=f"learning:{lm.name}")
 
     p = getattr(purpose, "purpose", "ANSWER_NOW")
     if p == "REDIRECT_TO_FOUNDATION":                        # field-entry / career → a learning route
