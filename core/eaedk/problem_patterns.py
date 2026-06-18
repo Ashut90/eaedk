@@ -610,8 +610,291 @@ UART_BRINGUP = ProblemPattern(
 )
 
 
-# The pattern registry. Add the next curated pattern here (SPI / I2C / HardFault / …); the engine
+# ================================================================================================
+# SEED PATTERN #2 — I2C bring-up failure (curated, deterministic). Encodes the real debugging
+# order: open-drain/pull-ups first (the #1 cause), then addressing, then the 7/8-bit shift vs the
+# device-or-master-clock split.
+# ================================================================================================
+
+_BUS_IDLE = EvidenceVar(
+    name="bus_idle",
+    values={
+        "low": ("stuck low", "stays low", "held low", "pulled low", "line is low", "lines are low",
+                "sda is low", "scl is low", "sda low", "scl low", "won't go high", "wont go high",
+                "not going high", "never goes high", "reads 0v", "at 0v", "stuck at 0", "bus is low",
+                "can't pull high", "cant pull high", "low at idle"),
+        "high": ("idle high", "idles high", "high at idle", "both high", "lines are high",
+                 "sitting high", "sit high", "at 3.3", "at 3v3", "at vdd", "both at 3.3",
+                 "idle at 3.3", "sitting at 3.3", "lines idle high", "resting high"),
+    },
+    labels={"low": "one or both I2C lines stuck low at idle (the bus can't be released)",
+            "high": "both SDA and SCL idling high — the electrical base is good"},
+)
+
+_SCAN_RESULT = EvidenceVar(
+    name="scan_result",
+    values={
+        "found": ("acks at", "ack at", "shows up at", "shows up", "found at", "detected at",
+                  "appears at", "responds at", "it's at 0x", "its at 0x", "scan shows",
+                  "scanner finds", "scan finds a", "device found", "found a device", "sees it at",
+                  "i see it at", "shows at"),
+        "none": ("no ack", "nacks", "no device", "nothing shows", "nothing responds", "no response",
+                 "finds nothing", "scan finds nothing", "empty scan", "scans empty", "not detected",
+                 "no devices", "doesn't show up", "doesnt show up", "nothing acks", "no one acks"),
+    },
+    labels={"found": "the bus scan finds a device (possibly at an unexpected address)",
+            "none": "the bus scan finds no device at any address"},
+)
+
+_I2C_NODES = {
+    "bus_idle_check": DecisionNode(
+        id="bus_idle_check", zone="Bus electrical (pull-ups)",
+        proof_step="With the bus idle (no transfers running), measure SDA and SCL against ground. "
+                   "Both should sit at Vdd (e.g. 3.3 V).",
+        why="I2C is open-drain: devices can only pull the lines LOW, and pull-up resistors are what "
+            "pull them HIGH. If either line isn't resting high at idle, the bus can never be "
+            "released — so addressing, ACK and data are all downstream of this and irrelevant until "
+            "it is fixed.",
+        expects="bus_idle",
+        branches={"low": "lines_low", "high": "addr_probe"}),
+    "lines_low": DecisionNode(
+        id="lines_low", zone="pull-ups / stuck device / wiring",
+        rules_out="A line stuck low at idle is electrical — so the device address, ACK and your "
+                  "transfer code are NOT the problem yet; nothing can work until the line is released.",
+        candidates=("missing pull-up resistors (open-drain cannot pull high on its own)",
+                    "pull-ups too weak/strong, or tied to the wrong rail",
+                    "one device holding the line (unpowered, stuck, or clock-stretching forever)",
+                    "SDA/SCL shorted together, swapped, or shorted to ground"),
+        proof_step="Confirm a pull-up (typically 2.2k-4.7k) sits on BOTH SDA and SCL to the bus "
+                   "voltage. Then remove devices one at a time — if a line springs back high when one "
+                   "comes off, that device was holding it.",
+        why="A permanently-low line is a wiring/electrical fault, not software. Checking the pull-ups "
+            "and pulling devices one at a time separates 'no pull-up' from 'a device is holding the "
+            "bus' before any code matters."),
+    "addr_probe": DecisionNode(
+        id="addr_probe", zone="addressing / ACK",
+        rules_out="Both lines idle high, so pull-ups and the bus electrical layer are good — the fault "
+                  "is now addressing or the device itself.",
+        candidates=("the address in code doesn't match the device (7-bit vs 8-bit shift)",
+                    "the device isn't powered or its address pins are wrong",
+                    "the master isn't actually clocking SCL"),
+        proof_step="Run an I2C bus scan (probe every 7-bit address from 0x08 to 0x77) and note whether "
+                   "ANY address ACKs.",
+        why="With the electrical base proven good, a scan is the one test that splits 'wrong address' "
+            "(something ACKs, just not where you expected) from 'nothing answers at all' (device or "
+            "master clock).",
+        expects="scan_result",
+        branches={"found": "addr_mismatch", "none": "no_ack"}),
+    "addr_mismatch": DecisionNode(
+        id="addr_mismatch", zone="address format (7-bit vs 8-bit)",
+        rules_out="A device ACKs on the scan, so wiring, pull-ups, clocking and the peripheral are all "
+                  "working — the fault is the address constant in your code.",
+        candidates=("using the datasheet's 8-bit read/write address where the driver wants the 7-bit "
+                    "address",
+                    "the classic <<1 shift: your value is double (or half) the scanned address",
+                    "wrong A0/A1/A2 address-strap pins on the device"),
+        proof_step="Compare the address the scan reported with the one in your code. If they differ by "
+                   "a factor of two (one is the other shifted left by 1), that is the 7-bit/8-bit "
+                   "mismatch — use the form your HAL expects (most want the 7-bit address).",
+        why="A scan hit at address X while your code uses 2X (or X/2) is the canonical 7-bit-vs-8-bit "
+            "shift bug: the device is fine, the constant is wrong."),
+    "no_ack": DecisionNode(
+        id="no_ack", zone="device power / SCL clocking",
+        rules_out="The lines idle high, so this is NOT the missing-pull-up fault; with nothing "
+                  "answering, the silence is the device or the master's clock.",
+        candidates=("the target device isn't powered (or its enable/reset pin is wrong)",
+                    "SCL never actually clocks — the I2C peripheral clock isn't enabled, or the pins "
+                    "aren't on the I2C alternate function",
+                    "the wrong I2C instance/pins are configured",
+                    "bus speed set faster than the device supports"),
+        proof_step="Confirm the device has power and its address/enable pins are set, then scope SCL "
+                   "during a transfer. No pulses on SCL → the fault is the master/peripheral side; "
+                   "clean clock but still no ACK → the device side.",
+        why="With the electrical base good and nothing answering, you must separate 'the master never "
+            "clocks' from 'the device never answers' — scoping SCL during a transfer is the single "
+            "measurement that splits them."),
+}
+
+I2C_BRINGUP = ProblemPattern(
+    name="i2c_bringup",
+    title="I2C bring-up problem",
+    match_groups=(
+        ("i2c", "i²c", "iic", "sda", "scl", "two-wire", "sccb"),
+        ("not working", "isn't working", "isnt working", "doesn't work", "doesnt work", "no ack",
+         "nack", "not responding", "no response", "not respond", "won't respond", "wont respond",
+         "not detected", "isn't detected", "can't find", "cant find", "not found", "no device",
+         "reads 0xff", "all 0xff", "reads ff", "stuck low", "bus stuck", "bus hang", "hangs",
+         "no data", "garbage", "won't ack", "wont ack", "not getting", "can't read", "cant read",
+         "device is dead", "not showing"),
+    ),
+    zones=(
+        ("Bus electrical (pull-ups)", "SDA and SCL idle HIGH via pull-ups — open-drain only pulls low"),
+        ("Addressing", "7-bit vs 8-bit address; the <<1 shift and the R/W bit"),
+        ("Device power / enable", "the target is powered and its address-strap pins are set"),
+        ("Clocking / pinmux", "the I2C peripheral is clocked and SDA/SCL are on the I2C alt function"),
+        ("Bus contention / speed", "clock-stretching, a stuck device, or a speed the slave can't meet"),
+    ),
+    required_evidence=(
+        "Which board / MCU and which I2C instance?",
+        "What is the device and its datasheet address (7-bit or 8-bit)?",
+        "What pull-up resistors are on SDA/SCL (value, to what voltage)?",
+        "How many devices are on the bus?",
+        "What bus speed (100 kHz / 400 kHz)?",
+    ),
+    beginner_traps=(
+        "I2C is open-drain — with no pull-ups the lines never go high and nothing works (the #1 cause)",
+        "using the datasheet's 8-bit read/write address directly when the driver wants the 7-bit "
+        "address (the <<1 shift)",
+        "leaving the device's address-select pins (A0/A1/A2) floating",
+        "driving SDA/SCL as plain GPIO instead of the I2C alternate function",
+        "one stuck or unpowered device holding a line low kills the whole bus",
+    ),
+    entry="bus_idle_check",
+    nodes=_I2C_NODES,
+    evidence_vars={"bus_idle": _BUS_IDLE, "scan_result": _SCAN_RESULT},
+)
+
+
+# ================================================================================================
+# SEED PATTERN #3 — SPI bring-up / silent-data failure (curated, deterministic). Encodes the real
+# debugging order: chip-select first (a deaf slave), then the clock, then CPOL/CPHA-vs-MISO.
+# ================================================================================================
+
+_CS_STATE = EvidenceVar(
+    name="cs_state",
+    values={
+        "not_asserted": ("stays high", "cs stays high", "cs is high", "never goes low",
+                         "cs never", "chip select stays high", "cs high the whole", "cs floating",
+                         "nss high", "cs not asserting", "cs doesn't go low", "cs doesnt go low",
+                         "cs stuck high", "ss stays high"),
+        "asserted": ("cs goes low", "cs asserts", "cs drops", "goes low", "nss low", "cs is low",
+                     "cs pulses low", "asserts low", "cs low during", "chip select goes low",
+                     "ss goes low"),
+    },
+    labels={"not_asserted": "chip-select never asserts (the slave is never selected)",
+            "asserted": "chip-select asserts correctly for the transfer"},
+)
+
+_SCLK_STATE = EvidenceVar(
+    name="sclk_state",
+    values={
+        "present": ("sclk toggles", "clock toggles", "sck toggles", "see the clock", "i see sclk",
+                    "clock pulses", "8 clocks", "clock is present", "clock looks", "sclk is toggling",
+                    "clock edges"),
+        "absent": ("no clock", "no sclk", "sclk is dead", "clock is dead", "no sck", "sclk flat",
+                   "clock not toggling", "no clock pulses", "no edges", "dead clock", "sck is dead",
+                   "sclk stays"),
+    },
+    labels={"present": "SCLK is clocking the slave (clean edges during the transfer)",
+            "absent": "SCLK never clocks — no edges leave the master"},
+)
+
+_SPI_NODES = {
+    "cs_check": DecisionNode(
+        id="cs_check", zone="Chip-select (CS/NSS)",
+        proof_step="Scope the slave's CS (NSS/SS) pin during a transfer. It must go LOW for the whole "
+                   "transaction and return HIGH after.",
+        why="An SPI slave only listens and drives MISO while CS is asserted (almost always active-low). "
+            "If CS never goes low — still a GPIO, the wrong pin, software never toggling it, or inverted "
+            "polarity — the slave is electrically deaf and MISO just floats. Mode and data are moot "
+            "until CS asserts.",
+        expects="cs_state",
+        branches={"not_asserted": "cs_fault", "asserted": "clk_check"}),
+    "cs_fault": DecisionNode(
+        id="cs_fault", zone="CS pin / polarity / control",
+        rules_out="CS never asserting means the slave is never selected — so SPI mode, MOSI data and "
+                  "the MISO line are NOT the problem yet.",
+        candidates=("CS still configured as a plain GPIO, or never driven",
+                    "software never pulls CS low around the transfer (hardware-NSS vs software-NSS mix-up)",
+                    "the wrong pin is being used for CS",
+                    "inverted polarity — the slave wants active-low but CS is driven the other way"),
+        proof_step="Drive CS explicitly low in software immediately before the transfer and high after "
+                   "(or confirm hardware NSS is enabled and mapped to the right pin), and confirm the "
+                   "slave's CS is active-low.",
+        why="A slave that never sees CS asserted can do nothing; fixing selection is a precondition for "
+            "any clock, mode or data debugging."),
+    "clk_check": DecisionNode(
+        id="clk_check", zone="Clock (SCLK)",
+        rules_out="CS asserts, so the slave is selected — selection is not the fault.",
+        candidates=("the SPI peripheral clock isn't enabled",
+                    "SCLK is on the wrong pin / not the SPI alternate function",
+                    "the wrong SPI instance, or the peripheral isn't in master mode"),
+        proof_step="With CS asserting, scope SCLK during the transfer — it must show the expected edges "
+                   "(8 per byte).",
+        why="With the slave selected, no clock means no data can move. A dead SCLK is the master's "
+            "clock generation — peripheral clock, pinmux, instance, or not actually in master mode.",
+        expects="sclk_state",
+        branches={"absent": "clk_fault", "present": "mode_or_miso"}),
+    "clk_fault": DecisionNode(
+        id="clk_fault", zone="peripheral clock / pinmux / master mode",
+        rules_out="CS asserts but SCLK is dead — so this is the master's clock generation, not the slave "
+                  "and not the data lines.",
+        candidates=("the SPI peripheral clock is not enabled before configuration",
+                    "the SCLK pin is left as GPIO or on the wrong alternate function",
+                    "the wrong SPI instance is configured",
+                    "the peripheral is not actually in master mode"),
+        proof_step="Enable the SPI peripheral clock, confirm SCLK is on the SPI alternate function and "
+                   "the right instance, and that the peripheral is configured as master; re-scope SCLK.",
+        why="A selected slave with no clock is always the master side; isolating clock/pinmux/instance "
+            "before touching mode keeps you from chasing the data when nothing is even clocking."),
+    "mode_or_miso": DecisionNode(
+        id="mode_or_miso", zone="SPI mode (CPOL/CPHA) / MISO return",
+        rules_out="CS selects the slave and SCLK clocks it, so selection and clocking are fine — the "
+                  "fault is the data itself: SPI mode or the MISO return path.",
+        candidates=("CPOL/CPHA (SPI mode 0-3) mismatch — bytes come back shifted or garbled",
+                    "MISO floating (reads all 0xFF) or stuck (all 0x00) — the slave isn't driving it",
+                    "MSB-first vs LSB-first mismatch",
+                    "MOSI not carrying the command the slave expects (so it returns nothing useful)"),
+        proof_step="Match the SPI mode (CPOL/CPHA) to the slave's datasheet exactly, then scope MISO "
+                   "during a read: all-0xFF means nothing drives it (slave not selected/powered or wrong "
+                   "pin), all-0x00 likewise, and garbled-but-present means a mode or bit-order mismatch.",
+        why="A selected, clocked slave returning wrong data is almost always a CPOL/CPHA mismatch or a "
+            "MISO nobody is driving — the datasheet's mode and a scope on MISO separate the two."),
+}
+
+SPI_BRINGUP = ProblemPattern(
+    name="spi_bringup",
+    title="SPI bring-up problem",
+    match_groups=(
+        ("spi", "mosi", "miso", "sclk", " sck ", "chip select", "chip-select", "nss"),
+        ("not working", "isn't working", "isnt working", "doesn't work", "doesnt work", "no data",
+         "reads all 0xff", "all 0xff", "reads 0xff", "reads all zeros", "all zeros", "reads 0x00",
+         "all 0x00", "garbage", "garbled", "no response", "not responding", "miso floating",
+         "miso is floating", "nothing back", "nothing comes back", "no miso", "silent", "not reading",
+         "won't read", "wont read", "reads ff", "reads nothing", "shifted", "corrupt", "broken",
+         "not getting", "dead"),
+    ),
+    zones=(
+        ("Chip-select (CS/NSS)", "CS must assert (usually low) for the whole transfer or the slave is deaf"),
+        ("Clock (SCLK)", "the master must actually generate SCLK edges — 8 per byte"),
+        ("SPI mode (CPOL/CPHA)", "both ends must agree on mode 0-3 or data is shifted/garbled"),
+        ("Data lines (MOSI/MISO)", "MOSI carries the command; MISO must be driven by a selected slave"),
+        ("Bit order / speed", "MSB vs LSB first, and a clock the slave can keep up with"),
+    ),
+    required_evidence=(
+        "Which board / MCU and which SPI instance?",
+        "What is the slave device and its SPI mode (CPOL/CPHA)?",
+        "Which pins for SCLK / MOSI / MISO / CS?",
+        "Is CS hardware-NSS or driven in software?",
+        "What does MISO read — all 0x00, all 0xFF, or garbled?",
+    ),
+    beginner_traps=(
+        "leaving CS as a plain GPIO or never pulling it low around the transfer (the slave never wakes)",
+        "a CPOL/CPHA mode mismatch — the data is there but shifted, so it reads garbled",
+        "reading all 0xFF means nothing is driving MISO — usually CS not asserted or the slave unpowered",
+        "MSB-first vs LSB-first mismatch between master and slave",
+        "clocking the bus faster than the slave's maximum SCLK",
+    ),
+    entry="cs_check",
+    nodes=_SPI_NODES,
+    evidence_vars={"cs_state": _CS_STATE, "sclk_state": _SCLK_STATE},
+)
+
+
+# The pattern registry. Add the next curated pattern here (HardFault / power-reset / …); the engine
 # above is already general over all of them.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
+    I2C_BRINGUP.name: I2C_BRINGUP,
+    SPI_BRINGUP.name: SPI_BRINGUP,
 }
