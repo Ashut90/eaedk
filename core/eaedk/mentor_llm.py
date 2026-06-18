@@ -12,6 +12,7 @@ import sqlite3
 from dataclasses import dataclass
 
 from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
+from . import conceptual_guards
 from .llm.gateway import Gateway
 from .llm.ollama import OllamaProvider
 from .llm.postfilter import build_board_allowlist, filter_text
@@ -1160,6 +1161,8 @@ def _teach_learning_map(conn: sqlite3.Connection, lm, messages: list[dict], boar
     safe, _violations = problem_patterns.flag_invented_claims(taught, packet, user_text)
     if not safe or len(taught) < 40:
         return deterministic                              # invented a board fact → safe deterministic
+    if conceptual_guards.flag_conceptual_errors(taught):
+        return deterministic                              # conceptually wrong → safe deterministic render
     if getattr(lm, "followups", ()):
         taught += "\n\nWhere next? You could ask:\n" + "\n".join(f"  • {f}" for f in lm.followups)
     return taught
@@ -1375,6 +1378,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     critiqued = arbiter.critic_review(gw, system, raw, grounding)
     filtered, removed = filter_text(critiqued, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
+    # Conceptual guard (deterministic): the post-filter catches invented *values*; this catches
+    # statements that are literal-clean but conceptually wrong (e.g. pull-ups on SPI). On any hit,
+    # drop to the grounded deterministic backbone rather than ship a confident conceptual error.
+    if conceptual_guards.flag_conceptual_errors(answer):
+        answer = backbone
     # Enforce the contract even if the model (or the post-filter) dropped a part.
     if len(answer) < 20:
         answer = backbone
