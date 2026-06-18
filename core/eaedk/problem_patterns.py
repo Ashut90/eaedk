@@ -1048,11 +1048,162 @@ POWER_RESET = ProblemPattern(
 )
 
 
-# The pattern registry. Add the next curated pattern here (HardFault / memory-crash / …); the engine
-# above is already general over all of them.
+# ================================================================================================
+# SEED PATTERN #5 — HardFault / memory crash (curated, deterministic). Encodes the real order:
+# decode the fault registers FIRST (CFSR/HFSR + stacked PC), then bus vs usage/unaligned vs stack.
+# Boundary: it fires only on a fault WITH a concrete mechanism — a bare "my code crashed" or a
+# symptom-only "crashed with HardFault_Handler" stays with the Purpose gate (ask for evidence).
+# ================================================================================================
+
+_FAULT_TYPE = EvidenceVar(
+    name="fault_type",
+    values={
+        "bus": ("busfault", "bus fault", "bus error", "imprecise", "precise bus", "bfar",
+                "bad address", "bad pointer", "null pointer", "nonexistent", "non-existent",
+                "unclocked", "peripheral not clocked", "accessing memory that"),
+        "usage": ("usagefault", "usage fault", "unaligned", "divide by zero", "div by zero",
+                  "undefined instruction", "ufsr", "divbyzero", "bad function pointer", "thumb bit"),
+        "stack": ("memmanage", "mem manage", "stack overflow", "stack grew", "mmfar",
+                  "stack corrupt", "mpu violation", "stack into", "blew the stack", "stack smash"),
+    },
+    labels={"bus": "a bus fault — an access to memory/peripheral that didn't answer",
+            "usage": "a usage fault — an illegal instruction (alignment, divide, undefined)",
+            "stack": "a stack/memmanage fault — the stack itself is the problem"},
+)
+
+_STACK_EVIDENCE = EvidenceVar(
+    name="stack_evidence",
+    values={
+        "overlap": ("linker", ".map", "map file", "stack overlaps", "stack region", "too small",
+                    "grew into", "collides", "_estack", "ebss", "into the heap", "stack size"),
+        "runaway": ("recursion", "recursive", "deep call", "big buffer", "large array",
+                    "local array", "huge local", "stack allocated", "alloca", "infinite recursion",
+                    "deep nesting"),
+    },
+    labels={"overlap": "the linker map shows the stack region colliding or undersized",
+            "runaway": "an adequate stack is blown by recursion or a large local"},
+)
+
+_FAULT_NODES = {
+    "fault_decode": DecisionNode(
+        id="fault_decode", zone="Fault decode (CFSR/HFSR + stacked PC)",
+        proof_step="In the fault handler, read SCB->CFSR and SCB->HFSR and recover the stacked PC and "
+                   "LR from the exception frame (the SP at fault). The CFSR bits name the fault; the "
+                   "stacked PC names the faulting instruction.",
+        why="A HardFault is just the CPU saying 'something illegal happened.' The fault status "
+            "registers say exactly WHAT (bus, usage/unaligned, or memmanage/stack) and the stacked PC "
+            "says WHERE. Decoding them turns a blind crash into a named fault at a known instruction — "
+            "the one step that ends the guessing.",
+        expects="fault_type",
+        branches={"bus": "bad_pointer", "usage": "usage_fault", "stack": "stack_check"}),
+    "bad_pointer": DecisionNode(
+        id="bad_pointer", zone="Bad pointer / bus access",
+        rules_out="The CFSR says a bus fault — so this is an access to memory that isn't there, not an "
+                  "alignment problem and not the stack.",
+        candidates=("dereferencing a null or uninitialised pointer",
+                    "touching a peripheral whose clock isn't enabled (the bus never answers)",
+                    "an address outside valid RAM/flash/peripheral space",
+                    "a pointer corrupted earlier and only faulting now"),
+        proof_step="Look up the stacked PC in your .map / disassembly to find the exact access, then "
+                   "check what it touches: is the pointer valid, and is that peripheral's clock enabled "
+                   "before you touch it?",
+        why="A bus fault is almost always a bad pointer or an unclocked peripheral; the stacked PC takes "
+            "you to the exact instruction so you can check the address it used."),
+    "usage_fault": DecisionNode(
+        id="usage_fault", zone="Usage fault (alignment / divide / undefined)",
+        rules_out="The CFSR says a usage fault — so it is the instruction itself, not a bad bus address "
+                  "and not the stack.",
+        candidates=("an unaligned word/halfword access (a packed struct or a cast pointer)",
+                    "divide-by-zero with the trap enabled",
+                    "an undefined instruction (a bad function pointer or a wrong Thumb bit)"),
+        proof_step="From the stacked PC, inspect the faulting instruction: an unaligned LDR/STR points "
+                   "to a misaligned pointer/packed field; a UDIV points to divide-by-zero; a garbage "
+                   "opcode points to a corrupted or Thumb-bit-wrong function pointer.",
+        why="A usage fault names the illegal operation; the stacked instruction tells you which of "
+            "alignment / divide / bad-call it actually was."),
+    "stack_check": DecisionNode(
+        id="stack_check", zone="Stack (overlap vs runaway)",
+        rules_out="The fault points at the stack — so it is not a stray bus access and not an alignment "
+                  "fault; the stack itself is the problem.",
+        candidates=("the stack grew into .bss/heap (regions too close, or the stack too small)",
+                    "runaway recursion or a huge stack-allocated buffer blew an adequate stack"),
+        proof_step="Open the linker map: compare the stack region against _ebss / heap end to see if "
+                   "they collide or the stack is undersized; and check the faulting call path for deep "
+                   "recursion or large local buffers.",
+        why="Stack faults are either layout (the map shows overlap/too-small) or usage (a function eats "
+            "more stack than budgeted) — the map and the call path separate the two.",
+        expects="stack_evidence",
+        branches={"overlap": "linker_overlap", "runaway": "runaway_stack"}),
+    "linker_overlap": DecisionNode(
+        id="linker_overlap", zone="Linker layout",
+        rules_out="The map shows the stack colliding with .bss/heap (or simply too small) — so it is a "
+                  "layout/budget problem, not a single runaway function.",
+        candidates=("the stack size in the linker script is too small for the worst-case depth",
+                    "stack and heap/.bss placed too close with no guard",
+                    "no stack-overflow detection (MPU guard / fill pattern) to catch it early"),
+        proof_step="Increase the stack region in the linker script to cover the worst-case depth, "
+                   "separate it from heap/.bss, and add a guard (an MPU region or a fill-pattern check) "
+                   "so the next overflow is caught at the boundary instead of as a random fault.",
+        why="When the map shows the collision, the fix is budget and separation in the linker script "
+            "plus a guard so it fails loudly next time."),
+    "runaway_stack": DecisionNode(
+        id="runaway_stack", zone="Stack usage (recursion / large locals)",
+        rules_out="The stack region is adequately sized but a specific call path blows it — so it is "
+                  "usage, not layout.",
+        candidates=("unbounded or deep recursion in the faulting path",
+                    "a large buffer allocated on the stack (a big local array)",
+                    "deep nested calls with heavy frames on a small stack"),
+        proof_step="Bound or remove the recursion (make it iterative or cap the depth), move large "
+                   "buffers off the stack (static or heap), and re-measure peak stack use with a "
+                   "fill-pattern high-water mark.",
+        why="When the budget is fine but one path overflows, the fix is in the code path that eats the "
+            "stack, not the linker."),
+}
+
+HARDFAULT = ProblemPattern(
+    name="hardfault",
+    title="HardFault / crash problem",
+    match_groups=(
+        ("hardfault", "hard fault", "usagefault", "usage fault", "busfault", "bus fault", "memmanage",
+         "fault handler", "segfault", "crash", "crashes", "crashing", "stack overflow", "stack smash"),
+        ("jumps to", "ends up in", "stuck in the fault", "lands in", "goes to the fault",
+         "hangs in the fault", "fault handler every", "keeps crashing", "unaligned", "null pointer",
+         "bad pointer", "dereferenc", "wild pointer", "dangling pointer", "out of bounds",
+         "buffer overflow", "writes past", "divide by zero", "div by zero", "imprecise", "bus error",
+         "use after free", "double free", "at 0x", "on boot every"),
+    ),
+    zones=(
+        ("Fault decode", "read CFSR/HFSR + the stacked PC — name the fault and the instruction"),
+        ("Bus access", "a bad pointer or an unclocked peripheral the bus can't answer"),
+        ("Usage fault", "unaligned access, divide-by-zero, or an undefined instruction"),
+        ("Stack", "overflow into .bss/heap, or a runaway call path"),
+        ("Linker layout", "stack size and separation in the linker script, plus a guard"),
+    ),
+    required_evidence=(
+        "What does CFSR/HFSR say, and what is the stacked PC (the faulting instruction)?",
+        "Is it a bus, usage/unaligned, or memmanage/stack fault?",
+        "Does it fault on boot, randomly, or in a specific function?",
+        "What is the stack size in the linker script vs the worst-case depth?",
+        "Any recursion or large stack-allocated buffers in the faulting path?",
+    ),
+    beginner_traps=(
+        "guessing instead of reading CFSR/HFSR + the stacked PC, which name the fault and the line",
+        "dereferencing a null/uninitialised pointer, or touching an unclocked peripheral (bus fault)",
+        "an unaligned access through a packed struct or a cast pointer (usage fault)",
+        "the stack growing into .bss/heap because the linker stack size is too small",
+        "runaway recursion or a giant local array blowing an otherwise-adequate stack",
+    ),
+    entry="fault_decode",
+    nodes=_FAULT_NODES,
+    evidence_vars={"fault_type": _FAULT_TYPE, "stack_evidence": _STACK_EVIDENCE},
+)
+
+
+# The pattern registry. The engine above is already general over all of these.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
     I2C_BRINGUP.name: I2C_BRINGUP,
     SPI_BRINGUP.name: SPI_BRINGUP,
     POWER_RESET.name: POWER_RESET,
+    HARDFAULT.name: HARDFAULT,
 }
