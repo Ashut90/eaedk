@@ -65,6 +65,7 @@ class LearningMap:
     sub_routes: tuple[SubRoute, ...] = ()       # candidate interpretations to sort/compare
     scope_excludes: str = ""                    # what this class does NOT cover + where to route
     board_dependent: bool = True                # does resolving need board-specific facts?
+    followups: tuple[str, ...] = ()             # conversational next-moves offered after a teach
 
 
 @dataclass
@@ -266,6 +267,21 @@ def scoped_uncertainty(text: str) -> str:
 
 
 # --- Classified render (SORT → COMPARE → HELP across a class's sub-routes) ------------------------
+
+def teach_packet(lm: LearningMap) -> str:
+    """The VERIFIED grounding a conversational mentor may teach from for this class — curated facts
+    only, no board specifics. This is the 'chapter' the LLM teaches; the verifier blocks anything
+    the LLM states that is not traceable here."""
+    L = [f"VERIFIED FACT PACKET — topic: {lm.title}.", f"Framing: {lm.overview}"]
+    if lm.sub_routes:
+        L.append("Routes / options (teach and compare from these; do not add others):")
+        L += [f"  - {sr.name}: {sr.summary}" for sr in lm.sub_routes]
+    if lm.scope_excludes:
+        L.append(f"Out of scope here: {lm.scope_excludes}")
+    if lm.first_step:
+        L.append(f"A sound first step: {lm.first_step}")
+    return "\n".join(L)
+
 
 def _render_classified(lm: LearningMap, query: str) -> str:
     low = " " + (query or "").lower() + " "
@@ -587,6 +603,12 @@ _COMMUNICATION_SYSTEMS = LearningMap(
     clarifying_question="is your problem chip-to-chip on one board, device-to-device over the air, or "
                         "getting data to a host/cloud? That picks the layer.",
     board_dependent=False,
+    followups=(
+        "Compare BLE vs Wi-Fi vs LoRa for my use case",
+        "Go deeper on the wired buses (UART/SPI/I2C/CAN)",
+        "How do I make the link reliable end-to-end?",
+        "Quiz me on choosing the right protocol",
+    ),
 )
 
 # Registry order = match precedence: overwhelm/debug-skill first, then the specific RF/SDR and Linux

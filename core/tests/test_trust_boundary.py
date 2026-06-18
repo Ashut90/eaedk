@@ -139,13 +139,13 @@ def test_p3_linker_gets_curated_experiment_not_blink(tmp_path):
 def test_p3_never_repeats_the_same_try_this_in_a_session(tmp_path):
     conn = _seeded(tmp_path)
     first = mentor_chat(conn, "STM32F103-BluePill",
-                        [{"role": "user", "content": "where do I start?"}], use_llm=False)
+                        [{"role": "user", "content": "where do I start on this board?"}], use_llm=False)
     assert "Try this:" in first                          # first time: the board's blink experiment
     prior = first[first.index("Try this:"):]
     out = mentor_chat(conn, "STM32F103-BluePill",
-                      [{"role": "user", "content": "where do I start?"},
+                      [{"role": "user", "content": "where do I start on this board?"},
                        {"role": "assistant", "content": prior},
-                       {"role": "user", "content": "what else should I try first?"}],
+                       {"role": "user", "content": "what else should I try first on this board?"}],
                       use_llm=False)
     assert "Try this:" not in out                        # same experiment already given -> suppressed
 
@@ -154,7 +154,7 @@ def test_p3_first_project_still_gets_board_experiment(tmp_path):
     """Regression: a plain first-project question (no prior turns) still gets the family experiment."""
     conn = _seeded(tmp_path)
     out = mentor_chat(conn, "Arduino-Uno",
-                      [{"role": "user", "content": "where do I start?"}], use_llm=False)
+                      [{"role": "user", "content": "where do I start on this board?"}], use_llm=False)
     assert "F_CPU" in out                                # AVR family experiment, unchanged
 
 

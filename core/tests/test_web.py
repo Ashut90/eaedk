@@ -197,7 +197,8 @@ def test_studio_review_returns_confirmed_advisory(client):
 
 def test_mentor_chat_route(client):
     r = client.post("/api/mentor/chat", json={"board": "STM32F103-BluePill",
-        "messages": [{"role": "user", "content": "where do I start?"}], "use_llm": False}).json()
+        "messages": [{"role": "user", "content": "where do I start on this board?"}],
+        "use_llm": False}).json()
     assert "Try this:" in r["answer"]
     empty = client.post("/api/mentor/chat", json={"board": "STM32F103-BluePill",
                                                   "messages": []}).json()
