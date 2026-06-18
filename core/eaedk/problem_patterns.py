@@ -891,10 +891,168 @@ SPI_BRINGUP = ProblemPattern(
 )
 
 
-# The pattern registry. Add the next curated pattern here (HardFault / power-reset / …); the engine
+# ================================================================================================
+# SEED PATTERN #4 — unexpected reset / brown-out (curated, deterministic). Encodes the five-whys:
+# read the reset-cause flag first, then brown-out (inrush → decoupling) vs watchdog vs reset-pin.
+# ================================================================================================
+
+_RESET_CAUSE = EvidenceVar(
+    name="reset_cause",
+    values={
+        "brownout": ("brown-out", "brownout", "bor flag", "bor reset", " bor ", "voltage drop",
+                     "voltage sag", "voltage dip", "rail drops", "rail sags", "power drop",
+                     "under load", "when wifi", "when the wifi", "when wi-fi", "when the motor",
+                     "when the radio", "sd card write", "resets under load", "dips below", "sags"),
+        "watchdog": ("watchdog", "iwdg", "wwdg", " wdt ", "wdt reset", "watchdog reset",
+                     "during a long", "during flash", "flash write", "flash erase", "long loop",
+                     "blocking", "busy-wait", "busy wait", "long operation"),
+        "pin": ("reset pin", "nrst", "floating reset", "reset line", "noise on reset",
+                "external reset", "pin reset", "reset is floating", "glitch on reset"),
+    },
+    labels={"brownout": "the reset cause is a brown-out (the supply rail sagged)",
+            "watchdog": "the reset cause is the watchdog timer firing",
+            "pin": "the reset is coming from the external reset pin"},
+)
+
+_CAP_TEST = EvidenceVar(
+    name="cap_test",
+    values={
+        # Outcome words only — naming the apparatus ("a bench supply") is NOT a positive result;
+        # "still resets even with a bench supply" must read as no_change, not helped.
+        "helped": ("cap helped", "that helped", "cap fixed", "capacitor fixed", "fixed it",
+                   "that fixed", "stops with", "goes away with", "no longer resets", "solved it",
+                   "stopped when i added"),
+        "no_change": ("still resets", "still resetting", "no change", "didn't help", "didnt help",
+                      "even with", "same with a bench", "persists", "still happens",
+                      "doesn't help", "no difference"),
+    },
+    labels={"helped": "adding bulk capacitance / a stiff supply stops the resets",
+            "no_change": "the resets persist even with a stiff supply"},
+)
+
+_RESET_NODES = {
+    "reset_cause_check": DecisionNode(
+        id="reset_cause_check", zone="Reset cause",
+        proof_step="After a reset, read the MCU's reset-cause / status flags (e.g. the reset flags in "
+                   "the power or clock status register) BEFORE clearing them, and note which is set: "
+                   "brown-out, watchdog, pin, or software.",
+        why="Every reset feels identical from outside, but the silicon records WHY. The reset-cause "
+            "flag splits the whole problem in one read — power (brown-out) vs a watchdog timeout vs an "
+            "external pin vs your own software reset — so you debug the real cause instead of guessing.",
+        expects="reset_cause",
+        branches={"brownout": "power_sag", "watchdog": "watchdog_starve", "pin": "reset_pin"}),
+    "power_sag": DecisionNode(
+        id="power_sag", zone="Power delivery (inrush / decoupling)",
+        rules_out="The flag says brown-out, so the rail is sagging — this is power delivery, not the "
+                  "watchdog, the reset pin, or (yet) your firmware.",
+        candidates=("a current spike (Wi-Fi TX, motor start, SD write) the supply can't deliver fast "
+                    "enough",
+                    "insufficient bulk/local decoupling near the hungry load",
+                    "an undersized or dropping-out regulator",
+                    "a weak source (a thin USB port or nearly-flat battery)"),
+        proof_step="Scope the Vdd rail DURING the triggering event (Wi-Fi TX / motor / SD write) and "
+                   "watch for a dip below the brown-out threshold. Then add bulk capacitance "
+                   "(e.g. 100uF + 0.1uF) close to the load, or power from a stiff bench supply, and see "
+                   "if the resets stop.",
+        why="A brown-out under load is the rail dipping below the BOR threshold when an inrush spike "
+            "hits a supply that can't keep up. Scoping the rail proves the sag; the cap / bench-supply "
+            "swap proves whether it is delivery (decoupling/inrush) or something stiffer can't fix.",
+        expects="cap_test",
+        branches={"helped": "decoupling_confirmed", "no_change": "supply_or_short"}),
+    "decoupling_confirmed": DecisionNode(
+        id="decoupling_confirmed", zone="Decoupling / inrush",
+        rules_out="A stiff supply or extra bulk capacitance stops it — so the root cause is delivery: "
+                  "inrush vs decoupling, not the regulator's headroom or a short.",
+        candidates=("too little bulk capacitance for the load's inrush",
+                    "decoupling caps too far from the hungry chip",
+                    "the RF/motor rail sharing a weak supply with the MCU"),
+        proof_step="Size the bulk cap to the inrush, place 0.1uF decoupling right at the load's power "
+                   "pins, and consider a separate or stiffer regulator for the RF/motor rail; keep the "
+                   "high-current traces short.",
+        why="Once a cap fixes it, the engineering is delivery: enough local energy storage, close "
+            "enough, on a rail stiff enough for the peak draw."),
+    "supply_or_short": DecisionNode(
+        id="supply_or_short", zone="Regulator headroom / short / firmware",
+        rules_out="The resets persist even with a stiff supply — so it is NOT just decoupling/inrush.",
+        candidates=("the regulator can't supply the peak current (undersized or dropping out)",
+                    "a partial short pulling the rail down",
+                    "the brown-out threshold set higher than the rail's normal level",
+                    "a firmware fault/assert that reboots and looks like a hardware reset"),
+        proof_step="Measure the regulator's input vs output under load, compare its current rating to "
+                   "the peak draw, and check for shorts; then confirm the firmware isn't faulting (read "
+                   "the fault registers) before blaming hardware.",
+        why="When a stiff supply doesn't help, the fault is upstream of decoupling — regulator headroom, "
+            "a short, a mis-set threshold, or software masquerading as a reset."),
+    "watchdog_starve": DecisionNode(
+        id="watchdog_starve", zone="Watchdog timing",
+        rules_out="The flag says watchdog, so this is a starved kick, not power and not the reset pin.",
+        candidates=("a long blocking operation (flash erase/write is the classic one) outruns the "
+                    "timeout",
+                    "the watchdog isn't kicked inside that path",
+                    "the timeout is set too short for the real work"),
+        proof_step="Find the longest blocking section (flash write/erase, a busy-wait, a long ISR) and "
+                   "either kick the watchdog inside it, lengthen the timeout to cover it, or move the "
+                   "work off the blocking path. Temporarily disable the watchdog — if the resets stop, "
+                   "it is confirmed.",
+        why="A watchdog reset during long work is a feeding problem, not a hardware fault; the disable "
+            "test confirms it and the fix is to feed it or shorten the work."),
+    "reset_pin": DecisionNode(
+        id="reset_pin", zone="Reset pin / external",
+        rules_out="The flag says an external pin reset — so it is not brown-out and not the watchdog.",
+        candidates=("NRST floating or noisy (missing pull-up / cap)",
+                    "a reset supervisor misfiring",
+                    "a debugger/programmer asserting reset",
+                    "ESD or coupling onto the reset line"),
+        proof_step="Confirm NRST has its pull-up and a small cap to ground, disconnect the debugger, "
+                   "and scope NRST for glitches during the resets.",
+        why="An external-pin reset is electrical noise or a misbehaving supervisor/debugger on NRST — "
+            "scoping the pin separates a real assert from a flag set for another reason."),
+}
+
+POWER_RESET = ProblemPattern(
+    name="power_reset",
+    title="unexpected-reset / brown-out problem",
+    match_groups=(
+        ("reset", "resets", "resetting", "reboot", "reboots", "rebooting", "restart", "restarts",
+         "restarting", "brown-out", "brownout", "watchdog", "boot loop", "bootloop", "power cycl",
+         "keeps dying"),
+        ("random", "randomly", "by itself", "on its own", "unexpected", "keeps", "whenever",
+         "when wifi", "when the motor", "under load", "every time", "intermittent", "won't stay",
+         "wont stay", "spontaneous", "for no reason", "all of a sudden", "keeps happening",
+         "crashes and reboot", "keeps rebooting"),
+    ),
+    zones=(
+        ("Reset cause", "read the reset-cause flag — brown-out vs watchdog vs pin vs software"),
+        ("Power delivery", "inrush vs decoupling vs regulator headroom on the rail that sags"),
+        ("Watchdog timing", "long blocking work (flash write) outrunning the watchdog kick"),
+        ("Reset pin", "NRST pull-up/cap, a supervisor, the debugger, or noise"),
+        ("Firmware fault", "a fault handler or assert that reboots can masquerade as a reset"),
+    ),
+    required_evidence=(
+        "When does it reset — at boot, randomly, or under a specific load (Wi-Fi/motor/SD)?",
+        "What does the reset-cause register say (brown-out / watchdog / pin / software)?",
+        "How is the board powered (USB, regulator, battery) and what is the peak current draw?",
+        "Is a watchdog enabled, and what is its timeout?",
+        "Does a stiffer supply or extra bulk capacitance change it?",
+    ),
+    beginner_traps=(
+        "blaming firmware when the reset-cause flag would say brown-out or watchdog in one read",
+        "a current spike (Wi-Fi TX, motor start, SD write) sagging the rail below the brown-out level",
+        "a long flash erase/write outrunning the watchdog timeout because the kick is starved",
+        "NRST left floating with no pull-up/cap, catching noise",
+        "powering a hungry board from a weak USB port or an undersized regulator",
+    ),
+    entry="reset_cause_check",
+    nodes=_RESET_NODES,
+    evidence_vars={"reset_cause": _RESET_CAUSE, "cap_test": _CAP_TEST},
+)
+
+
+# The pattern registry. Add the next curated pattern here (HardFault / memory-crash / …); the engine
 # above is already general over all of them.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
     I2C_BRINGUP.name: I2C_BRINGUP,
     SPI_BRINGUP.name: SPI_BRINGUP,
+    POWER_RESET.name: POWER_RESET,
 }
