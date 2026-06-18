@@ -11,7 +11,12 @@ import re
 import sqlite3
 from dataclasses import dataclass
 
-from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
+from . import (repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns,
+               navigator, structural_router)
+from .progression_ledger import (
+    ProgressionLedger, log_turn_telemetry,
+    get_scaffolding_parameters, apply_scaffolding_to_prompt,
+)
 from .llm.gateway import Gateway
 from .llm.ollama import OllamaProvider
 from .llm.postfilter import build_board_allowlist, filter_text
@@ -1117,6 +1122,27 @@ def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | 
 # deterministic render so it never dead-ends. Teaching model is capable by default (the 3B can't teach).
 _MENTOR_MODEL = os.environ.get("EAEDK_MENTOR_MODEL", "llama3.1:8b")
 
+# ── Progression ledger: lazy singleton ────────────────────────────────────────────────
+_progression_ledger: ProgressionLedger | None = None
+
+
+def _get_progression_ledger() -> ProgressionLedger:
+    global _progression_ledger
+    if _progression_ledger is None:
+        _progression_ledger = ProgressionLedger()
+    return _progression_ledger
+
+
+def _record_tel(route: str, intent: str, entities: tuple,
+                fault_id: str | None = None) -> None:
+    """Persist turn telemetry to the progression ledger.  Side-channel only;
+    never crashes the turn regardless of DB errors."""
+    try:
+        log_turn_telemetry(_get_progression_ledger(), route, intent,
+                           entities, fault_id)
+    except Exception:
+        pass
+
 _TEACH_SYSTEM = (
     "You are a senior embedded-systems mentor in a real, ongoing conversation with an engineer — not a "
     "FAQ and not a lecture. The engine hands you a VERIFIED FACT PACKET for the area they asked about. "
@@ -1206,7 +1232,14 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # Central Navigator (docs/32): classify the user's CONFUSION TYPE and route to the right KIND of
     # guidance. The five modes are first-class; adding a topic/pattern/map is DATA, not router code.
     route = navigator.classify(purpose, messages)
+
+    # ── Progression ledger: capture telemetry context for this turn ────────────────
+    _tel = structural_router.extract_intent(last_user)
+    _tel_fault = (route.proof_state.pattern.name
+                  if route.proof_state and route.proof_state.matched else None)
+
     if route.mode == navigator.PROOF_PATH:                    # broken-system → guided proof path
+        _record_tel(route.mode, _tel.objective, _tel.entities, _tel_fault)
         return _voice_proof_path(route.proof_state, board_name, use_llm, gateway)
     # The selected board is "anchored" (in scope) only when the user named a board/chip, has an active
     # project, or says "this board" — never for a bare board-less direction/career question.
@@ -1214,6 +1247,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                       or any(p in last_user.lower() for p in ("this board", "my board", "selected board")))
 
     if route.mode == navigator.LEARNING_MAP:                  # learning-direction → a route, not a dump
+        _record_tel(route.mode, _tel.objective, _tel.entities, _tel_fault)
         if route.learning_map is not None:
             # Conversational mentor (docs/34) — ONE path so far: the LLM teaches from the verified
             # packet, multi-turn; offline / unsafe falls back to the deterministic render below.
@@ -1226,6 +1260,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
             return navigator.firmware_direction_map()
         return render_purpose(conn, purpose, board_name, path, active_boards)   # board-anchored career
     if route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
+        _record_tel(route.mode, _tel.objective, _tel.entities, _tel_fault)
         return render_purpose(conn, purpose, board_name, path, active_boards)
 
     # P2 — a board-LESS broad-direction question must NOT be answered as if it were about the selected
@@ -1363,12 +1398,19 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
         _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
+
+    # ── Progression ledger: scaffolding — strip basics for experienced learners ────
+    _scaffold = get_scaffolding_parameters(
+        _get_progression_ledger(), list(_tel.entities))
+    system = apply_scaffolding_to_prompt(system, _scaffold)
+
     # Actor pass — the model proposes. A live-model hiccup (timeout, dropped connection, the model
     # answered the availability ping but stalls on generation) must NEVER crash the request — degrade
     # to the deterministic backbone, which is already a complete grounded answer.
     try:
         raw = gw.provider.generate(system, prompt)
     except Exception:
+        _record_tel(route.mode, _tel.objective, _tel.entities, _tel_fault)
         return lead + backbone
     # Critic pass — the model reviews its own answer (P4; runs on every online response).
     grounding = f"{sem_line}{feas_line}Board: {board_name} ({soc['arch']}); peripherals: {have}."
@@ -1386,7 +1428,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # Arbiter pass — deterministic, final say. Discards the prose on any hard fail (P4).
     arb = arbiter.arbitrate(conn, board_name, project, last_user, answer)
     if arb.overridden:
+        _record_tel(route.mode, _tel.objective, _tel.entities, _tel_fault)
         return lead + arb.text                       # the Validation Engine wins; Actor text dropped
+    _record_tel(route.mode, _tel.objective, _tel.entities, _tel_fault)
     return lead + answer                             # P1/P2B: hard limit + cost data prefixed, always
 
 
