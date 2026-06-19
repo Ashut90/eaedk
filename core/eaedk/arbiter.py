@@ -50,6 +50,64 @@ def critic_review(gw, system: str, actor_text: str, context: str) -> str:
         return actor_text
 
 
+# ── Bounded "why" critic (Step 4) ───────────────────────────────────────────────────────────────
+# For an UNCOVERED fault (one with no curated ProblemPattern — a matched pattern would already have
+# returned a PROOF_PATH whose tree ends at a checkable step), the free-form LLM answer can jump to a
+# software conclusion without ruling out the physical layers or ending at something the user can
+# measure. This single bounded pass enforces the same discipline every proof-path already encodes:
+# physical-first, end with a concrete measurement. Grounding is the curated layer order below (derived
+# from the patterns' own zones) plus the board context — never the web. It is advisory: the post-
+# filter, conceptual guards and the deterministic arbiter all still run AFTER it and keep the last say.
+
+# Curated fault vocabulary — mirrors the structural fault signals but kept self-contained here so the
+# why-critic does not depend on (or re-wire) the isolated structural_router.
+_FAULT_SIGNALS: tuple[str, ...] = (
+    "not working", "isn't working", "isnt working", "doesn't work", "doesnt work", "no output",
+    "not printing", "no signal", "no data", "no response", "not responding", "nothing happens",
+    "broken", "crash", "crashes", "crashing", "hang", "hangs", "freeze", "freezes", "frozen",
+    "won't ", "wont ", "fails", "failing", "failed", "dead", "garbage", "garbled", "stuck",
+    "reboots", "resetting", "keeps resetting", "disconnect", "drops packets", "not getting",
+    "can't get", "cant get", "isn't receiving", "not receiving", "won't boot", "wont boot",
+)
+
+
+def _is_fault(user_text: str) -> bool:
+    low = " " + (user_text or "").lower() + " "
+    return any(s in low for s in _FAULT_SIGNALS)
+
+
+_WHY_SYSTEM = (
+    "You are the WHY-CRITIC reviewing a debugging answer for a hardware fault. Embedded faults are "
+    "debugged physical-layer-first, never software-first. Before the answer concludes a software/code "
+    "cause, it must rule out the layers beneath, in this order:\n"
+    "  1. Electrical / power — rail stable, grounds tied, pull-ups / decoupling present\n"
+    "  2. Clock — the peripheral and its pin/bus clock are actually enabled\n"
+    "  3. Pinmux — the pin is on the right alternate function, not plain GPIO\n"
+    "  4. Protocol / addressing — selection, address, mode, baud\n"
+    "  5. Software — only after the above are addressed\n"
+    "Rewrite the answer so it (a) does not jump to a software conclusion before the physical layers "
+    "are addressed, and (b) ENDS with ONE concrete measurement the user can physically take right now "
+    "(scope a pin, measure a rail, read a status register) to confirm the next cause. Do NOT invent "
+    "specific pins, addresses, clock values, registers, or part numbers. Return the corrected answer "
+    "only — no preamble, no meta-commentary.")
+
+
+def why_review(gw, actor_text: str, context: str, user_text: str) -> str:
+    """One bounded 'why' pass for an uncovered fault: push the answer physical-first and make it end
+    at a checkable measurement. Fires ONLY on a fault report (concept/design answers pass straight
+    through, no model call). Best-effort — offline / model error returns the answer unchanged, and the
+    deterministic arbiter remains authoritative downstream."""
+    if not _is_fault(user_text):
+        return actor_text
+    try:
+        prompt = (f"CONTEXT (ground truth — do not contradict, do not invent specifics):\n{context}\n\n"
+                  f"DRAFT ANSWER TO REVIEW:\n{actor_text}\n\nCorrected answer:")
+        out = gw.provider.generate(_WHY_SYSTEM, prompt)
+        return out.strip() or actor_text
+    except Exception:
+        return actor_text
+
+
 def _feasibility_fail(conn: sqlite3.Connection, project: str | None) -> str | None:
     if not project:
         return None
