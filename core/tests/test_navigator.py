@@ -449,3 +449,17 @@ def test_comms_teach_is_multi_turn_history_aware(tmp_path):
     _system, prompt = gw.calls[0]
     assert "battery sensor" in prompt and "UART, SPI, I2C" in prompt   # full conversation reached the model
     assert "VERIFIED FACT PACKET" in prompt                            # grounded teach, not freeform
+
+
+def test_verb_can_does_not_hijack_to_communication_systems():
+    """Regression: the English verb 'can' (e.g. 'Can you...') must NOT match the comms learning
+    map via a bare ' can ' trigger. Real CAN bus still must."""
+    # A beginner project request that merely contains the verb 'can' is NOT a comms-systems query.
+    assert nav.match_learning(
+        "Can you help me start a buzzer project where a temperature sensor triggers it?") is None
+    assert nav.match_learning("can you explain how to begin my project?") is None
+    # But real CAN-bus questions (and the canbus/can-bus spellings) still route to comms.
+    assert nav.match_learning("should I use CAN bus or Ethernet for my nodes?").name == \
+        "communication_systems"
+    assert nav.match_learning("my canbus keeps dropping frames, where do I start?").name == \
+        "communication_systems"
