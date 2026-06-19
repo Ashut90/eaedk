@@ -1199,6 +1199,151 @@ HARDFAULT = ProblemPattern(
 )
 
 
+# ================================================================================================
+# SEED PATTERN #6 — RTOS firmware (curated, deterministic). A NEW project type (goal_type=rtos),
+# not a new topic. Order: scheduler/kernel-handlers first (does ANY task run?), then per-task
+# (never-runs = starvation/priority vs runs-then-breaks = stack/ISR-safety).
+# ================================================================================================
+
+_SCHEDULER_STATE = EvidenceVar(
+    name="scheduler_state",
+    values={
+        "not_running": ("nothing runs", "no task runs", "no tasks run", "scheduler doesn't start",
+                        "scheduler won't start", "scheduler wont start", "vtaskstartscheduler returns",
+                        "scheduler returned", "scheduler never starts", "no task executes",
+                        "doesn't reach any task", "tick isn't firing", "no systick", "hangs at startup",
+                        "stuck before the scheduler", "nothing schedules"),
+        "running": ("other tasks run", "some tasks run", "the other tasks run", "only one task",
+                    "blink task works", "rest of the tasks", "everything else runs",
+                    "other threads run", "the others run"),
+    },
+    labels={"not_running": "the scheduler never schedules — no task runs at all",
+            "running": "the scheduler runs and other tasks work — one task misbehaves"},
+)
+
+_TASK_SYMPTOM = EvidenceVar(
+    name="task_symptom",
+    values={
+        "never_runs": ("never runs", "doesn't run", "isn't running", "starved", "blocked forever",
+                       "stuck waiting", "never gets cpu", "never scheduled", "blocked on",
+                       "waiting forever", "doesn't get time", "never executes"),
+        "crashes": ("crashes", "hardfault", "stack overflow", "corrupts", "overflowed", "faults",
+                    "overwrites", "memory corruption", "overflow hook", "smashes"),
+    },
+    labels={"never_runs": "the task never runs (starved or blocked)",
+            "crashes": "the task runs and then crashes or corrupts memory"},
+)
+
+_RTOS_NODES = {
+    "rtos_check": DecisionNode(
+        id="rtos_check", zone="Scheduler vs task",
+        proof_step="Split scheduler from task first: confirm vTaskStartScheduler() was called and "
+                   "never returns (if it returns, the heap couldn't even create the idle/timer task). "
+                   "Then toggle an LED in the LOWEST-priority task — does ANY task run at all?",
+        why="An RTOS fault is either 'the scheduler/config never gets going' or 'the scheduler runs "
+            "but one task misbehaves.' One check — does any task run — splits the whole problem, "
+            "because a dead scheduler makes per-task debugging meaningless.",
+        expects="scheduler_state",
+        branches={"not_running": "sched_fault", "running": "task_issue"}),
+    "sched_fault": DecisionNode(
+        id="sched_fault", zone="Scheduler / kernel handlers",
+        rules_out="Nothing runs, so this is the scheduler/config — not a single task's stack or "
+                  "priority.",
+        candidates=("the FreeRTOS kernel handlers (SVC, PendSV, SysTick) are not routed in the vector "
+                    "table — the #1 bring-up trap",
+                    "the heap is too small to create the idle/timer task, so vTaskStartScheduler() "
+                    "returns",
+                    "the SysTick / tick clock isn't configured, so there is no tick to schedule on",
+                    "the tick rate is computed from the wrong core clock"),
+        proof_step="Confirm SVC_Handler, PendSV_Handler and SysTick_Handler are mapped to FreeRTOS's "
+                   "handlers (a missing PendSV/SVC route is the classic instant HardFault / no-switch), "
+                   "that the tick interrupt actually fires, and that vTaskStartScheduler() does not "
+                   "return (grow configTOTAL_HEAP_SIZE if it does).",
+        why="A scheduler that never schedules is almost always the three kernel handlers not wired or "
+            "no tick — both are vector-table / clock issues, not your task code."),
+    "task_issue": DecisionNode(
+        id="task_issue", zone="Per-task",
+        rules_out="Some tasks run, so the scheduler, kernel handlers and tick are all fine — the fault "
+                  "is one task.",
+        candidates=("a task never runs (starved or blocked forever)",
+                    "a task runs and then crashes or corrupts memory"),
+        proof_step="Narrow it: does the problem task NEVER run (starved / blocked), or does it run and "
+                   "then crash or corrupt?",
+        why="With the scheduler proven alive, the two task-level failure modes — never-scheduled vs "
+            "runs-then-breaks — need different fixes, so separate them first.",
+        expects="task_symptom",
+        branches={"never_runs": "starvation", "crashes": "task_stack"}),
+    "starvation": DecisionNode(
+        id="starvation", zone="Priority / blocking",
+        rules_out="The scheduler runs and other tasks work, so it isn't the kernel — this task is being "
+                  "starved or blocked.",
+        candidates=("a higher-priority task never blocks (it busy-loops without vTaskDelay/queue/"
+                    "semaphore) and starves everything below it",
+                    "this task's priority is set wrong",
+                    "it is blocked forever on a queue/semaphore/event that is never given",
+                    "priority inversion — a low-priority task holds a mutex this one needs (use a "
+                    "priority-inheritance mutex, not a plain binary semaphore)"),
+        proof_step="Check that every higher-or-equal-priority task BLOCKS on something (a delay, queue "
+                   "or semaphore) so the scheduler can run others; inspect run-time stats for which "
+                   "task hogs the CPU, and confirm anything this task waits on is actually given.",
+        why="A task that never runs is almost always a higher task that never yields, a never-satisfied "
+            "wait, or priority inversion — all visible from the priorities and run-time stats."),
+    "task_stack": DecisionNode(
+        id="task_stack", zone="Task stack / ISR-safety",
+        rules_out="The task runs but breaks, so it isn't starvation or the scheduler — it's that task's "
+                  "memory or an ISR-safety violation.",
+        candidates=("the task's stack is too small and overflows, corrupting its neighbour (enable "
+                    "configCHECK_FOR_STACK_OVERFLOW and the overflow hook — it reports the task name)",
+                    "a large buffer allocated on a small task stack",
+                    "calling a non-FromISR API from an ISR (use the ...FromISR variants and yield)"),
+        proof_step="Turn on stack-overflow checking (the hook fires with the offending task's name), "
+                   "read uxTaskGetStackHighWaterMark() for that task, and verify every RTOS call made "
+                   "from an ISR uses the FromISR variant.",
+        why="A task that runs then crashes is usually its own stack overflowing or an ISR using a "
+            "non-ISR-safe API — both are caught by the overflow hook and a high-water-mark check."),
+}
+
+RTOS_BRINGUP = ProblemPattern(
+    name="rtos_bringup",
+    title="RTOS task/scheduler problem",
+    match_groups=(
+        ("freertos", "rtos", "scheduler", "vtaskstartscheduler", "xtaskcreate", "vtaskdelay",
+         "pendsv", "zephyr", "threadx", "ucos", " task ", "tasks", "semaphore", "mutex"),
+        ("not running", "isn't running", "isnt running", "doesn't run", "doesnt run", "never runs",
+         "won't run", "wont run", "hangs", "freezes", "stuck", "crashes", "hardfault",
+         "stack overflow", "doesn't start", "doesnt start", "won't start", "deadlock",
+         "priority inversion", "starved", "not switching", "not scheduling", "blocked forever",
+         "nothing runs", "not responding", "no task"),
+    ),
+    zones=(
+        ("Scheduler / kernel handlers", "SVC, PendSV, SysTick routed to the kernel; the tick fires; "
+         "heap creates idle/timer"),
+        ("Priorities / blocking", "every task blocks so others run; no busy-loop starves lower tasks"),
+        ("Task stack", "each task's stack covers its worst case; overflow checking on"),
+        ("ISR safety", "ISRs use only the FromISR API and yield correctly"),
+        ("Sync primitives", "priority-inheritance mutex vs a plain semaphore; queues actually given"),
+    ),
+    required_evidence=(
+        "Which RTOS (FreeRTOS/Zephyr/…) and which board?",
+        "Does ANY task run, or nothing at all?",
+        "Are SVC / PendSV / SysTick routed to the kernel handlers?",
+        "What are the task priorities, and does each task block?",
+        "configTOTAL_HEAP_SIZE and each task's stack size?",
+    ),
+    beginner_traps=(
+        "not routing PendSV/SVC/SysTick to the kernel handlers — instant HardFault or no task switching "
+        "(the #1 trap)",
+        "a high-priority task that never blocks (no vTaskDelay/queue/semaphore) starving lower tasks",
+        "a task stack too small — it overflows and corrupts its neighbour (enable the overflow hook)",
+        "calling a non-FromISR API from an ISR",
+        "a binary semaphore where a priority-inheritance mutex is needed → priority inversion",
+    ),
+    entry="rtos_check",
+    nodes=_RTOS_NODES,
+    evidence_vars={"scheduler_state": _SCHEDULER_STATE, "task_symptom": _TASK_SYMPTOM},
+)
+
+
 # The pattern registry. The engine above is already general over all of these.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
@@ -1206,4 +1351,5 @@ PATTERNS: dict[str, ProblemPattern] = {
     SPI_BRINGUP.name: SPI_BRINGUP,
     POWER_RESET.name: POWER_RESET,
     HARDFAULT.name: HARDFAULT,
+    RTOS_BRINGUP.name: RTOS_BRINGUP,
 }
