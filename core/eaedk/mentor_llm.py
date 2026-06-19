@@ -1376,6 +1376,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # Critic pass — the model reviews its own answer (P4; runs on every online response).
     grounding = f"{sem_line}{feas_line}Board: {board_name} ({soc['arch']}); peripherals: {have}."
     critiqued = arbiter.critic_review(gw, system, raw, grounding)
+    # Bounded why-critic (Step 4): for an UNCOVERED fault (no proof pattern matched — those return
+    # earlier as PROOF_PATH), push the answer physical-layer-first and make it end at a checkable
+    # measurement. Fires only on fault reports; advisory (the post-filter, guards and arbiter follow).
+    critiqued = arbiter.why_review(gw, critiqued, grounding, last_user)
     filtered, removed = filter_text(critiqued, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
     # Conceptual guard (deterministic): the post-filter catches invented *values*; this catches
