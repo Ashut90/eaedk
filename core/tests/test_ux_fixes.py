@@ -85,3 +85,48 @@ def test_real_evidence_keeps_the_proof_path_alive():
                 "the reset-cause flag says brown-out",
                 "adding a bulk cap fixed it")
     assert st.matched and st.node.id == "decoupling_confirmed"
+
+
+# ── #5 skill-level calibration (stateless, self-declared; safe) ──────────────────────────────
+
+from eaedk.mentor_llm import detect_skill_level
+from eaedk.llm.gateway import Gateway
+
+
+def test_skill_detection_from_self_declaration():
+    assert detect_skill_level([{"role": "user", "content": "I'm an experienced software engineer, I know C++"}]) == "experienced"
+    assert detect_skill_level([{"role": "user", "content": "I just moved from software QA to firmware"}]) == "experienced"
+    assert detect_skill_level([{"role": "user", "content": "I'm completely lost, I'm a second-year student"}]) == "beginner"
+    assert detect_skill_level([{"role": "user", "content": "how does SPI work?"}]) == ""
+
+
+def test_experienced_user_is_not_told_to_blink_an_led(tmp_path):
+    conn = _seeded(tmp_path)
+    msgs = [{"role": "user", "content": "I'm an experienced software engineer, I know C++ well."},
+            {"role": "assistant", "content": "..."},
+            {"role": "user", "content": "I want to build something nontrivial to prove I understand this, not just blink an LED."}]
+    out = mentor_chat(conn, BOARD, msgs, use_llm=False)
+    assert "skip 'blink an led'" in out.lower()          # the experienced starter
+    assert "the place to start is 'blink an led'" not in out.lower()
+
+
+def test_beginner_starter_is_unchanged(tmp_path):
+    conn = _seeded(tmp_path)
+    msgs = [{"role": "user", "content": "I'm completely lost. Where do I even start on this board?"}]
+    out = mentor_chat(conn, BOARD, msgs, use_llm=False)
+    assert "skip 'blink an led'" not in out.lower()      # beginners keep the gentle blink start
+
+
+def test_calibration_note_reaches_the_llm_prompt(tmp_path):
+    conn = _seeded(tmp_path)
+
+    class _Rec:
+        def __init__(self): self.sys = []
+        def available(self): return True
+        def generate(self, s, p): self.sys.append(s); return "answer. Try this: x. Question: y?"
+
+    rec = _Rec()
+    mentor_chat(conn, BOARD,
+                [{"role": "user", "content": "I'm an experienced engineer; how should I lay out firmware on this board?"}],
+                use_llm=True, gateway=Gateway(provider=rec))
+    assert rec.sys and any("CALIBRATION" in s and "experienced" in s for s in rec.sys)

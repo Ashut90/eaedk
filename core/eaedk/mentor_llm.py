@@ -270,6 +270,63 @@ def detect_mentor_role(user_message: str, page_context: dict) -> str:
     return "SYSTEM_ARCHITECT"
 
 
+# ── Skill-level calibration ─────────────────────────────────────────────────────────────────────
+# Stateless and deterministic: read the user's OWN explicit self-description across the conversation.
+# This is NOT a learned/gameable mastery score (the reverted progression ledger) — saying "I'm
+# experienced" only adjusts tone/depth and which STARTER is offered; it never unlocks or strips any
+# safety content. The verifiers, conceptual guards, the arbiter and the proof-path engine all run
+# identically regardless of level. Default "" -> the existing beginner-safe behaviour.
+
+_SKILL_EXPERIENCED = (
+    "experienced software engineer", "experienced engineer", "experienced developer",
+    "i know c++", "i know python", "i know java", "strong in c++", "years of experience",
+    "years experience", "i've shipped", "shipped production", "production code", "senior engineer",
+    "senior developer", "i already know how to code", "i know how to code", "i know how to debug",
+    "i'm a developer", "i'm a software engineer", "backend engineer", "backend service",
+    "i came from", "i moved from", "moved from software", "switching from software", "switched from",
+    "not a beginner", "don't need the beginner", "don't need the full beginner", "skip the basics",
+    "real engineering experience", "qa background", "from software qa", "test engineering",
+    "not just blink", "i'm familiar with", "i'm experienced")
+_SKILL_BEGINNER = (
+    "completely lost", "i'm lost", "i'm a student", "second-year", "second year", "new to this",
+    "don't know where to start", "i'm new", "complete beginner", "i'm overwhelmed",
+    "really overwhelmed", "i don't even know", "just started", "didn't get it", "first time learning",
+    "kind of know", "barely know", "i'm anxious")
+
+
+def detect_skill_level(messages: list[dict] | None) -> str:
+    """'experienced' | 'beginner' | '' from the user's explicit self-description across the whole
+    conversation. Experienced wins if both appear (an engineer new to firmware is still an engineer)."""
+    text = " ".join((m.get("content") or "") for m in (messages or [])
+                    if m.get("role") == "user").lower()
+    if any(p in text for p in _SKILL_EXPERIENCED):
+        return "experienced"
+    if any(p in text for p in _SKILL_BEGINNER):
+        return "beginner"
+    return ""
+
+
+_CALIBRATION_NOTE = {
+    "experienced": (
+        "[CALIBRATION: the user is an experienced software engineer who is NEW to embedded "
+        "specifically. Do NOT explain general programming or define basic terms, and do NOT suggest "
+        "'blink an LED' as a starter. Compare to the software/backend knowledge they already have and "
+        "go straight to the embedded-specific difference (registers, fixed RAM/flash, timing, no OS, "
+        "hardware debugging). Respect their time.]"),
+    "beginner": (
+        "[CALIBRATION: the user is a beginner and may be overwhelmed. Define terms simply, keep it "
+        "concrete and one step at a time, and be encouraging.]")}
+
+
+def _experienced_starter(board_name: str) -> str:
+    return (f"You already know how to code, so skip 'blink an LED' — it only proves your toolchain "
+            f"works. On {board_name}, the fastest way to build real firmware instinct is to go "
+            f"straight at what's actually different from software: bring up UART by writing the "
+            f"peripheral's registers directly (no HAL), print a value, then read a sensor over I2C. "
+            f"That exercises the datasheet → register → peripheral loop — the real gap between writing "
+            f"software and writing firmware.")
+
+
 # --- Purpose Decision (the first-step gate): decide WHAT the turn is for, before any answer -------
 #
 # The mentor is not an answer engine. Before generating anything it chooses one OUTCOME:
@@ -1169,7 +1226,10 @@ def _teach_learning_map(conn: sqlite3.Connection, lm, messages: list[dict], boar
               "Teach the learner now — answer their latest message conversationally, grounded only in "
               "the packet above:")
     try:
-        taught = gw.provider.generate(_TEACH_SYSTEM, prompt).strip()
+        _teach_sys = _TEACH_SYSTEM
+        if _CALIBRATION_NOTE.get(detect_skill_level(messages)):    # skill calibration (tone only)
+            _teach_sys = _CALIBRATION_NOTE[detect_skill_level(messages)] + "\n\n" + _TEACH_SYSTEM
+        taught = gw.provider.generate(_teach_sys, prompt).strip()
     except Exception:
         return deterministic
     # User-supplied parameters (this + the immediately preceding user turn) are grounded by provenance,
@@ -1276,6 +1336,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 conn, sel_terms, sel_unknown)
 
     used = _used_try_this(messages)                    # P3: never repeat an experiment this session
+    skill = detect_skill_level(messages)               # self-declared level: '', 'experienced', 'beginner'
     try_this = _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
     if try_this and not has_hardware and "wokwi" not in try_this.lower():
         try_this += " (run it in the Wokwi simulator — no hardware needed)."
@@ -1323,6 +1384,14 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
             # Keep the board's starter experiment (contract), but close with a concept-relevant
             # question rather than the hardcoded UART-clock one.
             question = "Question: want me to ground this on your board with a concrete next step?"
+    elif path and skill == "experienced":
+        # Calibration: an experienced engineer must NOT be told to "blink an LED" (the #1 persona
+        # complaint). Skip it; point at the embedded-specific muscle, and close at their level.
+        head = _experienced_starter(board_name)
+        try_this = ("open the reference manual to the UART/USART register section and find the "
+                    "transmit-enable bit — you'll set that bit directly, no HAL")
+        question = ("Question: want the register-level UART bring-up, or first a comparison to how "
+                    "you'd approach this in software?")
     elif path:
         head = (f"Good question. For {board_name}, the place to start is '{path[0]['title']}' — "
                 f"{path[0]['why']}")
@@ -1400,6 +1469,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
         _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
+    # Skill-level calibration (tone/depth only — never strips safety content; the post-filter,
+    # conceptual guards and the arbiter all still run downstream).
+    if _CALIBRATION_NOTE.get(skill):
+        system = _CALIBRATION_NOTE[skill] + "\n\n" + system
     # Actor pass — the model proposes. A live-model hiccup (timeout, dropped connection, the model
     # answered the availability ping but stalls on generation) must NEVER crash the request — degrade
     # to the deterministic backbone, which is already a complete grounded answer.
