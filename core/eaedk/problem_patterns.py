@@ -1199,6 +1199,299 @@ HARDFAULT = ProblemPattern(
 )
 
 
+# ================================================================================================
+# SEED PATTERN #6 — RTOS firmware (curated, deterministic). A NEW project type (goal_type=rtos),
+# not a new topic. Order: scheduler/kernel-handlers first (does ANY task run?), then per-task
+# (never-runs = starvation/priority vs runs-then-breaks = stack/ISR-safety).
+# ================================================================================================
+
+_SCHEDULER_STATE = EvidenceVar(
+    name="scheduler_state",
+    values={
+        "not_running": ("nothing runs", "no task runs", "no tasks run", "scheduler doesn't start",
+                        "scheduler won't start", "scheduler wont start", "vtaskstartscheduler returns",
+                        "scheduler returned", "scheduler never starts", "no task executes",
+                        "doesn't reach any task", "tick isn't firing", "no systick", "hangs at startup",
+                        "stuck before the scheduler", "nothing schedules"),
+        "running": ("other tasks run", "some tasks run", "the other tasks run", "only one task",
+                    "blink task works", "rest of the tasks", "everything else runs",
+                    "other threads run", "the others run"),
+    },
+    labels={"not_running": "the scheduler never schedules — no task runs at all",
+            "running": "the scheduler runs and other tasks work — one task misbehaves"},
+)
+
+_TASK_SYMPTOM = EvidenceVar(
+    name="task_symptom",
+    values={
+        "never_runs": ("never runs", "doesn't run", "isn't running", "starved", "blocked forever",
+                       "stuck waiting", "never gets cpu", "never scheduled", "blocked on",
+                       "waiting forever", "doesn't get time", "never executes"),
+        "crashes": ("crashes", "hardfault", "stack overflow", "corrupts", "overflowed", "faults",
+                    "overwrites", "memory corruption", "overflow hook", "smashes"),
+    },
+    labels={"never_runs": "the task never runs (starved or blocked)",
+            "crashes": "the task runs and then crashes or corrupts memory"},
+)
+
+_RTOS_NODES = {
+    "rtos_check": DecisionNode(
+        id="rtos_check", zone="Scheduler vs task",
+        proof_step="Split scheduler from task first: confirm vTaskStartScheduler() was called and "
+                   "never returns (if it returns, the heap couldn't even create the idle/timer task). "
+                   "Then toggle an LED in the LOWEST-priority task — does ANY task run at all?",
+        why="An RTOS fault is either 'the scheduler/config never gets going' or 'the scheduler runs "
+            "but one task misbehaves.' One check — does any task run — splits the whole problem, "
+            "because a dead scheduler makes per-task debugging meaningless.",
+        expects="scheduler_state",
+        branches={"not_running": "sched_fault", "running": "task_issue"}),
+    "sched_fault": DecisionNode(
+        id="sched_fault", zone="Scheduler / kernel handlers",
+        rules_out="Nothing runs, so this is the scheduler/config — not a single task's stack or "
+                  "priority.",
+        candidates=("the FreeRTOS kernel handlers (SVC, PendSV, SysTick) are not routed in the vector "
+                    "table — the #1 bring-up trap",
+                    "the heap is too small to create the idle/timer task, so vTaskStartScheduler() "
+                    "returns",
+                    "the SysTick / tick clock isn't configured, so there is no tick to schedule on",
+                    "the tick rate is computed from the wrong core clock"),
+        proof_step="Confirm SVC_Handler, PendSV_Handler and SysTick_Handler are mapped to FreeRTOS's "
+                   "handlers (a missing PendSV/SVC route is the classic instant HardFault / no-switch), "
+                   "that the tick interrupt actually fires, and that vTaskStartScheduler() does not "
+                   "return (grow configTOTAL_HEAP_SIZE if it does).",
+        why="A scheduler that never schedules is almost always the three kernel handlers not wired or "
+            "no tick — both are vector-table / clock issues, not your task code."),
+    "task_issue": DecisionNode(
+        id="task_issue", zone="Per-task",
+        rules_out="Some tasks run, so the scheduler, kernel handlers and tick are all fine — the fault "
+                  "is one task.",
+        candidates=("a task never runs (starved or blocked forever)",
+                    "a task runs and then crashes or corrupts memory"),
+        proof_step="Narrow it: does the problem task NEVER run (starved / blocked), or does it run and "
+                   "then crash or corrupt?",
+        why="With the scheduler proven alive, the two task-level failure modes — never-scheduled vs "
+            "runs-then-breaks — need different fixes, so separate them first.",
+        expects="task_symptom",
+        branches={"never_runs": "starvation", "crashes": "task_stack"}),
+    "starvation": DecisionNode(
+        id="starvation", zone="Priority / blocking",
+        rules_out="The scheduler runs and other tasks work, so it isn't the kernel — this task is being "
+                  "starved or blocked.",
+        candidates=("a higher-priority task never blocks (it busy-loops without vTaskDelay/queue/"
+                    "semaphore) and starves everything below it",
+                    "this task's priority is set wrong",
+                    "it is blocked forever on a queue/semaphore/event that is never given",
+                    "priority inversion — a low-priority task holds a mutex this one needs (use a "
+                    "priority-inheritance mutex, not a plain binary semaphore)"),
+        proof_step="Check that every higher-or-equal-priority task BLOCKS on something (a delay, queue "
+                   "or semaphore) so the scheduler can run others; inspect run-time stats for which "
+                   "task hogs the CPU, and confirm anything this task waits on is actually given.",
+        why="A task that never runs is almost always a higher task that never yields, a never-satisfied "
+            "wait, or priority inversion — all visible from the priorities and run-time stats."),
+    "task_stack": DecisionNode(
+        id="task_stack", zone="Task stack / ISR-safety",
+        rules_out="The task runs but breaks, so it isn't starvation or the scheduler — it's that task's "
+                  "memory or an ISR-safety violation.",
+        candidates=("the task's stack is too small and overflows, corrupting its neighbour (enable "
+                    "configCHECK_FOR_STACK_OVERFLOW and the overflow hook — it reports the task name)",
+                    "a large buffer allocated on a small task stack",
+                    "calling a non-FromISR API from an ISR (use the ...FromISR variants and yield)"),
+        proof_step="Turn on stack-overflow checking (the hook fires with the offending task's name), "
+                   "read uxTaskGetStackHighWaterMark() for that task, and verify every RTOS call made "
+                   "from an ISR uses the FromISR variant.",
+        why="A task that runs then crashes is usually its own stack overflowing or an ISR using a "
+            "non-ISR-safe API — both are caught by the overflow hook and a high-water-mark check."),
+}
+
+RTOS_BRINGUP = ProblemPattern(
+    name="rtos_bringup",
+    title="RTOS task/scheduler problem",
+    match_groups=(
+        ("freertos", "rtos", "scheduler", "vtaskstartscheduler", "xtaskcreate", "vtaskdelay",
+         "pendsv", "zephyr", "threadx", "ucos", " task ", "tasks", "semaphore", "mutex"),
+        ("not running", "isn't running", "isnt running", "doesn't run", "doesnt run", "never runs",
+         "won't run", "wont run", "hangs", "freezes", "stuck", "crashes", "hardfault",
+         "stack overflow", "doesn't start", "doesnt start", "won't start", "deadlock",
+         "priority inversion", "starved", "not switching", "not scheduling", "blocked forever",
+         "nothing runs", "not responding", "no task"),
+    ),
+    zones=(
+        ("Scheduler / kernel handlers", "SVC, PendSV, SysTick routed to the kernel; the tick fires; "
+         "heap creates idle/timer"),
+        ("Priorities / blocking", "every task blocks so others run; no busy-loop starves lower tasks"),
+        ("Task stack", "each task's stack covers its worst case; overflow checking on"),
+        ("ISR safety", "ISRs use only the FromISR API and yield correctly"),
+        ("Sync primitives", "priority-inheritance mutex vs a plain semaphore; queues actually given"),
+    ),
+    required_evidence=(
+        "Which RTOS (FreeRTOS/Zephyr/…) and which board?",
+        "Does ANY task run, or nothing at all?",
+        "Are SVC / PendSV / SysTick routed to the kernel handlers?",
+        "What are the task priorities, and does each task block?",
+        "configTOTAL_HEAP_SIZE and each task's stack size?",
+    ),
+    beginner_traps=(
+        "not routing PendSV/SVC/SysTick to the kernel handlers — instant HardFault or no task switching "
+        "(the #1 trap)",
+        "a high-priority task that never blocks (no vTaskDelay/queue/semaphore) starving lower tasks",
+        "a task stack too small — it overflows and corrupts its neighbour (enable the overflow hook)",
+        "calling a non-FromISR API from an ISR",
+        "a binary semaphore where a priority-inheritance mutex is needed → priority inversion",
+    ),
+    entry="rtos_check",
+    nodes=_RTOS_NODES,
+    evidence_vars={"scheduler_state": _SCHEDULER_STATE, "task_symptom": _TASK_SYMPTOM},
+)
+
+
+# ================================================================================================
+# SEED PATTERN #7 — bootloader / firmware-update (curated, deterministic). Project type
+# goal_type=bootloader/uboot. Order: the hand-off first (does the app start?), then jump-vs-image,
+# and the app-faults-after-jump branch (VTOR / linker / dirty state).
+# ================================================================================================
+
+_APP_STARTED = EvidenceVar(
+    name="app_started",
+    values={
+        "no": ("app never starts", "app doesn't start", "app doesnt start", "never jumps",
+               "doesn't jump to", "stuck in the bootloader", "stays in the bootloader",
+               "app never runs", "doesn't reach the app", "won't jump", "app doesn't boot",
+               "never reaches the app", "app marker never"),
+        "yes_then_faults": ("app starts then", "starts then crashes", "starts then faults",
+                            "starts then resets", "app starts but", "reaches the app then",
+                            "jumps then crashes", "crashes right after the jump",
+                            "hardfaults after the jump", "faults after the jump",
+                            "faults after jumping", "app boots then", "runs briefly then",
+                            "starts then hardfaults"),
+    },
+    labels={"no": "control never reaches the application",
+            "yes_then_faults": "the application starts and then immediately faults"},
+)
+
+_IMAGE_CHECK = EvidenceVar(
+    name="image_check",
+    values={
+        "present": ("vector pair", "looks valid", "valid vector", "valid image", "image is there",
+                    "plausible reset", "stack pointer looks", "image is present", "good vector table",
+                    "words look valid"),
+        "absent": ("garbage at", "no valid image", "all 0xff", "all ff", "blank flash",
+                   "nothing at the app", "0xffffffff", "no image", "empty flash", "vector is garbage",
+                   "invalid vector", "erased and empty"),
+    },
+    labels={"present": "a valid stack-top + reset-vector pair sits at the app base",
+            "absent": "no valid image is present at the app base"},
+)
+
+_BOOT_NODES = {
+    "jump_check": DecisionNode(
+        id="jump_check", zone="Hand-off (bootloader → app)",
+        proof_step="Put a marker (LED or a UART byte) at the very start of the bootloader and another "
+                   "at the application's first instruction (its Reset_Handler / start of main). Run "
+                   "it — does the APP marker ever fire?",
+        why="The bootloader's one job is to hand control to the app. Splitting 'the app never starts' "
+            "from 'the app starts then immediately faults' decides everything downstream: the first is "
+            "the jump or the image, the second is the app's vector table / linker state.",
+        expects="app_started",
+        branches={"no": "handoff_check", "yes_then_faults": "app_vector"}),
+    "handoff_check": DecisionNode(
+        id="handoff_check", zone="Jump vs image",
+        rules_out="The app never starts, so this is the hand-off itself — the jump code or the image "
+                  "that should be there. The app's own vector table and clock setup are NOT reached.",
+        candidates=("the jump code is wrong (MSP not loaded from the app's vector[0], wrong branch "
+                    "target, or the Thumb bit not set)",
+                    "there is no valid application image in flash to jump to"),
+        proof_step="Read the first two words at the application's base address: word[0] must be a "
+                   "plausible stack-top (in RAM range) and word[1] a plausible reset vector (odd, in "
+                   "the app's flash range). Are they valid?",
+        why="A valid vector pair at the app base means the image is present and the fault is the jump "
+            "code; garbage there means the flash write never landed a real image.",
+        expects="image_check",
+        branches={"present": "jump_code", "absent": "flash_program"}),
+    "jump_code": DecisionNode(
+        id="jump_code", zone="Jump code",
+        rules_out="A valid image sits at the app base, so flash programming worked — the fault is the "
+                  "jump sequence.",
+        candidates=("MSP not set from the app's vector[0] before branching",
+                    "branching to the app base instead of the reset vector (vector[1]), or dropping "
+                    "the Thumb bit",
+                    "interrupts / SysTick left enabled during the jump",
+                    "SCB->VTOR not set to the app's vector table before enabling interrupts"),
+        proof_step="In the jump: load MSP from *(app_base), then branch to *(app_base+4) with the "
+                   "Thumb bit set; disable interrupts and SysTick first, and set SCB->VTOR = app_base. "
+                   "Step it in the debugger to the app's Reset_Handler.",
+        why="A present image that won't start is the classic jump-sequence bug: stack pointer, reset "
+            "vector, Thumb bit, or leftover interrupt state."),
+    "flash_program": DecisionNode(
+        id="flash_program", zone="Flash programming",
+        rules_out="There's no valid image at the app base, so the jump code is moot — the write/erase "
+                  "never landed a correct image.",
+        candidates=("the sector wasn't erased before writing (flash only flips 1→0)",
+                    "write granularity/alignment wrong (byte writes where the flash needs word/row)",
+                    "flash write-protection / option bytes still locked",
+                    "no verify-after-write, so a bad write goes unnoticed",
+                    "the app was linked for a different base than where the bootloader writes it"),
+        proof_step="Erase the target sectors, write with the correct alignment/unlock sequence, then "
+                   "VERIFY by reading back — and confirm the app's linker base matches the address the "
+                   "bootloader programs.",
+        why="An absent/garbled image is an erase/align/lock/verify problem, or a linker-base mismatch "
+            "between the app and where the bootloader stores it."),
+    "app_vector": DecisionNode(
+        id="app_vector", zone="App vector table / linker / dirty state",
+        rules_out="The app's first instruction runs, so the jump and the image are fine — it faults "
+                  "inside early app startup.",
+        candidates=("SCB->VTOR not pointing at the app's vector table, so interrupts vector into the "
+                    "bootloader (instant HardFault)",
+                    "the app linked at the wrong base/offset (its flash origin ≠ where it runs)",
+                    "the bootloader left peripherals/clocks/interrupts in a dirty state the app "
+                    "doesn't reset",
+                    "the app's stack/heap in the linker script overlaps the bootloader's RAM"),
+        proof_step="Confirm SCB->VTOR = the app's vector base early in the app, that the app's linker "
+                   "FLASH origin equals the app base, and that the app re-initialises the clock tree "
+                   "and disables anything the bootloader left running.",
+        why="An app that starts then dies is almost always VTOR not relocated, a linker-origin "
+            "mismatch, or dirty peripheral/clock state inherited from the bootloader."),
+}
+
+BOOTLOADER = ProblemPattern(
+    name="bootloader",
+    title="bootloader / firmware-update problem",
+    match_groups=(
+        ("bootloader", "boot loader", "u-boot", "uboot", "jump to the app", "jump to app",
+         "jumps to the app", "vtor", "application image", "app image", "firmware update", " ota ",
+         "dfu", "second stage", "boot2", "reset vector"),
+        ("doesn't jump", "won't jump", "wont jump", "never jumps", "app never starts",
+         "app doesn't start", "doesn't boot", "won't boot", "wont boot", "stuck in the bootloader",
+         "stays in the bootloader", "hardfault", "crashes", "bricked", "doesn't run", "fails to",
+         "no app", "hangs", "starts then", "after the jump", "won't flash", "flash fails",
+         "erase fails", "write fails", "not jumping", "doesn't reach"),
+    ),
+    zones=(
+        ("Hand-off (boot→app)", "set MSP from app vector[0], branch to vector[1] (Thumb bit), set VTOR"),
+        ("Application image", "a valid stack-top + reset-vector pair sits at the app base"),
+        ("Flash programming", "erase before write, correct alignment/unlock, verify after write"),
+        ("Vector relocation", "SCB->VTOR points at the app's table before interrupts"),
+        ("Linker layout", "bootloader and app at non-overlapping bases; app origin = where it's stored"),
+    ),
+    required_evidence=(
+        "Where does it die — bootloader only, or does the app start then fault?",
+        "What are the two words at the application's base (stack-top, reset vector)?",
+        "What address is the app linked for, and where does the bootloader write it?",
+        "Does the jump set MSP, the Thumb bit, and SCB->VTOR?",
+        "Is there image validation / a golden-image fallback?",
+    ),
+    beginner_traps=(
+        "branching to the app base instead of its reset vector (vector[1]), or dropping the Thumb bit",
+        "not setting SCB->VTOR, so interrupts vector back into the bootloader → instant HardFault",
+        "not erasing a sector before writing it (flash only flips 1→0)",
+        "the app linked at a different base than where the bootloader stores/runs it",
+        "no image validation or golden-image fallback, so one bad update bricks the device",
+    ),
+    entry="jump_check",
+    nodes=_BOOT_NODES,
+    evidence_vars={"app_started": _APP_STARTED, "image_check": _IMAGE_CHECK},
+)
+
+
 # The pattern registry. The engine above is already general over all of these.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
@@ -1206,4 +1499,6 @@ PATTERNS: dict[str, ProblemPattern] = {
     SPI_BRINGUP.name: SPI_BRINGUP,
     POWER_RESET.name: POWER_RESET,
     HARDFAULT.name: HARDFAULT,
+    RTOS_BRINGUP.name: RTOS_BRINGUP,
+    BOOTLOADER.name: BOOTLOADER,
 }

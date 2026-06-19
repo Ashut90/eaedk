@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
 from . import conceptual_guards
+from . import web_source
 from .llm.gateway import Gateway
 from .llm.ollama import OllamaProvider
 from .llm.postfilter import build_board_allowlist, filter_text
@@ -1210,7 +1211,15 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # guidance. The five modes are first-class; adding a topic/pattern/map is DATA, not router code.
     route = navigator.classify(purpose, messages)
     if route.mode == navigator.PROOF_PATH:                    # broken-system → guided proof path
-        return _voice_proof_path(route.proof_state, board_name, use_llm, gateway)
+        # Web hook (Step 5, opt-in): live field cases for the CONFIRM/COMPARE slot only. Off / offline
+        # → None, so the proof path is byte-identical to local-only. It never drives the proof step.
+        web_report = (web_source.community_report_for(
+                          route.proof_state.pattern, route.proof_state, board_name,
+                          symptom_text=" ".join(m.get("content", "") for m in messages
+                                                if m.get("role") == "user"))
+                      if web_source.enabled() else None)
+        return _voice_proof_path(route.proof_state, board_name, use_llm, gateway,
+                                 community_report=web_report)
     # The selected board is "anchored" (in scope) only when the user named a board/chip, has an active
     # project, or says "this board" — never for a bare board-less direction/career question.
     board_anchored = (explicit_target is not None or bool(project)
