@@ -1492,6 +1492,276 @@ BOOTLOADER = ProblemPattern(
 )
 
 
+# ================================================================================================
+# SEED PATTERN #8 — Linux device driver (curated, deterministic). Project type goal_type=driver.
+# Order: does the module LOAD → does PROBE get called → does probe SUCCEED.
+# ================================================================================================
+
+_LOAD_RESULT = EvidenceVar(
+    name="load_result",
+    values={
+        "fails": ("insmod fails", "modprobe fails", "won't load", "wont load", "fails to load",
+                  "invalid module format", "version magic", "unknown symbol", "exec format error",
+                  "module verification failed", "can't load the module", "won't insert",
+                  "operation not permitted", "doesn't load"),
+        "loads": ("module loads", "loads fine", "shows in lsmod", "lsmod shows", "loaded successfully",
+                  "it loads", "loads ok", "module is loaded", "insmod succeeds", "modprobe succeeds"),
+    },
+    labels={"fails": "the module won't even load (insmod/modprobe errors)",
+            "loads": "the module loads (it's in lsmod)"},
+)
+
+_PROBE_RESULT = EvidenceVar(
+    name="probe_result",
+    values={
+        "not_called": ("probe never", "probe is never", "probe isn't called", "probe not called",
+                       "never called", "probe doesn't run", "probe never runs", "not bound",
+                       "doesn't bind", "never probes", "device doesn't appear", "in /dev",
+                       "no /dev node", "no match"),
+        "failed": ("probe fails", "probe returns", "probe errors", "eprobe_defer", "-eprobe_defer",
+                   "ioremap fails", "clk_get fails", "regulator_get fails", "request_irq fails",
+                   "probe failed", "fails in probe", "returns -e"),
+    },
+    labels={"not_called": "the module loaded but probe() is never called (no device matched)",
+            "failed": "probe() is called but returns an error"},
+)
+
+_DRIVER_NODES = {
+    "load_check": DecisionNode(
+        id="load_check", zone="Module load",
+        proof_step="Run insmod/modprobe and read dmesg + lsmod. Does the module load without error and "
+                   "appear in lsmod?",
+        why="A driver fails in one of three places — it won't load, it loads but never binds, or it "
+            "binds but probe errors. The first check (does it load at all) splits 'build/link problem' "
+            "from 'matching/resource problem' so you stop guessing.",
+        expects="load_result",
+        branches={"fails": "load_fault", "loads": "probe_check"}),
+    "load_fault": DecisionNode(
+        id="load_fault", zone="Build / symbols / signing",
+        rules_out="The module won't load, so matching and probe() are NOT reached — this is the build "
+                  "or the kernel's acceptance of the module.",
+        candidates=("built against the wrong kernel version/headers (version-magic / invalid module "
+                    "format)",
+                    "an unresolved symbol (a dependency module not loaded, or the symbol isn't "
+                    "EXPORT_SYMBOL'd)",
+                    "module signature enforcement rejecting an unsigned module",
+                    "a missing kernel CONFIG the module needs"),
+        proof_step="Read the exact dmesg line: 'version magic'/'invalid module format' → rebuild "
+                   "against the RUNNING kernel's headers; 'Unknown symbol' → load the dependency or "
+                   "export the symbol; 'module verification failed' → signing/secure-boot.",
+        why="An insmod failure names itself in dmesg — version-magic, unknown-symbol, or verification "
+            "— each pointing at the build, a dependency, or signing, never at your probe code."),
+    "probe_check": DecisionNode(
+        id="probe_check", zone="Binding",
+        rules_out="The module loaded, so the build and symbols are fine — the question is whether the "
+                  "driver ever binds to a device.",
+        candidates=("probe() is never called (nothing matched the driver)",
+                    "probe() is called but returns an error"),
+        proof_step="Put a print at the top of probe(). Does it fire?",
+        why="Whether probe() runs splits 'no device matched the driver' (device-tree/id-table) from "
+            "'the device matched but a resource failed' — completely different fixes.",
+        expects="probe_result",
+        branches={"not_called": "no_match", "failed": "probe_fault"}),
+    "no_match": DecisionNode(
+        id="no_match", zone="Match table / device tree",
+        rules_out="The module loaded but probe() never ran, so it's not a resource failure — no device "
+                  "matched the driver.",
+        candidates=("the driver's of_device_id .compatible (or PCI/USB/platform id_table) doesn't "
+                    "match the device node's compatible",
+                    "the device-tree node is disabled (status != \"okay\")",
+                    "the device node isn't in the live DT at all, or the device isn't on the bus",
+                    "for a platform driver, no matching platform_device was registered"),
+        proof_step="Compare the driver's .compatible against the device node's compatible in the LIVE "
+                   "DT (/proc/device-tree or the .dtb), and confirm that node's status is \"okay\" and "
+                   "the device actually exists.",
+        why="probe() not running is a match failure — almost always a compatible-string mismatch or a "
+            "disabled/absent device-tree node."),
+    "probe_fault": DecisionNode(
+        id="probe_fault", zone="Resource acquisition",
+        rules_out="probe() runs, so the driver bound to a device — the fault is inside probe acquiring "
+                  "its resources.",
+        candidates=("a resource get fails — ioremap of the wrong reg base, or clk/regulator/IRQ/GPIO "
+                    "named differently in the DT than the driver requests",
+                    "repeated -EPROBE_DEFER: a dependency (clock/regulator) isn't ready yet",
+                    "returning an error before registering the device",
+                    "missing permissions / wrong class on the resulting /dev node"),
+        proof_step="Instrument probe() to find which call returns the error (devm_ioremap / clk_get / "
+                   "regulator_get / devm_request_irq / gpiod_get); a recurring -EPROBE_DEFER means a "
+                   "dependency isn't ready — confirm the DT property names match what the driver asks.",
+        why="A failing probe() is a named resource that didn't come up or a DT property name mismatch — "
+            "the error code and the failing call point straight at it."),
+}
+
+DRIVER = ProblemPattern(
+    name="driver",
+    title="Linux device-driver problem",
+    match_groups=(
+        ("kernel module", "kernel driver", "device driver", "insmod", "modprobe", "lsmod",
+         "device tree", "device-tree", "devicetree", " dts ", " dtb ", "compatible string",
+         "of_match", "platform driver", "char device", "probe()", "driver probe", ".ko"),
+        ("not loading", "won't load", "wont load", "isn't loading", "doesn't load", "fails to load",
+         "insmod fails", "modprobe fails", "probe never", "probe not called", "probe fails",
+         "not bound", "doesn't bind", "device doesn't appear", "unknown symbol", "version magic",
+         "won't probe", "probe is never", "never called", "in /dev", "isn't working", "not working",
+         "doesn't work", "kernel panic", "eprobe_defer"),
+    ),
+    zones=(
+        ("Module load", "version-magic / symbols / signing — built against the running kernel"),
+        ("Binding", "does probe() get called — does any device match the driver"),
+        ("Match table / DT", "the driver's compatible matches an enabled device-tree node"),
+        ("Resource acquisition", "ioremap / clk / regulator / IRQ / GPIO names match the DT"),
+        ("Probe deferral", "-EPROBE_DEFER until dependencies (clock/regulator) are ready"),
+    ),
+    required_evidence=(
+        "Does the module load (insmod/lsmod), or fail with a dmesg error?",
+        "What is the exact dmesg line?",
+        "Does probe() get called (a print at its top)?",
+        "Does the driver's .compatible match the device-tree node's compatible?",
+        "Which resource get (ioremap/clk/regulator/irq) fails in probe?",
+    ),
+    beginner_traps=(
+        "building against the wrong kernel headers (version-magic / invalid module format)",
+        "the of_match .compatible not matching the device-tree node's compatible — probe never runs",
+        "a device-tree node left status=\"disabled\"",
+        "DT property names (clocks/regulators/interrupts) not matching what the driver requests",
+        "ignoring a recurring -EPROBE_DEFER instead of fixing the dependency order",
+    ),
+    entry="load_check",
+    nodes=_DRIVER_NODES,
+    evidence_vars={"load_result": _LOAD_RESULT, "probe_result": _PROBE_RESULT},
+)
+
+
+# ================================================================================================
+# SEED PATTERN #9 — edge ML / inference (curated, deterministic). Project type goal_type=ml_inference.
+# Order: does it FIT/load → is the output CORRECT → is it FAST enough.
+# ================================================================================================
+
+_FIT_RESULT = EvidenceVar(
+    name="fit_result",
+    values={
+        "too_big": ("doesn't fit", "too big", "out of memory", "won't fit", "wont fit",
+                    "exceeds flash", "exceeds ram", "alloc fails", "allocation failed",
+                    "model too large", "not enough flash", "not enough ram", "ran out of memory",
+                    "failed to allocate", "arena too", "hardfault on load"),
+        "fits": ("model loads", "loads fine", "it runs", "inference runs", "fits fine",
+                 "loads and runs", "runs but", "model fits", "it fits", "loaded ok"),
+    },
+    labels={"too_big": "the model/arena doesn't fit in flash/RAM",
+            "fits": "the model loads and runs"},
+)
+
+_OUTPUT_RESULT = EvidenceVar(
+    name="output_result",
+    values={
+        "wrong": ("wrong output", "wrong prediction", "garbage output", "incorrect", "wrong result",
+                  "predictions are wrong", "wrong class", "inaccurate", "gives garbage",
+                  "outputs are wrong", "doesn't match the host", "wrong on device", "bad predictions"),
+        "slow": ("too slow", "slow inference", "high latency", "takes too long", "ms per inference",
+                 "not real-time", "not fast enough", "low fps", "seconds per inference",
+                 "way too slow", "latency is"),
+    },
+    labels={"wrong": "the model runs but the output is wrong",
+            "slow": "the model runs correctly but is too slow"},
+)
+
+_ML_NODES = {
+    "fit_check": DecisionNode(
+        id="fit_check", zone="Memory fit",
+        proof_step="Check the model (weights) size against flash and the tensor-arena size against RAM. "
+                   "Does the interpreter allocate and run without an out-of-memory / hard fault?",
+        why="Edge-ML failures are fit, correctness, or speed — in that order. If it doesn't fit, "
+            "nothing else matters; if it fits, the next split is wrong-output vs too-slow.",
+        expects="fit_result",
+        branches={"too_big": "size_fault", "fits": "output_check"}),
+    "size_fault": DecisionNode(
+        id="size_fault", zone="Model / arena size",
+        rules_out="It doesn't fit, so output and latency are moot until the footprint comes down.",
+        candidates=("a float32 model with no quantization (int8 is ~4x smaller and faster)",
+                    "the tensor arena sized larger than the reported peak (arena_used_bytes)",
+                    "the architecture is simply too large for this board's flash/RAM",
+                    "unsupported ops pulling in a large kernel set"),
+        proof_step="Quantize to int8, shrink the arena to the interpreter's reported peak "
+                   "(arena_used_bytes), and choose/prune a smaller architecture; compare both against "
+                   "the board's flash and RAM.",
+        why="A model that won't fit is a quantization/arena/architecture budget problem — measured "
+            "against this board's actual flash and RAM, not the desktop's."),
+    "output_check": DecisionNode(
+        id="output_check", zone="Correctness vs speed",
+        rules_out="It fits and runs, so memory is fine — the fault is the output or the speed.",
+        candidates=("the output is wrong", "the output is correct but too slow"),
+        proof_step="Feed a KNOWN input the model classified correctly on the host. Is the on-device "
+                   "output wrong, or correct-but-too-slow?",
+        why="Wrong-output and too-slow have completely different fixes (preprocessing/quantization vs "
+            "optimized kernels), so separate them with one known-good input.",
+        expects="output_result",
+        branches={"wrong": "accuracy_fault", "slow": "latency_fault"}),
+    "accuracy_fault": DecisionNode(
+        id="accuracy_fault", zone="Preprocessing / quantization",
+        rules_out="It fits and runs but the answer is wrong — this is the data going in/out, not "
+                  "memory or speed.",
+        candidates=("input preprocessing mismatch (raw uint8 fed to a model trained on normalised "
+                    "[-1,1] or [0,1]; wrong mean/scale)",
+                    "input/output quantization scale & zero-point not applied",
+                    "wrong input layout (NHWC vs NCHW) or channel order",
+                    "int8 quantization done without a representative dataset"),
+        proof_step="Run the SAME known input on host and device and compare; verify the input "
+                   "quantization (scale/zero-point) and exact preprocessing (mean/scale, layout) match "
+                   "training, and that the output is dequantized correctly.",
+        why="A model correct on the host but wrong on device is almost always preprocessing or "
+            "quantization scale/zero-point — prove it with one input that matches the host."),
+    "latency_fault": DecisionNode(
+        id="latency_fault", zone="Kernels / acceleration",
+        rules_out="The output is correct, so preprocessing and quantization are fine — it's just slow.",
+        candidates=("running reference float ops with no CMSIS-NN / optimised int8 kernels",
+                    "a hardware accelerator (NPU/DSP) present but not used",
+                    "the tensor arena placed in slow external RAM instead of fast internal RAM",
+                    "a debug (-O0) build"),
+        proof_step="Link the optimised kernels (CMSIS-NN or the vendor NPU delegate), keep the arena in "
+                   "fast internal RAM, build -O2/-O3, and profile per-layer to find the slow op.",
+        why="Correct-but-slow inference is unoptimised kernels, an unused accelerator, slow-RAM arena, "
+            "or a debug build — a per-layer profile names the culprit."),
+}
+
+ML_INFERENCE = ProblemPattern(
+    name="ml_inference",
+    title="edge-ML inference problem",
+    match_groups=(
+        ("tflite", "tensorflow lite", "tflite micro", "tflm", "tinyml", "inference", "neural network",
+         "ml model", "edge ml", "cmsis-nn", "tensor arena", "quantiz", " npu ", "edge impulse",
+         "embedded ml", "model on the"),
+        ("doesn't fit", "too big", "out of memory", "won't fit", "wrong output", "wrong prediction",
+         "garbage", "incorrect", "too slow", "high latency", "takes too long", "not working",
+         "isn't working", "doesn't work", "hardfault", "crashes", "failed to allocate", "inaccurate",
+         "not fast enough", "wrong class", "out of ram"),
+    ),
+    zones=(
+        ("Memory fit", "model in flash, tensor arena in RAM — quantize to int8 if it won't fit"),
+        ("Correctness", "preprocessing + quantization scale/zero-point match training"),
+        ("Speed", "optimised kernels (CMSIS-NN / NPU), arena in fast RAM, optimised build"),
+        ("I/O layout", "NHWC vs NCHW, channel order, dequantized output"),
+        ("Footprint", "arena sized to the reported peak; a small-enough architecture"),
+    ),
+    required_evidence=(
+        "Does the model + tensor arena fit in this board's flash/RAM?",
+        "Is the model quantized (int8), and what's the reported arena peak?",
+        "On a known input, is the on-device output wrong or correct-but-slow?",
+        "Does the input preprocessing (mean/scale, layout) match training?",
+        "Are optimised kernels (CMSIS-NN / NPU) linked, and is the arena in fast RAM?",
+    ),
+    beginner_traps=(
+        "shipping a float32 model with no int8 quantization on a tiny MCU",
+        "feeding raw uint8 to a model trained on normalised input (preprocessing mismatch)",
+        "not applying the input/output quantization scale & zero-point",
+        "sizing the tensor arena much larger than the reported peak",
+        "expecting real-time speed from reference kernels with no CMSIS-NN / accelerator",
+    ),
+    entry="fit_check",
+    nodes=_ML_NODES,
+    evidence_vars={"fit_result": _FIT_RESULT, "output_result": _OUTPUT_RESULT},
+)
+
+
 # The pattern registry. The engine above is already general over all of these.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
@@ -1501,4 +1771,6 @@ PATTERNS: dict[str, ProblemPattern] = {
     HARDFAULT.name: HARDFAULT,
     RTOS_BRINGUP.name: RTOS_BRINGUP,
     BOOTLOADER.name: BOOTLOADER,
+    DRIVER.name: DRIVER,
+    ML_INFERENCE.name: ML_INFERENCE,
 }
