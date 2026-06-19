@@ -2,6 +2,12 @@
 # on (and the post-filter trims). Curated, not LLM-generated.
 - name: hardfault
   anchor: "A HardFault is the Cortex-M CPU's 'something went unrecoverably wrong' exception — usually a bad/null pointer, an unaligned access, or a stack overflow."
+- name: microprocessor
+  anchor: |
+    Microcontroller (MCU) vs microprocessor (MPU) — the difference is what's on the chip and what runs on it:
+      - A microcontroller is a WHOLE computer on one chip: CPU + RAM + flash + peripherals (GPIO/UART/timers/ADC). It runs ONE program bare-metal or with a tiny RTOS, deterministically, with no operating system. Small, low-power, real-time. Examples: STM32, RP2040, ESP32, AVR.
+      - A microprocessor is just the CPU core. It needs EXTERNAL RAM, external storage, and an operating system (usually Linux) to do anything. Big, high-throughput, not hard-real-time. Examples: the chip in a PC or a Raspberry Pi, i.MX, STM32MP.
+    Rule of thumb: reach for an MCU when you need tight timing and low power on a fixed task (firmware); reach for an MPU when you need an OS, lots of memory, networking, or heavy compute. The whole habit of firmware — registers, the datasheet, limited RAM/flash, no OS — comes from the MCU side.
 - name: watchdog
   anchor: "A watchdog is a timer that resets the chip if your code stops periodically 'petting' it — a safety net against hangs."
 - name: vector_table

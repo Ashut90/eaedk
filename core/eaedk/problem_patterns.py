@@ -145,6 +145,13 @@ def resolve(messages: list[dict]) -> ProofPathState:
             if not nxt or nxt not in pattern.nodes:
                 break
             node = pattern.nodes[nxt]
+    # Disengagement: if the user has sent 2+ turns since the match and provided NO evidence at all
+    # (the tree never left the entry node), they've moved on to a different question — stop hijacking
+    # the conversation with this proof path and let the latest turn route fresh. The multi-turn
+    # pattern flows are unaffected: they advance on the first evidence turn, so they never reach here.
+    later_turns = len(users) - (matched_at + 1)
+    if node.id == pattern.entry and later_turns >= 2 and not evidence:
+        return ProofPathState()
     awaiting = matched_at < len(users) - 1 and node.id == pattern.entry
     return ProofPathState(matched=True, pattern=pattern, node=node, evidence=evidence,
                           awaiting=awaiting, user_reported_evidence=user_evidence)

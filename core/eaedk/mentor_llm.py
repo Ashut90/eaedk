@@ -316,7 +316,13 @@ _VOCAB_STOP = frozenset((
 ))
 
 # Capitalised pronoun forms that are never an external subject.
-_SUBJECT_STOP = {"i", "im", "ive", "id", "ill"}
+_SUBJECT_STOP = {"i", "im", "ive", "id", "ill",
+    # Software-background terms a user names as CONTEXT ("I know C++", "I came from QA"), never an
+    # out-of-scope HARDWARE subject to decline. Without this, "I know C++..." was declined as if C++
+    # were an unsupported chip.
+    "c", "c++", "cpp", "python", "java", "javascript", "typescript", "rust", "go", "golang",
+    "c#", "ruby", "php", "scala", "kotlin", "swift", "sql", "bash", "node", "react",
+    "qa", "devops", "sre", "backend", "frontend", "fullstack", "web", "software", "saas", "cloud"}
 # Question/clause starters that are NOT proper nouns even when capitalised at a sentence boundary.
 # A capital alone is not a "this is a hardware subject" signal — these must never trigger a decline.
 _QUESTION_STARTERS = {
@@ -407,9 +413,20 @@ def _subject_grounded(conn: sqlite3.Connection, subject: str, board_name: str) -
     a word in the curated peripheral/concept vocabulary, or a recognised semantic-cost intent (gRPC,
     TLS, CoAP, …)? If none of these, it is out of scope."""
     low = _norm_words(subject)
-    for r in repo.list_boards(conn):
+    boards = repo.list_boards(conn)
+    for r in boards:
         if any(f" {a} " in low for a in _board_aliases(r["name"])):
             return True
+    # A chip FAMILY the user names ("STM32F4") is grounded when a seeded board's SoC is in it — so
+    # we don't decline a board we actually support. Match the subject (>=5 alnum chars) as a prefix
+    # of, or substring within, a seeded SoC or board name.
+    subj = re.sub(r"[^a-z0-9]", "", low)
+    if len(subj) >= 5:
+        for r in boards:
+            soc = re.sub(r"[^a-z0-9]", "", (r["soc"] or "").lower())
+            nm = re.sub(r"[^a-z0-9]", "", r["name"].lower())
+            if soc.startswith(subj) or nm.startswith(subj) or subj in soc:
+                return True
     if _mentions_vocab(conn, subject):
         return True
     return bool(semantic_cost.parse_intent(subject) or semantic_cost.detect_uncosted(subject))
@@ -1286,6 +1303,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         head = _career_roadmap(board_name, path, active_boards)
     elif topic:
         head = reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
+        # The reasoning framework already ends with its own next step and reflective questions, so the
+        # hardcoded "which clock does your UART run on" closing question is off-topic here (e.g. on an
+        # interrupt-vs-polling answer). Close with a decision-relevant one instead. (Keep try_this —
+        # some topics, e.g. the linker script, carry a curated experiment.)
+        question = "Question: which of those trade-offs is the binding constraint for your project?"
     elif domain:
         head = _domain_reasoning(domain, cap_set, fam, board_name)
     elif concept is not None:
@@ -1298,6 +1320,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
             question = ""
         else:
             head = f"{concept['anchor']}"
+            # Keep the board's starter experiment (contract), but close with a concept-relevant
+            # question rather than the hardcoded UART-clock one.
+            question = "Question: want me to ground this on your board with a concrete next step?"
     elif path:
         head = (f"Good question. For {board_name}, the place to start is '{path[0]['title']}' — "
                 f"{path[0]['why']}")
