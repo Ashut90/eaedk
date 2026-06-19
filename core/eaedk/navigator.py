@@ -566,8 +566,8 @@ _COMMUNICATION_SYSTEMS = LearningMap(
     title="communication systems",
     match_groups=(
         # group 1 — the domain
-        ("communication", "protocol", "wireless", "uart", " spi", " i2c", "i²c", "can bus", " can ",
-         "ethernet", " ble ", "wifi", "wi-fi", " lora", "zigbee", "mqtt", "fieldbus", "modbus",
+        ("communication", "protocol", "wireless", "uart", " spi", " i2c", "i²c", "can bus", "canbus",
+         "can-bus", "ethernet", " ble ", "wifi", "wi-fi", " lora", "zigbee", "mqtt", "fieldbus", "modbus",
          "cloud", " iot", "sensor data", "networking", "gateway", "telemetry"),
         # group 2 — a direction/comparison/breadth framing (so 'what is SPI?' stays a concept)
         ("which", " vs ", "versus", "confused", "compare", "direction", "should i", "where to start",
