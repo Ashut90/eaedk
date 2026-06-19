@@ -1344,6 +1344,154 @@ RTOS_BRINGUP = ProblemPattern(
 )
 
 
+# ================================================================================================
+# SEED PATTERN #7 — bootloader / firmware-update (curated, deterministic). Project type
+# goal_type=bootloader/uboot. Order: the hand-off first (does the app start?), then jump-vs-image,
+# and the app-faults-after-jump branch (VTOR / linker / dirty state).
+# ================================================================================================
+
+_APP_STARTED = EvidenceVar(
+    name="app_started",
+    values={
+        "no": ("app never starts", "app doesn't start", "app doesnt start", "never jumps",
+               "doesn't jump to", "stuck in the bootloader", "stays in the bootloader",
+               "app never runs", "doesn't reach the app", "won't jump", "app doesn't boot",
+               "never reaches the app", "app marker never"),
+        "yes_then_faults": ("app starts then", "starts then crashes", "starts then faults",
+                            "starts then resets", "app starts but", "reaches the app then",
+                            "jumps then crashes", "crashes right after the jump",
+                            "hardfaults after the jump", "faults after the jump",
+                            "faults after jumping", "app boots then", "runs briefly then",
+                            "starts then hardfaults"),
+    },
+    labels={"no": "control never reaches the application",
+            "yes_then_faults": "the application starts and then immediately faults"},
+)
+
+_IMAGE_CHECK = EvidenceVar(
+    name="image_check",
+    values={
+        "present": ("vector pair", "looks valid", "valid vector", "valid image", "image is there",
+                    "plausible reset", "stack pointer looks", "image is present", "good vector table",
+                    "words look valid"),
+        "absent": ("garbage at", "no valid image", "all 0xff", "all ff", "blank flash",
+                   "nothing at the app", "0xffffffff", "no image", "empty flash", "vector is garbage",
+                   "invalid vector", "erased and empty"),
+    },
+    labels={"present": "a valid stack-top + reset-vector pair sits at the app base",
+            "absent": "no valid image is present at the app base"},
+)
+
+_BOOT_NODES = {
+    "jump_check": DecisionNode(
+        id="jump_check", zone="Hand-off (bootloader → app)",
+        proof_step="Put a marker (LED or a UART byte) at the very start of the bootloader and another "
+                   "at the application's first instruction (its Reset_Handler / start of main). Run "
+                   "it — does the APP marker ever fire?",
+        why="The bootloader's one job is to hand control to the app. Splitting 'the app never starts' "
+            "from 'the app starts then immediately faults' decides everything downstream: the first is "
+            "the jump or the image, the second is the app's vector table / linker state.",
+        expects="app_started",
+        branches={"no": "handoff_check", "yes_then_faults": "app_vector"}),
+    "handoff_check": DecisionNode(
+        id="handoff_check", zone="Jump vs image",
+        rules_out="The app never starts, so this is the hand-off itself — the jump code or the image "
+                  "that should be there. The app's own vector table and clock setup are NOT reached.",
+        candidates=("the jump code is wrong (MSP not loaded from the app's vector[0], wrong branch "
+                    "target, or the Thumb bit not set)",
+                    "there is no valid application image in flash to jump to"),
+        proof_step="Read the first two words at the application's base address: word[0] must be a "
+                   "plausible stack-top (in RAM range) and word[1] a plausible reset vector (odd, in "
+                   "the app's flash range). Are they valid?",
+        why="A valid vector pair at the app base means the image is present and the fault is the jump "
+            "code; garbage there means the flash write never landed a real image.",
+        expects="image_check",
+        branches={"present": "jump_code", "absent": "flash_program"}),
+    "jump_code": DecisionNode(
+        id="jump_code", zone="Jump code",
+        rules_out="A valid image sits at the app base, so flash programming worked — the fault is the "
+                  "jump sequence.",
+        candidates=("MSP not set from the app's vector[0] before branching",
+                    "branching to the app base instead of the reset vector (vector[1]), or dropping "
+                    "the Thumb bit",
+                    "interrupts / SysTick left enabled during the jump",
+                    "SCB->VTOR not set to the app's vector table before enabling interrupts"),
+        proof_step="In the jump: load MSP from *(app_base), then branch to *(app_base+4) with the "
+                   "Thumb bit set; disable interrupts and SysTick first, and set SCB->VTOR = app_base. "
+                   "Step it in the debugger to the app's Reset_Handler.",
+        why="A present image that won't start is the classic jump-sequence bug: stack pointer, reset "
+            "vector, Thumb bit, or leftover interrupt state."),
+    "flash_program": DecisionNode(
+        id="flash_program", zone="Flash programming",
+        rules_out="There's no valid image at the app base, so the jump code is moot — the write/erase "
+                  "never landed a correct image.",
+        candidates=("the sector wasn't erased before writing (flash only flips 1→0)",
+                    "write granularity/alignment wrong (byte writes where the flash needs word/row)",
+                    "flash write-protection / option bytes still locked",
+                    "no verify-after-write, so a bad write goes unnoticed",
+                    "the app was linked for a different base than where the bootloader writes it"),
+        proof_step="Erase the target sectors, write with the correct alignment/unlock sequence, then "
+                   "VERIFY by reading back — and confirm the app's linker base matches the address the "
+                   "bootloader programs.",
+        why="An absent/garbled image is an erase/align/lock/verify problem, or a linker-base mismatch "
+            "between the app and where the bootloader stores it."),
+    "app_vector": DecisionNode(
+        id="app_vector", zone="App vector table / linker / dirty state",
+        rules_out="The app's first instruction runs, so the jump and the image are fine — it faults "
+                  "inside early app startup.",
+        candidates=("SCB->VTOR not pointing at the app's vector table, so interrupts vector into the "
+                    "bootloader (instant HardFault)",
+                    "the app linked at the wrong base/offset (its flash origin ≠ where it runs)",
+                    "the bootloader left peripherals/clocks/interrupts in a dirty state the app "
+                    "doesn't reset",
+                    "the app's stack/heap in the linker script overlaps the bootloader's RAM"),
+        proof_step="Confirm SCB->VTOR = the app's vector base early in the app, that the app's linker "
+                   "FLASH origin equals the app base, and that the app re-initialises the clock tree "
+                   "and disables anything the bootloader left running.",
+        why="An app that starts then dies is almost always VTOR not relocated, a linker-origin "
+            "mismatch, or dirty peripheral/clock state inherited from the bootloader."),
+}
+
+BOOTLOADER = ProblemPattern(
+    name="bootloader",
+    title="bootloader / firmware-update problem",
+    match_groups=(
+        ("bootloader", "boot loader", "u-boot", "uboot", "jump to the app", "jump to app",
+         "jumps to the app", "vtor", "application image", "app image", "firmware update", " ota ",
+         "dfu", "second stage", "boot2", "reset vector"),
+        ("doesn't jump", "won't jump", "wont jump", "never jumps", "app never starts",
+         "app doesn't start", "doesn't boot", "won't boot", "wont boot", "stuck in the bootloader",
+         "stays in the bootloader", "hardfault", "crashes", "bricked", "doesn't run", "fails to",
+         "no app", "hangs", "starts then", "after the jump", "won't flash", "flash fails",
+         "erase fails", "write fails", "not jumping", "doesn't reach"),
+    ),
+    zones=(
+        ("Hand-off (boot→app)", "set MSP from app vector[0], branch to vector[1] (Thumb bit), set VTOR"),
+        ("Application image", "a valid stack-top + reset-vector pair sits at the app base"),
+        ("Flash programming", "erase before write, correct alignment/unlock, verify after write"),
+        ("Vector relocation", "SCB->VTOR points at the app's table before interrupts"),
+        ("Linker layout", "bootloader and app at non-overlapping bases; app origin = where it's stored"),
+    ),
+    required_evidence=(
+        "Where does it die — bootloader only, or does the app start then fault?",
+        "What are the two words at the application's base (stack-top, reset vector)?",
+        "What address is the app linked for, and where does the bootloader write it?",
+        "Does the jump set MSP, the Thumb bit, and SCB->VTOR?",
+        "Is there image validation / a golden-image fallback?",
+    ),
+    beginner_traps=(
+        "branching to the app base instead of its reset vector (vector[1]), or dropping the Thumb bit",
+        "not setting SCB->VTOR, so interrupts vector back into the bootloader → instant HardFault",
+        "not erasing a sector before writing it (flash only flips 1→0)",
+        "the app linked at a different base than where the bootloader stores/runs it",
+        "no image validation or golden-image fallback, so one bad update bricks the device",
+    ),
+    entry="jump_check",
+    nodes=_BOOT_NODES,
+    evidence_vars={"app_started": _APP_STARTED, "image_check": _IMAGE_CHECK},
+)
+
+
 # The pattern registry. The engine above is already general over all of these.
 PATTERNS: dict[str, ProblemPattern] = {
     UART_BRINGUP.name: UART_BRINGUP,
@@ -1352,4 +1500,5 @@ PATTERNS: dict[str, ProblemPattern] = {
     POWER_RESET.name: POWER_RESET,
     HARDFAULT.name: HARDFAULT,
     RTOS_BRINGUP.name: RTOS_BRINGUP,
+    BOOTLOADER.name: BOOTLOADER,
 }
