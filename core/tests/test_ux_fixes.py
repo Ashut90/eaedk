@@ -130,3 +130,33 @@ def test_calibration_note_reaches_the_llm_prompt(tmp_path):
                 [{"role": "user", "content": "I'm an experienced engineer; how should I lay out firmware on this board?"}],
                 use_llm=True, gateway=Gateway(provider=rec))
     assert rec.sys and any("CALIBRATION" in s and "experienced" in s for s in rec.sys)
+
+
+# ── re-test follow-ups: starter is not a canned, repeating catch-all ─────────────────────────
+
+def test_experienced_memory_question_gets_a_memory_answer_not_the_starter(tmp_path):
+    conn = _seeded(tmp_path)
+    msgs = [{"role": "user", "content": "I'm an experienced engineer. How should I think about memory in firmware vs a backend service?"}]
+    out = mentor_chat(conn, BOARD, msgs, use_llm=False).lower()
+    assert "mental model is almost inverted" in out      # the memory concept answer
+    assert "skip 'blink an led'" not in out              # not the canned starter
+
+
+def test_experienced_non_start_question_is_grounded_not_blink_not_canned(tmp_path):
+    conn = _seeded(tmp_path)
+    msgs = [{"role": "user", "content": "I'm an experienced engineer. I just need to ship this feature fast — is that a bad approach?"}]
+    out = mentor_chat(conn, BOARD, msgs, use_llm=False).lower()
+    assert "blink an led" not in out
+    assert "i'd rather ground that" in out               # the grounded fallback
+
+
+def test_experienced_starter_does_not_repeat_verbatim(tmp_path):
+    conn = _seeded(tmp_path)
+    msgs = [{"role": "user", "content": "I just moved from software QA to firmware. What should I focus on in my first month?"}]
+    first = mentor_chat(conn, BOARD, msgs, use_llm=False)
+    msgs += [{"role": "assistant", "content": first},
+             {"role": "user", "content": "and the fastest way to get oriented on this board?"}]
+    second = mentor_chat(conn, BOARD, msgs, use_llm=False)
+    assert "skip 'blink an led'" in first.lower()
+    assert "same direction as before" in second.lower()  # de-duped, not the same paragraph
+    assert first.split("Try")[0].strip() != second.split("Try")[0].strip()

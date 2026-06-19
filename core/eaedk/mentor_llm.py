@@ -318,7 +318,24 @@ _CALIBRATION_NOTE = {
         "concrete and one step at a time, and be encouraging.]")}
 
 
-def _experienced_starter(board_name: str) -> str:
+# A "getting started / orient / what to build" intent — the only place the generic experienced
+# starter belongs. Specific questions ("how does memory work", "is shipping fast bad?") must not.
+_START_SIGNALS = ("where do i start", "where to start", "where do i begin", "how do i start",
+                  "get oriented", "get productive", "what should i build", "what to build",
+                  "build something", "first project", "first month", "fastest way",
+                  "what should i focus", "focus on in my first", "get good at")
+
+
+def _is_start_question(text: str) -> bool:
+    low = (text or "").lower()
+    return any(s in low for s in _START_SIGNALS)
+
+
+def _experienced_starter(board_name: str, already_shown: bool = False) -> str:
+    if already_shown:                          # don't repeat the same paragraph verbatim
+        return (f"Same direction as before — skip blink. The concrete next move on {board_name} is "
+                f"to bring up one peripheral's registers by hand (UART TX), then read a sensor over "
+                f"I2C. Tell me which and I'll walk the register-level steps.")
     return (f"You already know how to code, so skip 'blink an LED' — it only proves your toolchain "
             f"works. On {board_name}, the fastest way to build real firmware instinct is to go "
             f"straight at what's actually different from software: bring up UART by writing the "
@@ -1384,14 +1401,26 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
             # Keep the board's starter experiment (contract), but close with a concept-relevant
             # question rather than the hardcoded UART-clock one.
             question = "Question: want me to ground this on your board with a concrete next step?"
-    elif path and skill == "experienced":
-        # Calibration: an experienced engineer must NOT be told to "blink an LED" (the #1 persona
-        # complaint). Skip it; point at the embedded-specific muscle, and close at their level.
-        head = _experienced_starter(board_name)
+    elif path and skill == "experienced" and _is_start_question(last_user):
+        # Calibration: an experienced engineer asking "where do I start / what to build" must NOT be
+        # told to "blink an LED". Point at the embedded-specific muscle; don't repeat it verbatim.
+        already = any("skip 'blink" in (m.get("content") or "").lower()
+                      for m in (messages or []) if m.get("role") == "assistant")
+        head = _experienced_starter(board_name, already)
         try_this = ("open the reference manual to the UART/USART register section and find the "
                     "transmit-enable bit — you'll set that bit directly, no HAL")
         question = ("Question: want the register-level UART bring-up, or first a comparison to how "
                     "you'd approach this in software?")
+    elif path and skill == "experienced":
+        # An experienced user asking a SPECIFIC question we have no curated route for yet: don't hand
+        # them blink, and don't repeat the generic starter — ground it and ask which concrete piece.
+        head = (f"I'd rather ground that than hand you a generic roadmap. On {board_name} I can go "
+                f"register- and datasheet-deep on a concrete topic and compare it to how you'd do it "
+                f"in software.")
+        try_this = ("skim the reference-manual section for whatever you're touching — on an MCU the "
+                    "datasheet is the API")
+        question = ("Question: which piece do you want — the memory model, firmware debugging "
+                    "(JTAG / printf-over-UART), interrupt-safe buffers, or a specific peripheral?")
     elif path:
         head = (f"Good question. For {board_name}, the place to start is '{path[0]['title']}' — "
                 f"{path[0]['why']}")

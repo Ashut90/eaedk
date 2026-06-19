@@ -10,6 +10,14 @@
     Rule of thumb: reach for an MCU when you need tight timing and low power on a fixed task (firmware); reach for an MPU when you need an OS, lots of memory, networking, or heavy compute. The whole habit of firmware — registers, the datasheet, limited RAM/flash, no OS — comes from the MCU side.
 - name: watchdog
   anchor: "A watchdog is a timer that resets the chip if your code stops periodically 'petting' it — a safety net against hangs."
+- name: memory
+  anchor: |
+    Memory in firmware vs a backend service — the mental model is almost inverted:
+      - No OS, no virtual memory. You have a FIXED, small amount of RAM (kilobytes) and flash at known physical addresses. No paging, no swap, no "just add more RAM".
+      - You generally do NOT use malloc/heap. Allocation is static or stack-based, decided at build time — heap fragmentation in a device that runs for months is a slow death. The linker script decides where .text/.data/.bss/stack/heap live.
+      - A variable shared with an interrupt must be `volatile` (or the compiler caches it in a register and you read stale data) and read atomically (a multi-byte read can tear).
+      - Flash holds code + constants and wears out after a finite number of writes; RAM is volatile and lost on reset. You consciously choose what lives where.
+    Coming from a backend: drop the assumptions of effectively-infinite memory, a garbage collector, and an OS that hides addresses. Here the address space IS the hardware, RAM is scarce and fixed, and you own every byte.
 - name: vector_table
   anchor: "The vector table is a list of handler addresses at the very start of flash; the CPU reads it on reset and on every interrupt to know where to jump."
 - name: interrupt
