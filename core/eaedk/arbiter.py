@@ -136,10 +136,19 @@ _META_MARK = ("rewritten answer", "corrected answer", "the draft answer", "here'
 
 
 def _strip_meta(text: str) -> str:
-    parts = (text or "").split("\n\n", 1)
-    if len(parts) == 2 and any(m in parts[0].lower() for m in _META_MARK):
-        return parts[1].strip()
-    return (text or "").strip()
+    # Drop up to two leading meta lines ("A rewritten answer that addresses…", "Here's the corrected…")
+    # whether the model separated them by a single or double newline.
+    t = (text or "").strip()
+    for _ in range(2):
+        first = t.split("\n", 1)[0].lower()
+        if any(m in first for m in _META_MARK):
+            nl = t.find("\n")
+            if nl == -1:
+                return ""               # the whole thing was meta — caller falls back to the draft
+            t = t[nl + 1:].strip()
+        else:
+            break
+    return t
 
 
 def _is_open_decision(question: str) -> bool:
