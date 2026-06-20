@@ -1217,6 +1217,10 @@ def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | 
 # explanation from a verified fact packet, in the context of the whole conversation (multi-turn), and
 # offers follow-up moves. The verifier blocks invented board facts; offline / unsafe falls back to the
 # deterministic render so it never dead-ends. Teaching model is capable by default (the 3B can't teach).
+# CAVEAT (docs/35): the default 8B local model may DRIFT — the same concrete question can be answered
+# cleanly one run and slide into a trade-off discussion the next. The relevance critic nudges it but a
+# small model doesn't always comply. A stronger mentor model is recommended for production answers
+# (set EAEDK_MENTOR_MODEL). The deterministic guardrails hold regardless of model.
 _MENTOR_MODEL = os.environ.get("EAEDK_MENTOR_MODEL", "llama3.1:8b")
 
 _TEACH_SYSTEM = (
