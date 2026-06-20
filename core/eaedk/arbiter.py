@@ -108,6 +108,36 @@ def why_review(gw, actor_text: str, context: str, user_text: str) -> str:
         return actor_text
 
 
+# ── Relevance critic ──────────────────────────────────────────────────────────────────────────
+# The one check that is NOT deterministic: "did it actually answer the question?". A bounded LLM
+# self-review that rewrites an answer which dodged the question or recited a generic framework
+# instead of addressing what was asked. Advisory — the deterministic fact/safety checks below still
+# have the final say, and offline / model error returns the answer unchanged.
+
+_RELEVANCE_SYSTEM = (
+    "You are the RELEVANCE CRITIC. You are given a user's exact question and a draft answer. Decide "
+    "whether the draft DIRECTLY answers the specific question that was asked.\n"
+    "- If it does, return it unchanged.\n"
+    "- If it dodged, answered a different (nearby) question, or recited a generic framework/essay "
+    "instead of addressing what was actually asked, REWRITE it to answer the exact question — concrete "
+    "and specific. Keep it grounded; do not invent pins, clocks, registers, addresses, or part "
+    "numbers, and do not contradict the context. Return only the corrected answer, no preamble.")
+
+
+def answer_check(gw, question: str, answer: str, context: str) -> str:
+    """One bounded pass: does the answer address the SPECIFIC question? Best-effort — offline / error
+    returns the answer unchanged. Advisory; the deterministic arbiter still runs after it."""
+    if not (question or "").strip() or len(answer or "") < 20:
+        return answer
+    try:
+        prompt = (f"USER QUESTION:\n{question}\n\nCONTEXT (ground truth — do not contradict or invent "
+                  f"beyond it):\n{context}\n\nDRAFT ANSWER:\n{answer}\n\nCorrected answer:")
+        out = gw.provider.generate(_RELEVANCE_SYSTEM, prompt)
+        return out.strip() or answer
+    except Exception:
+        return answer
+
+
 def _feasibility_fail(conn: sqlite3.Connection, project: str | None) -> str | None:
     if not project:
         return None

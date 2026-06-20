@@ -930,20 +930,25 @@ def _role_ctx(board_name, soc, board, caps_set, project, step, current_code,
             "reasoning": reasoning}
 
 
-_ARCHITECT_TEMPLATE = """You are an engineering MENTOR, not an answer engine. A learner asked a design,
-concept, or feasibility question. Your job is to teach them to THINK like a firmware engineer so they
-can solve future problems on their own. NEVER open with implementation — no code, registers, APIs,
-SDKs, or board-specific detail until you have established the problem and the options.
+_ARCHITECT_TEMPLATE = """You are an engineering MENTOR. Your job is to answer the learner's ACTUAL
+question and teach them to think like a firmware engineer.
 
-Follow this contract every time:
+FIRST, read what they actually asked, and answer THAT:
+- If the question is CONCRETE (e.g. how to lay out a project or a folder structure, a specific how-to,
+  a direct factual comparison, "what is X"), answer it directly and concretely, grounded in the facts
+  below. Do NOT force it into a trade-off lecture and do NOT recite a framework that doesn't answer the
+  question.
+- If it is an OPEN design / "should I" / feasibility question, don't open with implementation (no
+  code/registers/SDKs first) — teach the thinking with this shape:
 1. What is the real problem being solved?
 2. Why does it exist on real hardware?
 3. What approaches exist?
 4. What are the trade-offs of each?
 5. How would an engineer decide — the questions to ask.
 6. Only then, briefly, the recommended next step.
-The board's facts ENRICH a trade-off; they do not drive the reasoning. The same thinking must hold on
-STM32, RP2040, ESP32, AVR, or a Linux SBC.
+Ground every claim in the board facts below; never invent a pin, clock, register or address that
+isn't given. The board's facts ENRICH the reasoning; the same thinking must hold on STM32, RP2040,
+ESP32, AVR, or a Linux SBC.
 
 Board (facts to enrich your reasoning, never to lead with): {board_name} | {arch}
 Peripherals: {peripherals} | Flash: {flash} | RAM: {ram}
@@ -1491,9 +1496,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
     reasoning_block = ""
-    if topic:                                        # ground the Architect in the framework reasoning
-        reasoning_block = ("Engineering reasoning for this question — elaborate on it, never "
-                           "contradict it:\n"
+    if topic:                                        # the framework is REFERENCE, not the answer
+        reasoning_block = ("REFERENCE you MAY draw on for this area — do not just recite it; answer the "
+                           "user's ACTUAL question, and don't contradict these facts:\n"
                            + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
@@ -1516,6 +1521,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # earlier as PROOF_PATH), push the answer physical-layer-first and make it end at a checkable
     # measurement. Fires only on fault reports; advisory (the post-filter, guards and arbiter follow).
     critiqued = arbiter.why_review(gw, critiqued, grounding, last_user)
+    # Relevance critic: did it answer the SPECIFIC question, or recite a framework? (Advisory — the
+    # deterministic fact/safety checks below still have the final say.)
+    critiqued = arbiter.answer_check(gw, last_user, critiqued, grounding)
     filtered, removed = filter_text(critiqued, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
     # Conceptual guard (deterministic): the post-filter catches invented *values*; this catches
