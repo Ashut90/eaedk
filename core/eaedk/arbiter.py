@@ -116,24 +116,55 @@ def why_review(gw, actor_text: str, context: str, user_text: str) -> str:
 
 _RELEVANCE_SYSTEM = (
     "You are the RELEVANCE CRITIC. You are given a user's exact question and a draft answer. Decide "
-    "whether the draft DIRECTLY answers the specific question that was asked.\n"
-    "- If it does, return it unchanged.\n"
-    "- If it dodged, answered a different (nearby) question, or recited a generic framework/essay "
-    "instead of addressing what was actually asked, REWRITE it to answer the exact question — concrete "
-    "and specific. Keep it grounded; do not invent pins, clocks, registers, addresses, or part "
-    "numbers, and do not contradict the context. Return only the corrected answer, no preamble.")
+    "whether the draft addresses the specific question that was asked.\n"
+    "- If it does, return it EXACTLY unchanged.\n"
+    "- A draft that teaches the trade-offs, asks the user a deciding question, or lays out options for "
+    "an open 'should I / which' design question is a VALID answer — NOT a dodge. Do not force a blunt "
+    "recommendation onto an open design question.\n"
+    "- Only rewrite if the draft answered a DIFFERENT question, or is generic filler that ignores what "
+    "was concretely asked (e.g. a folder-structure question answered with unrelated theory). Then "
+    "rewrite it to answer the exact question, grounded; invent no pins/clocks/registers/addresses.\n"
+    "CRITICAL: output ONLY the answer text itself. No preamble, no 'here is a rewritten answer', no "
+    "commentary about the draft. Just the answer.")
+
+# The small model sometimes ignores "no preamble" and prepends meta-commentary; strip a leading
+# meta paragraph deterministically so it never reaches the user.
+_META_MARK = ("rewritten answer", "corrected answer", "the draft answer", "here's a rewrit",
+              "here is a rewrit", "here's the corrected", "here is the corrected", "i've rewritten",
+              "i have rewritten", "revised answer", "dodges the question", "here's a revised",
+              "here is a revised", "here's the revised")
+
+
+def _strip_meta(text: str) -> str:
+    parts = (text or "").split("\n\n", 1)
+    if len(parts) == 2 and any(m in parts[0].lower() for m in _META_MARK):
+        return parts[1].strip()
+    return (text or "").strip()
+
+
+def _is_open_decision(question: str) -> bool:
+    """An open 'X vs Y / should I … or …' design question — where teaching the trade-off IS the right
+    answer, so the relevance critic must not force a blunt recommendation."""
+    q = " " + (question or "").lower().strip() + " "
+    if " vs " in q or " versus " in q:
+        return True
+    if " or " in q and ("should i" in q or ("?" in (question or "") and len(q.split()) <= 12)):
+        return True
+    return False
 
 
 def answer_check(gw, question: str, answer: str, context: str) -> str:
-    """One bounded pass: does the answer address the SPECIFIC question? Best-effort — offline / error
-    returns the answer unchanged. Advisory; the deterministic arbiter still runs after it."""
-    if not (question or "").strip() or len(answer or "") < 20:
+    """One bounded pass: does the answer address the SPECIFIC question? Skips open design decisions
+    (Socratic teaching is valid there). Best-effort — offline / error returns the answer unchanged.
+    Advisory; the deterministic arbiter still runs after it."""
+    if not (question or "").strip() or len(answer or "") < 20 or _is_open_decision(question):
         return answer
     try:
         prompt = (f"USER QUESTION:\n{question}\n\nCONTEXT (ground truth — do not contradict or invent "
-                  f"beyond it):\n{context}\n\nDRAFT ANSWER:\n{answer}\n\nCorrected answer:")
-        out = gw.provider.generate(_RELEVANCE_SYSTEM, prompt)
-        return out.strip() or answer
+                  f"beyond it):\n{context}\n\nDRAFT ANSWER:\n{answer}\n\nReturn the answer (only the "
+                  f"answer text):")
+        out = _strip_meta(gw.provider.generate(_RELEVANCE_SYSTEM, prompt))
+        return out or answer
     except Exception:
         return answer
 
