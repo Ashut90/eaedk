@@ -1455,7 +1455,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         head = f"For {board_name}, tell me what you want to do and I'll point you at the first step."
     backbone = f"{head}{_tt_block(try_this)}\n\n{question}"
 
-    gw = gateway or Gateway()
+    # Default the mentor to the capable mentor model (llama3.1:8b), not the generic 3B default — a
+    # weak model recites the framework and ignores the question. EAEDK_MENTOR_MODEL overrides.
+    gw = gateway or Gateway(provider=OllamaProvider(model=_MENTOR_MODEL))
     note = _llm_or_note(use_llm, gw)
     if note is not None:
         # Offline: no model to compose a tailored answer. Return the grounded deterministic reference
