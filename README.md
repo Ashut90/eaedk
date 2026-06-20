@@ -32,8 +32,11 @@ python3 -m venv .venv && source .venv/bin/activate  # 3-4. private workspace
 pip install -e .                                    # 5. install the `eaedk` command
 eaedk db init && eaedk db seed                      # 6-7. create + load the local database
 eaedk board list                                    # 8. see the 14 built-in boards
-eaedk board capabilities --board bluepill           # 9. what can this board do? (fuzzy names OK)
+eaedk mentor --board STM32F103-BluePill             # 9. ask the mentor (add --chat --llm for AI answers)
 ```
+
+`eaedk board capabilities --board bluepill` shows what a board can do (fuzzy names like `bluepill`
+are auto-coerced). For a back-and-forth AI conversation: `eaedk mentor --board <b> --chat --llm`.
 
 ### Windows (PowerShell)
 
@@ -60,6 +63,72 @@ Coming back later? `cd eaedk`, re-activate the workspace, and you're ready — s
 **On Ubuntu/Debian** you can instead build a native package — `packaging/build-deb.sh` →
 `sudo apt install ./dist/eaedk_*_all.deb` puts `eaedk` on your `$PATH` system-wide. (macOS and
 Windows use the pip flow above — there is no native installer for them yet.)
+
+### Pick your AI model (optional)
+
+The mentor answers **offline by default** (deterministic). For *AI* answers (`--llm`, or the web
+"Use the AI model" box) you choose the model with environment variables — no code change.
+
+**Local & free — [Ollama](https://ollama.com):**
+
+```bash
+ollama pull llama3.1:8b                                  # recommended local default
+EAEDK_MENTOR_MODEL=llama3.1:8b eaedk mentor --board STM32F103-BluePill --chat --llm
+```
+
+A 7–8B model is the sweet spot for a 6–8 GB GPU. **Avoid 3B models** — they recite templates instead
+of reasoning. Note: any local model caps out below a frontier model's reasoning.
+
+**Stronger reasoning — any OpenAI-compatible endpoint** (OpenCode Zen, Gemini's OpenAI API,
+OpenRouter, a hosted vLLM):
+
+```bash
+export EAEDK_LLM_BASE_URL=https://opencode.ai/zen/v1     # the endpoint
+export EAEDK_LLM_API_KEY=...                             # if it needs a key
+export EAEDK_MENTOR_MODEL=deepseek-v4                    # the model id there
+eaedk mentor --board STM32F103-BluePill --chat --llm
+```
+
+Either way EAEDK wraps the model with its deterministic grounding + verifier, so a stronger model
+gives sharper answers **without** losing the no-hallucinated-hardware-facts guarantee.
+
+---
+
+## What's new — the "LLM generates, deterministic verifies" pivot
+
+EAEDK used to **classify** your question and play back a stored template. Now the model **reads and
+answers your specific question**, and the deterministic engines **verify** it. Full write-up:
+[docs/35](docs/35-llm-generates-deterministic-verifies.md).
+
+```
+Your question
+   │
+   ▼
+Intent router picks the answer mode
+   ├─ debugging fault → deterministic PROOF-PATH (a curated decision tree)
+   └─ open / concrete → the LLM reads the EXACT question
+                          │  ← verified board / project facts injected as grounding
+                          ▼
+                        LLM answers the specific question
+                          │
+                          ▼  deterministic verifier — final say:
+                             • invented a board fact?   → stripped   (allowlist post-filter)
+                             • out of scope?             → declined  (purpose gate)
+                             • unsafe / not feasible?    → overridden (feasibility arbiter)
+                             • conceptually wrong?       → blocked   (conceptual guards)
+                             • answered the question?    → bounded LLM relevance critic (advisory)
+                          ▼
+                        Final answer
+```
+
+**Major changes since v3.1:**
+
+- **The pivot above** — the LLM generates the answer; the deterministic layer verifies it (was the reverse).
+- **9 curated debugging proof-paths** across 5 project types — bare-metal (UART / I²C / SPI / power-reset / HardFault), RTOS, bootloader, Linux driver, edge-ML inference.
+- **Conceptual guards** — block advice that's literal-clean but wrong (e.g. "add pull-ups to your SPI bus").
+- **Skill-level calibration** — reads the user's self-described level; never hands an experienced engineer the beginner "blink an LED" path.
+- **Pluggable models** — local Ollama *or* any OpenAI-compatible endpoint (see *Pick your AI model*).
+- **Bounded "why" critic** for uncovered faults, and an honest offline fallback that never fakes a tailored answer.
 
 ---
 
