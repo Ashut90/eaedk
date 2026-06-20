@@ -1110,6 +1110,46 @@ def build_architect_prompt(ctx: dict) -> str:
     return _ARCHITECT_TEMPLATE.format(**ctx)
 
 
+# A FOCUSED skill for CONCRETE questions (structure / how-to / what-is). A small model waffles when
+# handed the open-ended teaching template; this demands an actual DELIVERABLE and gives it the shape.
+_CONCRETE_SYSTEM = """You are a firmware mentor answering a CONCRETE question. Give the actual answer, \
+not a discussion about it.
+
+Rules:
+- START with the answer. No "Let's break it down", no restating the question, no trade-off essay \
+unless they explicitly asked you to compare options.
+- If they ask for a PROJECT / FOLDER / DIRECTORY structure: output an actual directory tree inside a \
+``` code block, and make it BOARD-INDEPENDENT — put every chip-specific file behind one \
+`platform/ports/<chip>/` layer (stm32/, rp2040/, esp32/, …) with a `shared/` contract, so the same \
+tree works on any MCU. Then at most 4 lines saying what the key folders are for.
+- If they ask HOW to do something: numbered steps, each concrete and checkable.
+- If they ask WHAT something IS: 2-4 plain sentences, then one tiny concrete example.
+- Ground every claim in the board facts in the context. NEVER invent a specific pin, clock, register, \
+address, or part number.
+
+Output a COMPLETE tree of your OWN for what they asked. The example below only shows the FORMAT and \
+the platform/ports idea — do NOT refer to its folders as if they already exist, and do NOT answer \
+"what file to add"; give the whole structure.
+
+Example FORMAT — "folder structure for a bootloader, any board":
+```
+project/
+├── bootloader/          # boot program: validate image, pick slot, jump to app
+│   ├── src/  include/
+│   └── linker/bootloader.ld
+├── app/                 # the application, built separately
+│   └── src/  include/  linker/app.ld
+├── platform/ports/      # the ONLY board-specific code — one folder per chip
+│   ├── stm32/  rp2040/  esp32/
+├── shared/              # boot<->app contract: image header, version, crc32
+│   └── include/  src/
+├── tools/               # make_image / flash scripts
+└── tests/
+```
+Everything board-specific lives under platform/ports/; bootloader, app and shared stay portable.
+End with one short follow-up question."""
+
+
 def build_peer_mentor_prompt(ctx: dict) -> str:
     examples = _PEER_EXAMPLES.get(ctx.get("family") or "default", _PEER_EXAMPLES["default"])
     return _PEER_HEAD.format(**ctx) + examples + _PEER_TAIL
@@ -1530,8 +1570,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                            "user's ACTUAL question, and don't contradict these facts:\n"
                            + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
                            + "\n")
-    system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
-        _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
+    if _is_concrete_question(last_user):             # focused "give the deliverable" skill
+        system = _CONCRETE_SYSTEM
+    else:                                            # the teaching template for open design questions
+        system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
+            _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
     # Skill-level calibration (tone/depth only — never strips safety content; the post-filter,
     # conceptual guards and the arbiter all still run downstream).
     if _CALIBRATION_NOTE.get(skill):
