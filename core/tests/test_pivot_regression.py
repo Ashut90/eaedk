@@ -70,3 +70,26 @@ def test_proof_paths_still_work(tmp_path):
     msgs = [{"role": "user", "content": "my uart prints nothing, no output"}]
     route = nav.classify(decide_purpose(conn, BOARD, msgs[0]["content"], {}, msgs), msgs)
     assert route.mode == nav.PROOF_PATH and route.proof_state.pattern.name == "uart_bringup"
+
+
+# 5. A concrete question must NOT get the decision-topic framework injected (weak models recite it);
+#    an open design question still does.
+def test_concrete_question_omits_the_decision_framework(tmp_path):
+    conn = _seeded(tmp_path)
+
+    from eaedk.llm.gateway import Gateway
+
+    class _Rec:                                # the framework reference goes into the SYSTEM prompt
+        def __init__(self): self.systems = []
+        def available(self): return True
+        def generate(self, s, p): self.systems.append(s); return "ok. Try this: x. Question: y?"
+
+    concrete = _Rec()
+    mentor_chat(conn, BOARD, [{"role": "user", "content": "what folder structure should I use for a bootloader?"}],
+                use_llm=True, gateway=Gateway(provider=concrete))
+    assert concrete.systems and not any("REFERENCE you MAY draw on" in s for s in concrete.systems)
+
+    open_q = _Rec()
+    mentor_chat(conn, BOARD, [{"role": "user", "content": "should I use a single-bank or A/B bootloader?"}],
+                use_llm=True, gateway=Gateway(provider=open_q))
+    assert any("REFERENCE you MAY draw on" in s for s in open_q.systems)

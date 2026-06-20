@@ -296,6 +296,20 @@ _SKILL_BEGINNER = (
     "kind of know", "barely know", "i'm anxious")
 
 
+# A CONCRETE question (structure/layout/how-to/what-is) — do NOT dangle the decision-topic framework
+# in front of the model as "reference"; it just recites it. Answer the concrete question directly.
+_CONCRETE_MARKERS = ("folder structure", "directory structure", "project structure", "file structure",
+                     "folder layout", "project layout", "code structure", "how do i", "how to ",
+                     "how should i set", "where do i put", "where should i put", "what files",
+                     "what is ", "what's ", "what are the steps", "step by step", "steps to ",
+                     "give me the", "show me the")
+
+
+def _is_concrete_question(text: str) -> bool:
+    low = (text or "").lower()
+    return any(m in low for m in _CONCRETE_MARKERS)
+
+
 def detect_skill_level(messages: list[dict] | None) -> str:
     """'experienced' | 'beginner' | '' from the user's explicit self-description across the whole
     conversation. Experienced wins if both appear (an engineer new to firmware is still an engineer)."""
@@ -1507,7 +1521,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
     reasoning_block = ""
-    if topic:                                        # the framework is REFERENCE, not the answer
+    if topic and not _is_concrete_question(last_user):   # framework is REFERENCE for OPEN questions;
+        # for a concrete question, omit it entirely — handing a weak model the trade-off framework just
+        # makes it recite the framework instead of answering the concrete question.
         reasoning_block = ("REFERENCE you MAY draw on for this area — do not just recite it; answer the "
                            "user's ACTUAL question, and don't contradict these facts:\n"
                            + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
