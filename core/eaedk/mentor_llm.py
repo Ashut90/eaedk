@@ -1496,9 +1496,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
     reasoning_block = ""
-    if topic:                                        # ground the Architect in the framework reasoning
-        reasoning_block = ("Engineering reasoning for this question — elaborate on it, never "
-                           "contradict it:\n"
+    if topic:                                        # the framework is REFERENCE, not the answer
+        reasoning_block = ("REFERENCE you MAY draw on for this area — do not just recite it; answer the "
+                           "user's ACTUAL question, and don't contradict these facts:\n"
                            + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
                            + "\n")
     system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
