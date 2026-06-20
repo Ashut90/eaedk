@@ -53,7 +53,7 @@ def test_relevance_critic_is_wired_into_mentor_chat(tmp_path):
 
     rec = _Rec()
     mentor_chat(conn, "STM32F103-BluePill",
-                [{"role": "user", "content": "how should I structure a bootloader project?"}],
+                [{"role": "user", "content": "should my logging be interrupt-driven on this board?"}],
                 use_llm=True, gateway=Gateway(provider=rec))
     assert any("RELEVANCE CRITIC" in s for s in rec.sys)
 

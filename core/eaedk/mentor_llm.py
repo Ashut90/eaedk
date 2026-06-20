@@ -1593,9 +1593,12 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # earlier as PROOF_PATH), push the answer physical-layer-first and make it end at a checkable
     # measurement. Fires only on fault reports; advisory (the post-filter, guards and arbiter follow).
     critiqued = arbiter.why_review(gw, critiqued, grounding, last_user)
-    # Relevance critic: did it answer the SPECIFIC question, or recite a framework? (Advisory — the
-    # deterministic fact/safety checks below still have the final say.)
-    critiqued = arbiter.answer_check(gw, last_user, critiqued, grounding)
+    # Relevance critic: did it answer the SPECIFIC question, or recite a framework? Skip it for
+    # concrete questions — the focused concrete skill already targets them, and an extra weak-model
+    # rewrite just degrades a good deliverable (a tree → prose) or leaks meta-commentary. (Advisory —
+    # the deterministic fact/safety checks below still have the final say.)
+    if not _is_concrete_question(last_user):
+        critiqued = arbiter.answer_check(gw, last_user, critiqued, grounding)
     filtered, removed = filter_text(critiqued, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
     # Conceptual guard (deterministic): the post-filter catches invented *values*; this catches
