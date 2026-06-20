@@ -48,10 +48,12 @@ def _ctx(conn: sqlite3.Connection, board_name: str) -> tuple[dict, dict, list]:
 
 def _llm_or_note(use_llm: bool, gw: Gateway) -> str | None:
     if not use_llm:
-        return "\n[mentor] add --llm for a conversational answer (offline model)."
+        return ("[offline reference] No model running, so this is EAEDK's grounded answer for this "
+                "area — not one written to your exact question. Run with `--llm` for that.")
     if not gw.available():
-        return (f"\n[mentor] LLM unavailable (model '{gw.model}' not pulled); showing the "
-                "deterministic answer above.")
+        return (f"[offline reference] The model '{gw.model}' isn't pulled, so this is EAEDK's grounded "
+                "answer for the area, not one tailored to your exact wording. Pull it and re-run with "
+                "`--llm` for a tailored reply.")
     return None
 
 
@@ -938,8 +940,10 @@ FIRST, read what they actually asked, and answer THAT:
   a direct factual comparison, "what is X"), answer it directly and concretely, grounded in the facts
   below. Do NOT force it into a trade-off lecture and do NOT recite a framework that doesn't answer the
   question.
-- If it is an OPEN design / "should I" / feasibility question, don't open with implementation (no
-  code/registers/SDKs first) — teach the thinking with this shape:
+- If it is an OPEN design / "should I" / feasibility question, do NOT open with a recommendation or
+  implementation (no "you should use X", no code/registers/SDKs first). Open with the key DECIDING
+  QUESTION or the core trade-off, lay the options out neutrally, and give a brief recommendation only
+  at the end, tied to their goal. Teach the thinking with this shape:
 1. What is the real problem being solved?
 2. Why does it exist on real hardware?
 3. What approaches exist?
@@ -1390,7 +1394,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         # hardcoded "which clock does your UART run on" closing question is off-topic here (e.g. on an
         # interrupt-vs-polling answer). Close with a decision-relevant one instead. (Keep try_this —
         # some topics, e.g. the linker script, carry a curated experiment.)
-        question = "Question: which of those trade-offs is the binding constraint for your project?"
+        question = "Question: want me to go deeper on any of that, or take the next concrete step?"
     elif domain:
         head = _domain_reasoning(domain, cap_set, fam, board_name)
     elif concept is not None:
@@ -1436,7 +1440,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     gw = gateway or Gateway()
     note = _llm_or_note(use_llm, gw)
     if note is not None:
-        return lead + backbone                       # offline: the structured deterministic answer
+        # Offline: no model to compose a tailored answer. Return the grounded deterministic reference
+        # and SAY SO honestly — placed AFTER the head (so the feasibility banner in `lead` still comes
+        # first and design answers still lead with the problem) and before the experiment + question.
+        return f"{lead}{head}\n\n{note}{_tt_block(try_this)}\n\n{question}"
 
     # Role C — the Validation Engine's verdict is deterministic; the chat points there, never the model.
     if role == "SPONSOR":
