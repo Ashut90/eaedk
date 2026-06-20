@@ -1277,6 +1277,19 @@ def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | 
 # (set EAEDK_MENTOR_MODEL). The deterministic guardrails hold regardless of model.
 _MENTOR_MODEL = os.environ.get("EAEDK_MENTOR_MODEL", "llama3.1:8b")
 
+
+def _mentor_provider():
+    """Pick the mentor's LLM provider from the environment so the user can switch models freely.
+    Setting EAEDK_LLM_BASE_URL routes to ANY OpenAI-compatible endpoint (OpenCode Zen, Gemini,
+    OpenRouter, …) — the way to use a stronger reasoning model than the local 8B. Otherwise local Ollama."""
+    model = os.environ.get("EAEDK_MENTOR_MODEL", _MENTOR_MODEL)   # read fresh → switchable at runtime
+    base = os.environ.get("EAEDK_LLM_BASE_URL", "").strip()
+    if base:
+        from .llm.openai_compat import OpenAICompatProvider
+        return OpenAICompatProvider(model=model, base_url=base,
+                                    api_key=os.environ.get("EAEDK_LLM_API_KEY", ""))
+    return OllamaProvider(model=model)
+
 _TEACH_SYSTEM = (
     "You are a senior embedded-systems mentor in a real, ongoing conversation with an engineer — not a "
     "FAQ and not a lecture. The engine hands you a VERIFIED FACT PACKET for the area they asked about. "
@@ -1300,7 +1313,7 @@ def _teach_learning_map(conn: sqlite3.Connection, lm, messages: list[dict], boar
     last_user = next((m.get("content", "") for m in reversed(messages or [])
                       if m.get("role") == "user"), "")
     deterministic = navigator.render_learning_map(conn, lm, board_name, None, last_user)
-    gw = gateway or Gateway(provider=OllamaProvider(model=_MENTOR_MODEL))
+    gw = gateway or Gateway(provider=_mentor_provider())
     if not gw.available():
         return deterministic
     packet = navigator.teach_packet(lm)
@@ -1497,7 +1510,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
 
     # Default the mentor to the capable mentor model (llama3.1:8b), not the generic 3B default — a
     # weak model recites the framework and ignores the question. EAEDK_MENTOR_MODEL overrides.
-    gw = gateway or Gateway(provider=OllamaProvider(model=_MENTOR_MODEL))
+    gw = gateway or Gateway(provider=_mentor_provider())
     note = _llm_or_note(use_llm, gw)
     if note is not None:
         # Offline: no model to compose a tailored answer. Return the grounded deterministic reference
