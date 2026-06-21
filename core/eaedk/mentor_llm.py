@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
 from . import conceptual_guards
 from . import answer_contract
+from . import normalize
 from . import web_source
 from .llm.gateway import Gateway
 from .llm.ollama import OllamaProvider
@@ -1369,7 +1370,12 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     caps = mentor.capability_map(conn, board_name)
     path = mentor.learning_path_for(conn, {c["capability"] for c in caps})
     fam = family_of(soc["name"])
-    last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+    # Front-door term normalization (the first box in the flow): fix obvious typos/aliases in the
+    # latest user turn BEFORE routing, so a misspelled domain term ('bootlaoder') still grounds and
+    # reaches the answer-shape contract instead of being declined as an unknown subject. Routing only —
+    # the raw transcript the model reads (history) is untouched.
+    last_user = normalize.normalize_terms(
+        next((m["content"] for m in reversed(messages) if m.get("role") == "user"), ""))
     concept = _detect_concept(conn, last_user)
     domain = _detect_domain(last_user)
     topic = reasoning.detect_topic(last_user)        # v2.6.0: an engineering decision -> the framework
