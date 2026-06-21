@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from . import repo, mentor, reasoning, semantic_cost, arbiter, problem_patterns, navigator
 from . import conceptual_guards
+from . import answer_contract
 from . import web_source
 from .llm.gateway import Gateway
 from .llm.ollama import OllamaProvider
@@ -296,18 +297,11 @@ _SKILL_BEGINNER = (
     "kind of know", "barely know", "i'm anxious")
 
 
-# A CONCRETE question (structure/layout/how-to/what-is) — do NOT dangle the decision-topic framework
-# in front of the model as "reference"; it just recites it. Answer the concrete question directly.
-_CONCRETE_MARKERS = ("folder structure", "directory structure", "project structure", "file structure",
-                     "folder layout", "project layout", "code structure", "how do i", "how to ",
-                     "how should i set", "where do i put", "where should i put", "what files",
-                     "what is ", "what's ", "what are the steps", "step by step", "steps to ",
-                     "give me the", "show me the")
-
-
+# A CONCRETE structure question — kept as a thin shim over the answer-shape classifier so there is a
+# single source of truth (answer_contract.detect_answer_shape). The mentor pipeline now routes on the
+# full shape, not this boolean.
 def _is_concrete_question(text: str) -> bool:
-    low = (text or "").lower()
-    return any(m in low for m in _CONCRETE_MARKERS)
+    return answer_contract.detect_answer_shape(text) == answer_contract.CONCRETE_STRUCTURE
 
 
 def detect_skill_level(messages: list[dict] | None) -> str:
@@ -1150,6 +1144,21 @@ Everything board-specific lives under platform/ports/; bootloader, app and share
 End with one short follow-up question."""
 
 
+# A FOCUSED skill for TEST-PLAN questions (the test_plan answer shape). A weak model otherwise gives a
+# theory essay; this demands a numbered, checkable plan layered by where each test runs.
+_TEST_PLAN_SYSTEM = """You are a firmware mentor answering a TEST-STRATEGY question. Give an actual \
+test PLAN, not a discussion about testing.
+
+Rules:
+- Output NUMBERED steps (1. 2. 3. …). Each step says WHAT to test, at WHICH layer (unit on host / \
+on-target / hardware-in-the-loop), and the concrete PASS/FAIL check.
+- Order from the cheapest, most isolated tests (pure logic on the host) up to on-target / HIL.
+- Ground every step in the board facts in the context. NEVER invent a pin, clock, register, address, \
+or part number.
+- No long theory and no restating the question — start at step 1.
+End with one short follow-up question."""
+
+
 def build_peer_mentor_prompt(ctx: dict) -> str:
     examples = _PEER_EXAMPLES.get(ctx.get("family") or "default", _PEER_EXAMPLES["default"])
     return _PEER_HEAD.format(**ctx) + examples + _PEER_TAIL
@@ -1438,6 +1447,17 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if try_this and not has_hardware and "wokwi" not in try_this.lower():
         try_this += " (run it in the Wokwi simulator — no hardware needed)."
     question = _followup_question(caps, path)
+    # Answer-shape contract (step #1+#2): detect the SHAPE the question demands and, for the
+    # structured shapes, swap the generic board experiment / follow-up for a shape-relevant one — a
+    # "folder structure" answer must not end with a flash/UART/GPIO experiment. (The deterministic
+    # generate→validate→regenerate happens in the LLM branch below.) The contract's overrides apply
+    # here so both the model prompt and the offline backbone use the right closing.
+    shape = answer_contract.detect_answer_shape(last_user)
+    contract = answer_contract.build_contract(shape, last_user)
+    if contract.try_this is not None:
+        try_this = contract.try_this
+    if contract.followup is not None:
+        question = contract.followup
     progress = _progress_summary(conn, project)
     guard = _feasibility_guard(conn, project)        # P1: hard NOT-FEASIBLE banner, prepended below
     sem_note = semantic_cost.chat_note(conn, board_name, last_user)  # P2B: grounded intent cost
@@ -1525,6 +1545,14 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
                 "never override them.\n\nTry this: run Validate and read the first FAIL or UNKNOWN.\n\n"
                 "Question: which check is blocking you?")
 
+    # Re-assert the shape contract's closing for the LLM answer: a backbone branch (e.g. a matched
+    # decision topic) may have set a generic Try-this / follow-up above, but a structured shape's own
+    # closing must win for the model prompt and the final answer.
+    if contract.try_this is not None:
+        try_this = contract.try_this
+    if contract.followup is not None:
+        question = contract.followup
+
     cap_lines = "\n".join(f"- {c['summary'] or c['capability']}" for c in caps)
     have = ", ".join(sorted(c["capability"] for c in caps)) or "(none recorded)"
     path_lines = "\n".join(f"{s['step']}. {s['title']} — {s['why']}" for s in path)
@@ -1575,39 +1603,53 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
               + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + a question):")
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
+    # System skill is chosen by the detected ANSWER SHAPE: focused deliverable skills for the
+    # structured shapes, the teaching template otherwise. The open-decision trade-off framework is a
+    # REFERENCE only for OPEN questions — never handed to a structured shape (a weak model just recites
+    # it instead of producing the deliverable).
+    structured = shape in (answer_contract.CONCRETE_STRUCTURE, answer_contract.TEST_PLAN)
     reasoning_block = ""
-    if topic and not _is_concrete_question(last_user):   # framework is REFERENCE for OPEN questions;
-        # for a concrete question, omit it entirely — handing a weak model the trade-off framework just
-        # makes it recite the framework instead of answering the concrete question.
+    if topic and not structured:
         reasoning_block = ("REFERENCE you MAY draw on for this area — do not just recite it; answer the "
                            "user's ACTUAL question, and don't contradict these facts:\n"
                            + reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
                            + "\n")
-    if _is_concrete_question(last_user):             # focused "give the deliverable" skill
+    if shape == answer_contract.CONCRETE_STRUCTURE:
         system = _CONCRETE_SYSTEM
-    else:                                            # the teaching template for open design questions
+    elif shape == answer_contract.TEST_PLAN:
+        system = _TEST_PLAN_SYSTEM
+    else:                                            # the teaching template for open / concept questions
         system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
             _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
     # Skill-level calibration (tone/depth only — never strips safety content; the post-filter,
     # conceptual guards and the arbiter all still run downstream).
     if _CALIBRATION_NOTE.get(skill):
         system = _CALIBRATION_NOTE[skill] + "\n\n" + system
-    # Actor pass — the model proposes. A live-model hiccup (timeout, dropped connection, the model
-    # answered the availability ping but stalls on generation) must NEVER crash the request — degrade
-    # to the deterministic backbone, which is already a complete grounded answer.
+    actor_prompt = prompt + (("\n" + contract.prompt_addendum) if contract.prompt_addendum else "")
+
+    # Actor pass + DETERMINISTIC contract check (step #1+#2). The Actor proposes against the shape's
+    # contract; we VERIFY the answer's shape deterministically and, on a miss, the Actor REGENERATES
+    # (capped) with the failures injected — a critic never *rewrites* the answer. A live-model hiccup
+    # (timeout, dropped connection) must NEVER crash the request — degrade to the grounded backbone.
     try:
-        raw = gw.provider.generate(system, prompt)
+        raw = gw.provider.generate(system, actor_prompt)
+        fails = contract.validate(raw)
+        attempts = 0
+        while fails and attempts < answer_contract.MAX_REGEN:
+            raw = gw.provider.generate(system, actor_prompt + answer_contract.regen_instruction(fails))
+            attempts += 1
+            fails = contract.validate(raw)
     except Exception:
         return lead + backbone
     grounding = f"{sem_line}{feas_line}Board: {board_name} ({soc['arch']}); peripherals: {have}."
     critiqued = raw
-    # The LLM critic passes refine OPEN/teaching answers and fault debugging — they must NOT run on a
-    # CONCRETE deliverable. A weak model told to "rewrite it to be correct" rewrites a good folder tree
-    # into unrelated prose and leaks meta-commentary (the exact "doesn't answer the question" defect —
-    # see docs/35). For concrete questions the focused concrete skill already targets the answer; the
-    # deterministic post-filter, conceptual guards and arbiter BELOW still verify it, so skipping the
-    # model critics here costs no safety.
-    if not _is_concrete_question(last_user):
+    # Soft LLM critics run ONLY for the non-deterministic shapes (open / concept / debug / default).
+    # The structured shapes are governed by the deterministic contract above; a weak model told to
+    # "rewrite it to be correct" corrupts a good tree into prose (the exact "doesn't answer the
+    # question" defect — see docs/35), so they ship the Actor's words unchanged. The post-filter,
+    # conceptual guards and arbiter BELOW still verify every shape, so skipping the critics costs no
+    # safety.
+    if contract.soft_critics:
         # Critic pass — the model reviews its own answer (P4).
         critiqued = arbiter.critic_review(gw, system, raw, grounding)
         # Bounded why-critic (Step 4): for an UNCOVERED fault (no proof pattern matched — those return
