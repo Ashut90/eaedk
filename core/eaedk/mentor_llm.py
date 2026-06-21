@@ -1599,18 +1599,22 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         raw = gw.provider.generate(system, prompt)
     except Exception:
         return lead + backbone
-    # Critic pass — the model reviews its own answer (P4; runs on every online response).
     grounding = f"{sem_line}{feas_line}Board: {board_name} ({soc['arch']}); peripherals: {have}."
-    critiqued = arbiter.critic_review(gw, system, raw, grounding)
-    # Bounded why-critic (Step 4): for an UNCOVERED fault (no proof pattern matched — those return
-    # earlier as PROOF_PATH), push the answer physical-layer-first and make it end at a checkable
-    # measurement. Fires only on fault reports; advisory (the post-filter, guards and arbiter follow).
-    critiqued = arbiter.why_review(gw, critiqued, grounding, last_user)
-    # Relevance critic: did it answer the SPECIFIC question, or recite a framework? Skip it for
-    # concrete questions — the focused concrete skill already targets them, and an extra weak-model
-    # rewrite just degrades a good deliverable (a tree → prose) or leaks meta-commentary. (Advisory —
-    # the deterministic fact/safety checks below still have the final say.)
+    critiqued = raw
+    # The LLM critic passes refine OPEN/teaching answers and fault debugging — they must NOT run on a
+    # CONCRETE deliverable. A weak model told to "rewrite it to be correct" rewrites a good folder tree
+    # into unrelated prose and leaks meta-commentary (the exact "doesn't answer the question" defect —
+    # see docs/35). For concrete questions the focused concrete skill already targets the answer; the
+    # deterministic post-filter, conceptual guards and arbiter BELOW still verify it, so skipping the
+    # model critics here costs no safety.
     if not _is_concrete_question(last_user):
+        # Critic pass — the model reviews its own answer (P4).
+        critiqued = arbiter.critic_review(gw, system, raw, grounding)
+        # Bounded why-critic (Step 4): for an UNCOVERED fault (no proof pattern matched — those return
+        # earlier as PROOF_PATH), push the answer physical-layer-first and end at a checkable
+        # measurement. Fires only on fault reports; advisory (post-filter, guards and arbiter follow).
+        critiqued = arbiter.why_review(gw, critiqued, grounding, last_user)
+        # Relevance critic: did it answer the SPECIFIC question, or recite a framework?
         critiqued = arbiter.answer_check(gw, last_user, critiqued, grounding)
     filtered, removed = filter_text(critiqued, build_board_allowlist(conn, board_name))
     answer = filtered.strip()
