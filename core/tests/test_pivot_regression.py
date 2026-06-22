@@ -93,3 +93,31 @@ def test_concrete_question_omits_the_decision_framework(tmp_path):
     mentor_chat(conn, BOARD, [{"role": "user", "content": "should I use a single-bank or A/B bootloader?"}],
                 use_llm=True, gateway=Gateway(provider=open_q))
     assert any("REFERENCE you MAY draw on" in s for s in open_q.systems)
+
+
+# 6. A concrete deliverable must NOT be run through the LLM critic passes — only the single Actor
+#    call. The critic ("rewrite it to be correct") otherwise mangles a good folder tree into prose
+#    (the live "doesn't answer the question" defect). One generate call; Actor output survives intact.
+def test_concrete_answer_skips_the_llm_critic_passes(tmp_path):
+    conn = _seeded(tmp_path)
+    from eaedk.llm.gateway import Gateway
+
+    tree = "```\nproject/\n├── bootloader/\n├── app/\n└── platform/ports/\n```\nKey folders: ..."
+
+    class _Count:
+        def __init__(self): self.calls = 0
+        def available(self): return True
+        def generate(self, s, p): self.calls += 1; return tree
+
+    # Concrete: exactly ONE call (Actor) — critic/why/relevance all skipped, tree passes through.
+    concrete = _Count()
+    out = mentor_chat(conn, BOARD, [{"role": "user", "content": "folder structure for bootloader"}],
+                      use_llm=True, gateway=Gateway(provider=concrete))
+    assert concrete.calls == 1
+    assert "project/" in out and "platform/ports/" in out
+
+    # Open question: the critic passes still run (more than one generate call).
+    openq = _Count()
+    mentor_chat(conn, BOARD, [{"role": "user", "content": "should my logging be interrupt-driven on this board?"}],
+                use_llm=True, gateway=Gateway(provider=openq))
+    assert openq.calls > 1

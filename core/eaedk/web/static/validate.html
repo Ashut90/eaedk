@@ -5,6 +5,7 @@
   <title>EAEDK — Validate</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
 </head>
 <body>
   <nav class="top"></nav>
@@ -26,6 +27,9 @@
   </main>
 
   <script>
+    let CURRENT_BOARD = null;
+    const PROJ_BOARD = {};   // project name -> board name
+
     async function init() {
       showCommand("eaedk validate <project>");
       const ps = await api("/api/projects");
@@ -37,14 +41,25 @@
            <a href="setup.html">New Project</a> page first.</div>`;
         return;
       }
+      ps.projects.forEach(p => { PROJ_BOARD[p.name] = p.board || null; });
       sel.innerHTML = ps.projects.map(p =>
         `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)} — ${escapeHtml(p.board || "no board")}</option>`).join("");
+
+      const urlProject = new URLSearchParams(location.search).get("project");
+      if (urlProject && ps.projects.some(p => p.name === urlProject)) {
+        sel.value = urlProject;
+      }
+      CURRENT_BOARD = PROJ_BOARD[sel.value] || null;
+
       sel.addEventListener("change", () => {
+        CURRENT_BOARD = PROJ_BOARD[sel.value] || null;
         showCommand(`eaedk validate ${sel.value}`);
         renderProgress("progress", sel.value);
+        run();
       });
       showCommand(`eaedk validate ${sel.value}`);
       renderProgress("progress", sel.value);
+      run();
     }
 
     function rows(list) {
@@ -77,13 +92,23 @@
           <div class="card" style="padding:0"><table><thead>
           <tr><th></th><th>Check</th><th>Result</th></tr></thead>
           <tbody>${rows(advisory)}</tbody></table></div>` : ""}
-        <div class="note">${escapeHtml(humanizeKeys(r.next_step))}</div>`;
-      renderProgress("progress", project);   // validation may have completed items
+        <div class="note">${escapeHtml(humanizeKeys(r.next_step))}</div>
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+          <a href="export.html?project=${encodeURIComponent(project)}"><button class="ghost">⬇ Export build files</button></a>
+          <a href="studio.html?project=${encodeURIComponent(project)}"><button class="ghost">💻 Code Studio</button></a>
+        </div>`;
+      renderProgress("progress", project);
     }
 
     document.addEventListener("DOMContentLoaded", () => {
       init();
       document.getElementById("run").addEventListener("click", run);
+      mountChat({ page_type: "validate",
+        placeholder: "Ask why a check failed, or what to fix next…",
+        getContext: () => ({
+          board_name: CURRENT_BOARD,
+          project_name: document.getElementById("project").value || null
+        }) });
     });
   </script>
 </body>

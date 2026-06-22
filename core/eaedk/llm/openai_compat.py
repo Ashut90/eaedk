@@ -14,6 +14,8 @@ import json
 import os
 import urllib.request
 
+from .think import strip_think
+
 DEFAULT_TIMEOUT = 120.0
 
 
@@ -47,4 +49,4 @@ class OpenAICompatProvider:
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
         choices = data.get("choices") or [{}]
-        return (choices[0].get("message", {}).get("content", "") or "").strip()
+        return strip_think(choices[0].get("message", {}).get("content", "") or "")

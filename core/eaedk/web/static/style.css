@@ -134,6 +134,12 @@ pre.code {
   padding: 12px 14px; overflow: auto; white-space: pre; font-size: 13px; color: var(--green);
   box-shadow: inset 0 0 30px rgba(0,255,156,.05);
 }
+.msg-text {
+  white-space: pre-wrap; word-break: break-word; overflow-wrap: break-word;
+  font-family: var(--mono); font-size: 13px; color: var(--green); line-height: 1.65;
+  padding: 6px 0;
+}
+.msg-text strong { color: var(--text); font-weight: 700; }
 .kv { color: var(--muted); }
 .kv b { color: var(--text); font-weight: 600; }
 

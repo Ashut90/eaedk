@@ -19,6 +19,7 @@
     <div class="card">
       <label for="project">Project</label>
       <select id="project"><option value="">Loading projects…</option></select>
+      <span id="board-label" class="kv" style="margin-left:10px;font-size:13px"></span>
     </div>
 
     <div id="checklist"></div>
@@ -27,14 +28,19 @@
     <div class="card">
       <h2 style="margin-top:0">Your code</h2>
       <textarea id="editor" class="mono" spellcheck="false"></textarea>
-      <button id="review">Review my code</button>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <button id="review">Review my code</button>
+        <a id="back-validate" href="validate.html" style="display:none">
+          <button class="ghost">← Back to Validate</button></a>
+      </div>
     </div>
 
     <div id="result"></div>
   </main>
 
   <script>
-    let CURRENT_BOARD = null, LAST_REVIEW = null;   // for the chat context
+    let CURRENT_BOARD = null, LAST_REVIEW = null;
+
     async function init() {
       const ps = await api("/api/projects");
       const sel = document.getElementById("project");
@@ -45,6 +51,8 @@
         return;
       }
       sel.innerHTML = ps.projects.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+      const urlProject = new URLSearchParams(location.search).get("project");
+      if (urlProject && ps.projects.some(p => p.name === urlProject)) sel.value = urlProject;
       sel.addEventListener("change", loadStudio);
       loadStudio();
     }
@@ -56,6 +64,10 @@
       const d = await api("/api/studio/" + encodeURIComponent(project));
       if (d.error) { showError(document.getElementById("checklist"), d); return; }
       CURRENT_BOARD = d.board || null;
+      document.getElementById("board-label").textContent = CURRENT_BOARD ? `Board: ${CURRENT_BOARD}` : "";
+      const backLink = document.getElementById("back-validate");
+      backLink.href = `validate.html?project=${encodeURIComponent(project)}`;
+      backLink.style.display = "";
       document.getElementById("editor").value = d.template || "";
       const cl = d.checklist.length
         ? `<div class="card"><h2 style="margin-top:0">Before you write — think about these</h2>` +
@@ -97,15 +109,24 @@
         : "";
       let complete = "";
       if (r.can_complete && r.can_complete.length) {
+        const btns = r.can_complete.map(i =>
+          `<button class="ghost complete-btn" data-key="${escapeHtml(i.item_key)}"
+            data-title="${escapeHtml(i.title)}" style="margin:4px">✓ ${escapeHtml(i.title)}</button>`
+        ).join("");
         complete = `<div class="card" style="border-color:var(--green)">
           <b>✅ No real problems — ready to mark progress.</b>
-          <p class="kv">Confirm a checklist item you've finished (this records it as done by you):</p>` +
-          r.can_complete.map(i => `<button class="ghost" style="margin:4px"
-            onclick="markComplete('${escapeHtml(i.item_key)}','${escapeHtml(i.title)}')">✓ ${escapeHtml(i.title)}</button>`).join("") +
-          `<div id="markmsg"></div></div>`;
+          <p class="kv">Confirm a checklist item you've finished:</p>
+          ${btns}<div id="markmsg"></div></div>`;
       }
       el.innerHTML = `<h2>Confirmed by the engine — fix these</h2>${confirmed}${advisory}${complete}
-        ${r.ai_note ? `<div class="note">${escapeHtml(r.ai_note)}</div>` : ""}`;
+        ${r.ai_note ? `<div class="note">${escapeHtml(r.ai_note)}</div>` : ""}
+        <div style="margin-top:14px">
+          <a href="validate.html?project=${encodeURIComponent(project)}">
+            <button class="ghost">← Re-run Validate</button></a>
+        </div>`;
+      el.querySelectorAll(".complete-btn").forEach(btn => {
+        btn.addEventListener("click", () => markComplete(btn.dataset.key, btn.dataset.title));
+      });
     }
 
     async function markComplete(itemKey, title) {
@@ -115,7 +136,7 @@
         headers: {"Content-Type":"application/json"}, body: JSON.stringify({ project, item_key: itemKey }) });
       const msg = document.getElementById("markmsg");
       if (r.error) { showError(msg, r); return; }
-      msg.innerHTML = `<div class="note" style="margin-top:10px">Marked “${escapeHtml(r.marked)}”
+      msg.innerHTML = `<div class="note" style="margin-top:10px">Marked "${escapeHtml(r.marked)}"
         complete. Progress: ${r.complete}/${r.total} (${r.percent}%).</div>`;
     }
 

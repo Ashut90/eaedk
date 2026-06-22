@@ -5,6 +5,7 @@
   <title>EAEDK — New Project</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
 </head>
 <body>
   <nav class="top"></nav>
@@ -72,14 +73,19 @@
           &nbsp;<b>${escapeHtml(r.label)}</b></div>
           <div class="kv" style="margin-top:6px">${escapeHtml(r.explain)}</div></div>
         ${risks}
-        <div class="note">Next: go to <a href="validate.html">Validate</a> to see the full
-          checklist, or <a href="export.html">Export</a> to generate your build files.</div>`;
+        <div class="note">Next: go to <a href="validate.html?project=${encodeURIComponent(name)}">Validate</a> to see the full
+          checklist, or <a href="export.html?project=${encodeURIComponent(name)}">Export</a> to generate your build files.</div>`;
       showCommand(`eaedk project init   # created '${name}'`);
     }
 
     document.addEventListener("DOMContentLoaded", () => {
       init();
       document.getElementById("create").addEventListener("click", create);
+      mountChat({ page_type: "boards", requireBoard: false,
+        placeholder: "Ask which board fits your project, or what goal type to pick…",
+        getContext: () => ({
+          board_name: document.getElementById("board").value || null
+        }) });
     });
   </script>
 </body>

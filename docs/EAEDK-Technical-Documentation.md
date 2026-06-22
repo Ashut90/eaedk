@@ -125,6 +125,8 @@ EAEDK has two front doors, and they call exactly the same engine functions under
 
 **Why two interfaces, and why they must share one engine.** The CLI suits engineers and scripting; the Web UI suits beginners who are more comfortable clicking than typing. The hard rule is that the Web UI must never have its own copy of any logic. Look at the Web server (`web/server.py`): its route handlers are thin wrappers that call the same functions the CLI calls — `assess_project`, `export_project`, `analyze_log`, `intelligence_report`, `answer_query`. This is enforced by convention and by code review (Chapter 12): duplicating engine logic into the Web layer is explicitly forbidden. The reason is correctness. If validation logic lived in two places, the two interfaces would eventually disagree, and a beginner on the Web UI would get a different answer than an engineer on the CLI for the same project. One engine, two skins.
 
+![EAEDK complete software architecture and data flow](print-architecture.png)
+
 ## 2.2 The trust boundary
 
 The single most important diagram in EAEDK is the line between what is trusted and what is filtered.
@@ -166,6 +168,8 @@ The single most important diagram in EAEDK is the line between what is trusted a
             │   not in the cited allowlist → safe, cited text out   │
             └───────────────────────────────────────────────────────┘
 ```
+
+![EAEDK trust boundary — deterministic core vs. post-filtered LLM layer](architecture-trust.png)
 
 **What "inside the boundary" means:** these components only ever state values that came from the database, from a citation, or from an engineer's typed input. A validation rule cannot make up a flash size — if the size is missing, the rule returns `UNKNOWN`, not a guess. The orchestrator assembles answers only from these sources.
 
@@ -262,6 +266,8 @@ This engine (`engines/ingest/`) reads a datasheet PDF and turns it into cited, r
 - **MEDIUM** when the model elaborates on general behavior — post-filtered, with a "verify before you write code" caveat.
 
 The two top-level modes are simply "we have a datasheet for this board" versus "we do not," and the engine never blurs them, because telling a beginner "I couldn't find it" when no datasheet was ever loaded is a different and more honest message than implying the datasheet lacked it.
+
+![The datasheet intelligence pipeline — extract → stage → confirm → trust](print-datasheet.png)
 
 ---
 

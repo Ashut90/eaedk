@@ -77,6 +77,13 @@ function escapeHtml(s) {
     .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
+/* Minimal markdown → safe HTML. Escapes first, then applies formatting. */
+function renderMd(text) {
+  let s = escapeHtml(text);
+  s = s.replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');   // **bold**
+  return s;
+}
+
 /* bytes -> human ("64 KB", "2 MB", "unknown"). */
 function fmtBytes(n) {
   if (n == null) return "unknown";
@@ -163,4 +170,8 @@ async function renderProgress(containerId, project) {
       — ${escapeHtml(s.next.why_it_matters)}</div>` : ""}</div>`;
 }
 
-document.addEventListener("DOMContentLoaded", () => { renderNav(); showCommand(null); });
+document.addEventListener("DOMContentLoaded", () => {
+  renderNav();
+  const here = (location.pathname.split("/").pop() || "boards.html");
+  if (here !== "mentor.html") showCommand(null);
+});
