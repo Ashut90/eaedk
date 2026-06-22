@@ -1,224 +1,37 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EAEDK — Complete Guide</title>
 <style>
-@page {
-  size: A4; margin: 24mm 20mm 22mm 20mm;
-  @top-right  { content: "EAEDK — The Complete Technical Guide";
-                font: 8pt "Helvetica", sans-serif; color: #8aa0b4; }
-  @top-left   { content: string(chapter); font: 8pt "Helvetica", sans-serif; color: #8aa0b4; }
-  @bottom-center { content: counter(page) " / " counter(pages);
-                   font: 8.5pt "Helvetica", sans-serif; color: #8aa0b4; }
-  @bottom-left { content: ""; }
-}
-@page cover { margin: 0; @top-right{content:""} @top-left{content:""} @bottom-center{content:""} }
-@page back  { margin: 0; @top-right{content:""} @top-left{content:""} @bottom-center{content:""} }
-@page toc   { @top-left{content:""} }
-
-html { -weasy-hyphens: auto; }
-body { font-family: "Georgia","Times New Roman",serif; font-size: 11pt; line-height: 1.55;
-       color: #1b1b1b; }
-
-/* cover */
-.cover { page: cover; height: 297mm; background: #0d2137; color: #fff;
-         padding: 70mm 28mm 0; }
-.cover .brand { font: 700 56pt "Helvetica",sans-serif; letter-spacing: 2px; }
-.cover .full  { font: 15pt "Helvetica",sans-serif; color: #9ec5e8; margin-top: 4mm; letter-spacing:1px; }
-.cover .rule  { width: 70mm; border-top: 2px solid #4a90d9; margin: 12mm 0 8mm; }
-.cover .title { font: 700 26pt "Helvetica",sans-serif; color: #eaf2fb; }
-.cover .tag   { font: italic 13pt "Georgia",serif; color: #c7d6e5; margin-top: 8mm; max-width: 120mm; }
-.cover .meta  { position: absolute; bottom: 32mm; font: 10pt "Helvetica",sans-serif;
-                color: #9ec5e8; line-height: 1.9; }
-
-/* back cover */
-.backcover { page: back; height: 297mm; background: #0d2137; color: #fff;
-             display: flex; flex-direction: column; justify-content: center;
-             align-items: center; text-align: center; }
-.backcover .bbrand { font: 700 40pt "Helvetica",sans-serif; letter-spacing: 2px; }
-.backcover .bline  { font: 13pt "Georgia",serif; color: #c7d6e5; margin-top: 6mm; }
-.backcover .bmeta  { font: 9.5pt "Helvetica",sans-serif; color: #8aa6c4; margin-top: 26mm; line-height: 1.9; }
-
-/* contents */
-.toc { page: toc; page-break-before: always; }
-.toc-title { font: 700 22pt "Helvetica",sans-serif; color: #0d2137 !important;
-             background: transparent !important; margin: 0 0 8mm !important;
-             padding: 0 0 3mm !important; border-bottom: 3px solid #0d2137;
-             page-break-before: avoid !important; }
-.toc a { display: block; text-decoration: none; color: #1b1b1b; }
-.toc a .t { }
-.toc a::after { content: leader(". ") target-counter(attr(href), page);
-               font: 9.5pt "Helvetica",sans-serif; color: #4a6a86; }
-.toc a::after { color: #4a6a86; }
-.toc-part    { font: 700 12pt "Helvetica",sans-serif; color: #0d2137; margin: 6mm 0 2mm; }
-.toc-chapter { font: 10.5pt "Helvetica",sans-serif; color: #14507a; margin: 1.6mm 0 0 6mm; }
-.toc-section { font: 9.5pt "Helvetica",sans-serif; color: #44617a; margin: 0.6mm 0 0 14mm; }
-
-/* headings */
-h1 { string-set: chapter ""; font: 700 22pt "Helvetica",sans-serif; color: #102a44;
-     page-break-before: always; page-break-after: avoid;
-     background: #0d2137; color: #fff; padding: 10mm 8mm; margin: 0 -20mm 8mm; }
-h2 { string-set: chapter content(); font: 700 16pt "Helvetica",sans-serif; color: #102a44;
-     page-break-before: always; page-break-after: avoid;
-     border-bottom: 2px solid #0d2137; padding-bottom: 2.5mm; margin: 0 0 5mm; }
-h2:first-of-type { }
-h3 { font: 700 12.5pt "Helvetica",sans-serif; color: #14507a; margin: 7mm 0 2mm;
-     page-break-after: avoid; }
-p { margin: 0 0 3mm; text-align: justify; }
-strong { color: #0d2137; }
-ul,ol { margin: 0 0 3.5mm; padding-left: 7mm; }
-li { margin-bottom: 1.5mm; }
-blockquote { margin: 4mm 0; padding: 2.5mm 5mm; border-left: 4px solid #4a90d9;
-             background: #eef4fa; color: #1a3a52; font-style: italic; }
-blockquote p { margin: 0; }
-code { font-family: "DejaVu Sans Mono",monospace; font-size: 9pt; background: #eef1f4;
-       padding: 0.4mm 1.2mm; border-radius: 2px; color: #b1144b; }
-pre { background: #f6f8fa; border: 1px solid #d6dde4; border-radius: 4px; padding: 3mm 4mm;
-      page-break-inside: avoid; margin: 0 0 4mm; }
-pre code { background: none; color: #24292e; padding: 0; font-size: 8.4pt; line-height: 1.45;
-           white-space: pre-wrap; }
-table { border-collapse: collapse; width: 100%; margin: 0 0 5mm; font-size: 9pt;
-        page-break-inside: avoid; }
-th,td { border: 1px solid #c2ccd6; padding: 1.5mm 2.2mm; text-align: left; vertical-align: top; }
-th { background: #14507a; color: #fff; font-family: "Helvetica",sans-serif; }
-tr:nth-child(even) td { background: #f1f5f9; }
-hr { border: 0; border-top: 1px solid #cdd9e3; margin: 7mm 0; }
-
-/* figures: a diagram followed by an italic caption paragraph */
-img { display: block; margin: 4mm auto 1mm; max-width: 100%; max-height: 215mm;
-      border: 1px solid #dbe2e8; border-radius: 4px; padding: 3mm; background: #fff;
-      page-break-inside: avoid; }
-img + em, p > em:only-child { display: block; text-align: center; font-size: 9pt;
-      color: #5b7488; margin: 0 6mm 5mm; line-height: 1.4; }
-</style></head><body>
-<section class="cover">
-  <div class="brand">EAEDK</div>
-  <div class="full">Embedded AI Engineering Development Kit</div>
-  <div class="rule"></div>
-  <div class="title">The Complete Technical Guide</div>
-  <div class="tag">From a board, or a datasheet, to a validated project —
-       without an AI ever inventing a hardware fact.</div>
-  <div class="meta">
-    June 2026 Edition &nbsp;•&nbsp; github.com/Ashut90/eaedk<br>
-    The LLM may explain. The engines hold the truth.
-  </div>
-</section>
-<section class="toc"><h1 class="toc-title">Contents</h1>
-<a class="toc-part" href="#part-i-foundation"><span class="t">Part I — Foundation</span></a>
-<a class="toc-chapter" href="#chapter-1-what-eaedk-is-and-is-not"><span class="t">Chapter 1 — What EAEDK Is (and Is Not)</span></a>
-<a class="toc-section" href="#the-problem-it-solves"><span class="t">The problem it solves</span></a>
-<a class="toc-section" href="#what-eaedk-is"><span class="t">What EAEDK is</span></a>
-<a class="toc-section" href="#what-eaedk-is-not"><span class="t">What EAEDK is not</span></a>
-<a class="toc-section" href="#key-design-principles"><span class="t">Key design principles</span></a>
-<a class="toc-section" href="#who-it-is-for"><span class="t">Who it is for</span></a>
-<a class="toc-chapter" href="#chapter-2-the-trust-philosophy"><span class="t">Chapter 2 — The Trust Philosophy</span></a>
-<a class="toc-section" href="#the-traditional-ai-model-trust-the-oracle"><span class="t">The traditional AI model: trust the oracle</span></a>
-<a class="toc-section" href="#the-eaedk-model-trust-the-engine"><span class="t">The EAEDK model: trust the engine</span></a>
-<a class="toc-section" href="#two-guardrails-input-and-output"><span class="t">Two guardrails: input and output</span></a>
-<a class="toc-section" href="#facts-assumptions-and-unknowns"><span class="t">Facts, assumptions, and unknowns</span></a>
-<a class="toc-section" href="#the-mentor-layer-teach-not-just-flag"><span class="t">The mentor layer: teach, not just flag</span></a>
-<a class="toc-chapter" href="#chapter-3-architecture-overview"><span class="t">Chapter 3 — Architecture Overview</span></a>
-<a class="toc-section" href="#system-architecture"><span class="t">System architecture</span></a>
-<a class="toc-section" href="#core-package-structure"><span class="t">Core package structure</span></a>
-<a class="toc-section" href="#the-trust-boundary"><span class="t">The trust boundary</span></a>
-<a class="toc-section" href="#the-bring-up-chain"><span class="t">The bring-up chain</span></a>
-<a class="toc-section" href="#database-architecture"><span class="t">Database architecture</span></a>
-<a class="toc-section" href="#technology-stack"><span class="t">Technology stack</span></a>
-<a class="toc-part" href="#part-ii-core-concepts"><span class="t">Part II — Core Concepts</span></a>
-<a class="toc-chapter" href="#chapter-4-the-truth-layer"><span class="t">Chapter 4 — The Truth Layer</span></a>
-<a class="toc-section" href="#the-unified-fact-store"><span class="t">The unified fact store</span></a>
-<a class="toc-section" href="#structured-provenance"><span class="t">Structured provenance</span></a>
-<a class="toc-section" href="#the-engineering-facts-view"><span class="t">The engineering facts view</span></a>
-<a class="toc-section" href="#canonical-write-through"><span class="t">Canonical write-through</span></a>
-<a class="toc-section" href="#confidence-classification"><span class="t">Confidence classification</span></a>
-<a class="toc-section" href="#consumption-patterns"><span class="t">Consumption patterns</span></a>
-<a class="toc-chapter" href="#chapter-5-the-validation-engine"><span class="t">Chapter 5 — The Validation Engine</span></a>
-<a class="toc-section" href="#validation-contract"><span class="t">Validation contract</span></a>
-<a class="toc-section" href="#memory-validation-rules"><span class="t">Memory validation rules</span></a>
-<a class="toc-section" href="#layout-validation-rules"><span class="t">Layout validation rules</span></a>
-<a class="toc-section" href="#address-validation-rules"><span class="t">Address validation rules</span></a>
-<a class="toc-section" href="#timing-and-peripheral-rules"><span class="t">Timing and peripheral rules</span></a>
-<a class="toc-section" href="#toolchain-validation-rules"><span class="t">Toolchain validation rules</span></a>
-<a class="toc-section" href="#rule-catalog-reference"><span class="t">Rule catalog reference</span></a>
-<a class="toc-section" href="#feasibility-calculation"><span class="t">Feasibility calculation</span></a>
-<a class="toc-chapter" href="#chapter-6-the-risk-engine"><span class="t">Chapter 6 — The Risk Engine</span></a>
-<a class="toc-section" href="#risk-vs-validation"><span class="t">Risk vs validation</span></a>
-<a class="toc-section" href="#the-risk-rule-dsl"><span class="t">The risk rule DSL</span></a>
-<a class="toc-section" href="#built-in-risk-rules"><span class="t">Built-in risk rules</span></a>
-<a class="toc-section" href="#risk-lifecycle"><span class="t">Risk lifecycle</span></a>
-<a class="toc-chapter" href="#chapter-7-board-knowledge-and-onboarding"><span class="t">Chapter 7 — Board Knowledge and Onboarding</span></a>
-<a class="toc-section" href="#the-board-knowledge-engine"><span class="t">The board knowledge engine</span></a>
-<a class="toc-section" href="#interactive-board-onboarding"><span class="t">Interactive board onboarding</span></a>
-<a class="toc-section" href="#seed-board-profiles"><span class="t">Seed board profiles</span></a>
-<a class="toc-section" href="#no-raw-sql-guarantee"><span class="t">No raw SQL guarantee</span></a>
-<a class="toc-chapter" href="#chapter-8-templates-and-checklists"><span class="t">Chapter 8 — Templates and Checklists</span></a>
-<a class="toc-section" href="#template-schema"><span class="t">Template schema</span></a>
-<a class="toc-section" href="#the-goal-types"><span class="t">The goal types</span></a>
-<a class="toc-section" href="#checklist-state-tracking"><span class="t">Checklist state tracking</span></a>
-<a class="toc-section" href="#template-versioning"><span class="t">Template versioning</span></a>
-<a class="toc-part" href="#part-iii-practical-workflow"><span class="t">Part III — Practical Workflow</span></a>
-<a class="toc-chapter" href="#chapter-9-the-complete-bring-up-chain"><span class="t">Chapter 9 — The Complete Bring-Up Chain</span></a>
-<a class="toc-section" href="#stage-1-board-onboarding"><span class="t">Stage 1: board onboarding</span></a>
-<a class="toc-section" href="#stage-2-project-initialization"><span class="t">Stage 2: project initialization</span></a>
-<a class="toc-section" href="#stage-3-validation-and-risk-assessment"><span class="t">Stage 3: validation and risk assessment</span></a>
-<a class="toc-section" href="#stage-4-log-analysis"><span class="t">Stage 4: log analysis</span></a>
-<a class="toc-section" href="#stage-5-risk-resolution"><span class="t">Stage 5: risk resolution</span></a>
-<a class="toc-section" href="#stage-6-project-export"><span class="t">Stage 6: project export</span></a>
-<a class="toc-chapter" href="#chapter-10-toolchain-validation"><span class="t">Chapter 10 — Toolchain Validation</span></a>
-<a class="toc-section" href="#toolchain-detection"><span class="t">Toolchain detection</span></a>
-<a class="toc-section" href="#toolchain-validation"><span class="t">Toolchain validation</span></a>
-<a class="toc-section" href="#architecture-default-toolchains"><span class="t">Architecture-default toolchains</span></a>
-<a class="toc-section" href="#the-toolchain-as-project-input"><span class="t">The toolchain as project input</span></a>
-<a class="toc-chapter" href="#chapter-11-log-analysis-and-crash-triage"><span class="t">Chapter 11 — Log Analysis and Crash Triage</span></a>
-<a class="toc-section" href="#log-format-detection"><span class="t">Log format detection</span></a>
-<a class="toc-section" href="#signature-matching"><span class="t">Signature matching</span></a>
-<a class="toc-section" href="#mcu-crash-signatures"><span class="t">MCU crash signatures</span></a>
-<a class="toc-section" href="#project-aware-triage"><span class="t">Project-aware triage</span></a>
-<a class="toc-chapter" href="#chapter-12-datasheet-intelligence"><span class="t">Chapter 12 — Datasheet Intelligence</span></a>
-<a class="toc-section" href="#the-ingestion-pipeline"><span class="t">The ingestion pipeline</span></a>
-<a class="toc-section" href="#the-intelligence-report"><span class="t">The intelligence report</span></a>
-<a class="toc-section" href="#the-query-engine"><span class="t">The query engine</span></a>
-<a class="toc-section" href="#human-in-the-loop-verification"><span class="t">Human-in-the-loop verification</span></a>
-<a class="toc-chapter" href="#chapter-13-project-export-and-code-generation"><span class="t">Chapter 13 — Project Export and Code Generation</span></a>
-<a class="toc-section" href="#export-pipeline"><span class="t">Export pipeline</span></a>
-<a class="toc-section" href="#teach-commented-starter-code"><span class="t">Teach-commented starter code</span></a>
-<a class="toc-section" href="#start_heremd"><span class="t">START_HERE.md</span></a>
-<a class="toc-section" href="#the-actor-critic-pass"><span class="t">The Actor-Critic pass</span></a>
-<a class="toc-part" href="#part-iv-advanced-topics"><span class="t">Part IV — Advanced Topics</span></a>
-<a class="toc-chapter" href="#chapter-14-the-mentor-layer"><span class="t">Chapter 14 — The Mentor Layer</span></a>
-<a class="toc-section" href="#design-philosophy"><span class="t">Design philosophy</span></a>
-<a class="toc-section" href="#capability-mapping"><span class="t">Capability mapping</span></a>
-<a class="toc-section" href="#think-before-code-generated-from-facts"><span class="t">Think-before-code, generated from facts</span></a>
-<a class="toc-section" href="#concept-explanations"><span class="t">Concept explanations</span></a>
-<a class="toc-chapter" href="#chapter-15-the-engineering-state-engine"><span class="t">Chapter 15 — The Engineering State Engine</span></a>
-<a class="toc-section" href="#progress-derived-from-evidence"><span class="t">Progress derived from evidence</span></a>
-<a class="toc-section" href="#attribution-and-honesty"><span class="t">Attribution and honesty</span></a>
-<a class="toc-chapter" href="#chapter-16-llm-integration-and-the-post-filter"><span class="t">Chapter 16 — LLM Integration and the Post-Filter</span></a>
-<a class="toc-section" href="#the-llm-gateway-architecture"><span class="t">The LLM gateway architecture</span></a>
-<a class="toc-section" href="#the-post-filter-the-output-guardrail"><span class="t">The post-filter: the output guardrail</span></a>
-<a class="toc-section" href="#constrained-prompting"><span class="t">Constrained prompting</span></a>
-<a class="toc-section" href="#why-ollama-and-offline-only"><span class="t">Why Ollama and offline-only</span></a>
-<a class="toc-chapter" href="#chapter-17-testing-and-quality-assurance"><span class="t">Chapter 17 — Testing and Quality Assurance</span></a>
-<a class="toc-section" href="#testing-philosophy"><span class="t">Testing philosophy</span></a>
-<a class="toc-section" href="#coverage"><span class="t">Coverage</span></a>
-<a class="toc-section" href="#golden-evaluation-cases"><span class="t">Golden evaluation cases</span></a>
-<a class="toc-section" href="#multi-agent-stress-testing-and-continuous-metrics"><span class="t">Multi-agent stress testing and continuous metrics</span></a>
-<a class="toc-part" href="#part-v-reference-and-practice"><span class="t">Part V — Reference and Practice</span></a>
-<a class="toc-chapter" href="#chapter-18-real-world-case-studies"><span class="t">Chapter 18 — Real-World Case Studies</span></a>
-<a class="toc-section" href="#case-study-1-stm32f411re-bare-metal-bring-up"><span class="t">Case study 1: STM32F411RE bare-metal bring-up</span></a>
-<a class="toc-section" href="#case-study-2-u-boot-ddr-timing-why-unknown-blocks"><span class="t">Case study 2: U-Boot DDR timing — why UNKNOWN blocks</span></a>
-<a class="toc-section" href="#case-study-3-ota-partition-design-review"><span class="t">Case study 3: OTA partition design review</span></a>
-<a class="toc-section" href="#case-study-4-project-aware-crash-triage"><span class="t">Case study 4: project-aware crash triage</span></a>
-<a class="toc-chapter" href="#chapter-19-complete-command-reference"><span class="t">Chapter 19 — Complete Command Reference</span></a>
-<a class="toc-chapter" href="#chapter-20-design-decisions-and-trade-offs"><span class="t">Chapter 20 — Design Decisions and Trade-offs</span></a>
-<a class="toc-chapter" href="#chapter-21-limitations-roadmap-and-the-future"><span class="t">Chapter 21 — Limitations, Roadmap, and the Future</span></a>
-<a class="toc-section" href="#known-limitations"><span class="t">Known limitations</span></a>
-<a class="toc-section" href="#roadmap"><span class="t">Roadmap</span></a>
-<a class="toc-section" href="#regulatory-and-the-future"><span class="t">Regulatory and the future</span></a>
-<a class="toc-chapter" href="#chapter-22-installation-and-quick-start"><span class="t">Chapter 22 — Installation and Quick Start</span></a>
-<a class="toc-section" href="#system-requirements"><span class="t">System requirements</span></a>
-<a class="toc-section" href="#installation"><span class="t">Installation</span></a>
-<a class="toc-section" href="#your-first-session-no-hardware"><span class="t">Your first session (no hardware)</span></a>
-<a class="toc-section" href="#verify-and-demo"><span class="t">Verify and demo</span></a>
-<a class="toc-section" href="#troubleshooting"><span class="t">Troubleshooting</span></a>
-</section><main><h1 id="part-i-foundation">Part I — Foundation</h1>
+@page { size: A4; margin: 22mm 21mm 24mm 21mm; }
+* { box-sizing: border-box; }
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+body { font-family: Georgia, "Times New Roman", serif; font-size: 12pt;
+       line-height: 1.8; color: #111; margin: 0; }
+h1 { font-size: 22pt; color: #0a2540; margin: 28px 0 8px; border-bottom: 2px solid #0a2540; padding-bottom: 6px; }
+h2 { font-size: 16pt; color: #0a2540; margin: 24px 0 8px; }
+h3 { font-size: 13pt; color: #1a3a6a; margin: 18px 0 6px; }
+h4 { font-size: 12pt; font-style: italic; margin: 14px 0 4px; }
+p  { margin: 8px 0 10px; }
+pre, code { font-family: "Courier New", Consolas, monospace; font-size: 10pt; }
+pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px;
+      padding: 10px 12px; white-space: pre-wrap; word-break: break-word; margin: 10px 0; }
+code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
+blockquote { border-left: 4px solid #0a2540; padding-left: 14px; margin-left: 0;
+             color: #444; font-style: italic; }
+table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 11pt; }
+th { background: #0a2540; color: #fff; padding: 8px 10px; text-align: left; }
+td { padding: 7px 10px; border-bottom: 1px solid #ddd; vertical-align: top; }
+tr:nth-child(even) td { background: #f9f9f9; }
+img { max-width: 100%; height: auto; display: block; margin: 16px auto;
+      border: 1px solid #ddd; border-radius: 4px; page-break-inside: avoid; }
+a { color: #1565c0; }
+hr { border: none; border-top: 1px solid #ccc; margin: 20px 0; }
+</style>
+</head>
+<body>
+<h1 id="part-i-foundation">Part I — Foundation</h1>
 <h2 id="chapter-1-what-eaedk-is-and-is-not">Chapter 1 — What EAEDK Is (and Is Not)</h2>
 <p>EAEDK stands for <strong>Embedded AI Engineering Development Kit</strong>. It is a local-first, offline-only platform that helps a firmware engineer go from "I have a board, or a datasheet" to "a validated, buildable project" — without an AI ever inventing a hardware fact that destroys the board.</p>
 <blockquote>
@@ -746,11 +559,6 @@ eaedk project status blink                # progress derived from evidence
 <p>If <code>db init</code> says the database exists, delete <code>~/.eaedk/eaedk.db</code> and re-run. If <code>db seed</code> reports duplicates, use <code>--force</code>. If <code>board show</code> says not found, check the exact name with <code>board list</code> (names are case-sensitive). If <code>validate</code> reports UNKNOWN for an input you believe is set, check its confidence — LOW may not satisfy a rule. If <code>export</code> is blocked, resolve the reported FAIL or engaged-UNKNOWN first; the feasibility gate is structural and is a safety feature, not a limitation.</p>
 <blockquote>
 <p>Reason first. Build second. Verify always. The LLM may explain — the engines hold the truth.</p>
-</blockquote></main>
-<section class="backcover">
-  <div class="bbrand">EAEDK</div>
-  <div class="bline">The LLM may explain. The engines hold the truth.</div>
-  <div class="bmeta">github.com/Ashut90/eaedk &nbsp;•&nbsp; June 2026 Edition<br>
-       Reason first. Build second. Verify always.</div>
-</section>
-</body></html>
+</blockquote>
+</body>
+</html>
