@@ -114,6 +114,23 @@ _CHAT_SYSTEM = (
     "(address, register, clock, memory size) not in the CONTEXT.")
 
 
+# Universal system prompt for all non-board-specific embedded/firmware questions.
+# Used whenever board_anchored=False — no board context is injected so the model answers freely.
+_GENERAL_SYSTEM = (
+    "You are a senior firmware/embedded systems engineer with 15+ years of experience shipping "
+    "production embedded systems. Answer ANY question about the embedded and firmware field: "
+    "microcontrollers, Linux-on-hardware, Yocto/Buildroot, RTOS, bare-metal, drivers, bootloaders, "
+    "debugging (JTAG/SWD/oscilloscope/logic analyser), toolchains (GCC/Clang/IAR/Keil), "
+    "communication protocols (UART/SPI/I2C/CAN/Ethernet), career paths, board selection, "
+    "Nvidia Jetson, Raspberry Pi, STM32, ESP32, nRF, RP2040, or any other platform.\n"
+    "Rules:\n"
+    "- Answer the ACTUAL question asked. Do not redirect, decline, or say it is out of scope.\n"
+    "- Give COMPLETE, DETAILED answers. Do not cut short.\n"
+    "- Be specific: name tools, commands, files, registers, concepts by their real names.\n"
+    "- Do not anchor to any single board unless the user named one.\n"
+    "- End with one concrete next step or follow-up question.")
+
+
 def _detect_concept(conn: sqlite3.Connection, text: str):
     """Return the concept row whose name appears in the user's text, else None. Punctuation is
     normalised to spaces so 'what is a hardfault?' still matches 'hardfault'."""
@@ -377,7 +394,8 @@ _FOUNDATION_PHRASES = (
 # Direction intents — "where do I start" on THIS board: grounded by the board's learning path.
 _DIRECTION_PHRASES = (
     "where do i start", "where to start", "where should i start", "where do i begin",
-    "how do i start", "how should i start", "what should i build", "what do i build",
+    "how do i start", "how should i start", "how to start", "how to begin",
+    "what should i build", "what do i build",
     "what should i make", "what to build", "get started", "getting started", "first project",
     "start with", "begin with", "what should i learn first",
 )
@@ -407,7 +425,11 @@ _SUBJECT_STOP = {"i", "im", "ive", "id", "ill",
     # were an unsupported chip.
     "c", "c++", "cpp", "python", "java", "javascript", "typescript", "rust", "go", "golang",
     "c#", "ruby", "php", "scala", "kotlin", "swift", "sql", "bash", "node", "react",
-    "qa", "devops", "sre", "backend", "frontend", "fullstack", "web", "software", "saas", "cloud"}
+    "qa", "devops", "sre", "backend", "frontend", "fullstack", "web", "software", "saas", "cloud",
+    # Field / discipline names — never out-of-scope hardware subjects.
+    "embedded", "firmware", "hardware", "electronics", "programming", "engineering",
+    # The tool itself.
+    "eaedk"}
 # Question/clause starters that are NOT proper nouns even when capitalised at a sentence boundary.
 # A capital alone is not a "this is a hardware subject" signal — these must never trigger a decline.
 _QUESTION_STARTERS = {
@@ -519,56 +541,17 @@ def _subject_grounded(conn: sqlite3.Connection, subject: str, board_name: str) -
 
 def decide_purpose(conn: sqlite3.Connection, board_name: str, user_text: str,
                    page_context: dict, messages: list[dict] | None = None) -> PurposeDecision:
-    """First-step gate: choose the turn's PURPOSE before any answer is generated (docs/29)."""
+    """First-step gate: choose the turn's PURPOSE before any answer is generated."""
     msg = user_text or ""
     low = " " + msg.lower() + " "
     code = page_context.get("current_code") or ""
     page = page_context.get("page_type") or ""
 
-    # Validate/Export context: the Validation Engine has a deterministic verdict to point at (SPONSOR).
     if page in ("validate", "export"):
         return PurposeDecision("ANSWER_NOW", "validation context")
 
-    # Does the question resolve to EAEDK's CURATED knowledge? The selected board is context, never
-    # grounding by itself — only another board the user actually NAMES counts.
-    anchored = (reasoning.detect_topic(msg) is not None      # a known engineering decision
-                or _detect_concept(conn, msg) is not None    # a known concept
-                or _detect_domain(msg) is not None)          # a known project domain
-    direction = any(p in low for p in _DIRECTION_PHRASES)    # "where do I start" on this board
-    progress = any(k in low for k in _PROGRESS_Q)
-    grounded = (anchored or direction or progress
-                or bool(semantic_cost.parse_intent(msg))     # a named, costed intent (gRPC, TLS, …)
-                or bool(semantic_cost.detect_uncosted(msg))  # a recognised intent without cost data (CoAP)
-                or len(code) > 50                            # a code-review / studio turn
-                or _mentions_vocab(conn, msg)                # curated peripheral/concept vocabulary
-                or len(_mentioned_boards(conn, messages or [], board_name)) > 1)
-
-    # (1) A fault report with no evidence yet — get the logs/error/code before answering.
-    if any(t in low for t in _PEER_TRIGGERS) and not _has_evidence(low, code):
-        return PurposeDecision("ASK_CLARIFICATION", "fault report without evidence")
-
-    # (2) A field-entry / career question (not anchored to a specific concept) — give a learning
-    #     path, not a board-bound technical answer.
-    if _seeks_foundation(msg) and not anchored:
-        return PurposeDecision("REDIRECT_TO_FOUNDATION", "learner seeking a starting point")
-
-    # (3) An out-of-scope NAMED SUBJECT wins over weak grounding. A direction phrase ("where to
-    #     start") grounds the ACTION, not the SUBJECT — so "where to start in NVIDIA Jetson" must
-    #     still be declined. Skip when the question is anchored to a concept/topic/domain we teach
-    #     (e.g. "Zephyr or FreeRTOS" anchors the RTOS topic) or when the subject is a board / vocab
-    #     term EAEDK actually knows.
-    if not anchored:
-        subject = _external_subject(msg)
-        if subject and not _subject_grounded(conn, subject, board_name):
-            return PurposeDecision("DECLINE_OUT_OF_SCOPE",
-                                   "named subject outside grounded knowledge", subject)
-
-    # (4) Nothing resolves to grounded knowledge — and no named subject to decline.
-    if not grounded:
-        return PurposeDecision("ASK_CLARIFICATION", "intent not resolvable")
-
-    # (5) Grounded AND intent understood — only now may the mentor answer.
-    return PurposeDecision("ANSWER_NOW", "grounded; intent clear")
+    # Answer everything — the LLM handles the full embedded/firmware field.
+    return PurposeDecision("ANSWER_NOW", "answer everything")
 
 
 def render_purpose(conn: sqlite3.Connection, decision: PurposeDecision,
@@ -948,22 +931,22 @@ FIRST, read what they actually asked, and answer THAT:
 - If the question is CONCRETE (e.g. how to lay out a project or a folder structure, a specific how-to,
   a direct factual comparison, "what is X"), answer it directly and concretely, grounded in the facts
   below. Do NOT force it into a trade-off lecture and do NOT recite a framework that doesn't answer the
-  question.
+  question. Give a COMPLETE answer — cover the what, the why, the how, and the gotchas. Do not stop early.
 - If it is an OPEN design / "should I" / feasibility question, do NOT open with a recommendation or
   implementation (no "you should use X", no code/registers/SDKs first). Open with the key DECIDING
-  QUESTION or the core trade-off, lay the options out neutrally, and give a brief recommendation only
-  at the end, tied to their goal. Teach the thinking with this shape:
+  QUESTION or the core trade-off, lay the options out neutrally, and give a detailed, actionable
+  recommendation at the end, tied to their goal. Teach the thinking with this shape:
 1. What is the real problem being solved?
 2. Why does it exist on real hardware?
 3. What approaches exist?
 4. What are the trade-offs of each?
 5. How would an engineer decide — the questions to ask.
-6. Only then, briefly, the recommended next step.
+6. Only then, the recommended next step — explain it with enough detail to act on.
 Ground every claim in the board facts below; never invent a pin, clock, register or address that
 isn't given. The board's facts ENRICH the reasoning; the same thinking must hold on STM32, RP2040,
 ESP32, AVR, or a Linux SBC.
 
-Board (facts to enrich your reasoning, never to lead with): {board_name} | {arch}
+Board (facts to enrich your reasoning, never to lead with — if the user did not name this board, do NOT open with it or anchor the answer to it): {board_name} | {arch}
 Peripherals: {peripherals} | Flash: {flash} | RAM: {ram}
 Project: {project} | Stage: {step}
 {reasoning}
@@ -1113,35 +1096,47 @@ not a discussion about it.
 Rules:
 - START with the answer. No "Let's break it down", no restating the question, no trade-off essay \
 unless they explicitly asked you to compare options.
-- If they ask for a PROJECT / FOLDER / DIRECTORY structure: output an actual directory tree inside a \
-``` code block, and make it BOARD-INDEPENDENT — put every chip-specific file behind one \
-`platform/ports/<chip>/` layer (stm32/, rp2040/, esp32/, …) with a `shared/` contract, so the same \
-tree works on any MCU. Then at most 4 lines saying what the key folders are for.
+- If they ask for a PROJECT / FOLDER / DIRECTORY structure, match the domain:
+  * Yocto / Buildroot / OpenEmbedded / embedded-Linux image: use the Yocto-native layer structure —
+    build/conf/ (bblayers.conf, local.conf), meta-<name>/ layers with conf/layer.conf and
+    recipes-*/ subdirectories, sources/ for upstream layers, downloads/ for tarballs. DO NOT use
+    platform/ports/ — Yocto's layer system IS the portability mechanism.
+  * Bare-metal / RTOS / MCU firmware: make it BOARD-INDEPENDENT — put chip-specific files behind
+    `platform/ports/<chip>/` (stm32/, rp2040/, esp32/, …) with a `shared/` contract.
+  Either way: output the tree inside a ``` code block, then explain each top-level folder — what goes in it and why it exists.
 - If they ask HOW to do something: numbered steps, each concrete and checkable.
-- If they ask WHAT something IS: 2-4 plain sentences, then one tiny concrete example.
+- If they ask WHAT something IS: explain it fully — what it is, why it matters on real hardware, how it works, and a concrete example. Do not cut the explanation short.
 - Ground every claim in the board facts in the context. NEVER invent a specific pin, clock, register, \
 address, or part number.
 
-Output a COMPLETE tree of your OWN for what they asked. The example below only shows the FORMAT and \
-the platform/ports idea — do NOT refer to its folders as if they already exist, and do NOT answer \
-"what file to add"; give the whole structure.
+Output a COMPLETE tree of your OWN for what they asked. Examples show FORMAT only — generate the \
+right structure for the domain, do NOT copy example folder names.
 
-Example FORMAT — "folder structure for a bootloader, any board":
+Example — MCU firmware / bootloader:
 ```
 project/
-├── bootloader/          # boot program: validate image, pick slot, jump to app
-│   ├── src/  include/
-│   └── linker/bootloader.ld
-├── app/                 # the application, built separately
+├── bootloader/          # validate image, pick slot, jump to app
+│   ├── src/  include/  linker/bootloader.ld
+├── app/
 │   └── src/  include/  linker/app.ld
-├── platform/ports/      # the ONLY board-specific code — one folder per chip
+├── platform/ports/      # ONLY board-specific code
 │   ├── stm32/  rp2040/  esp32/
-├── shared/              # boot<->app contract: image header, version, crc32
-│   └── include/  src/
-├── tools/               # make_image / flash scripts
-└── tests/
+├── shared/              # boot<->app contract (header, version, crc32)
+└── tools/  tests/
 ```
-Everything board-specific lives under platform/ports/; bootloader, app and shared stay portable.
+Example — Yocto / embedded-Linux image:
+```
+my-project/
+├── build/
+│   └── conf/
+│       ├── bblayers.conf   # which layers are active
+│       └── local.conf      # MACHINE, DISTRO, IMAGE_INSTALL
+├── meta-my-layer/          # your custom layer
+│   ├── conf/layer.conf
+│   └── recipes-myapp/myapp/myapp_1.0.bb
+├── sources/                # upstream layers (poky, meta-openembedded, …)
+└── downloads/              # fetched tarballs
+```
 End with one short follow-up question."""
 
 
@@ -1377,9 +1372,18 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     from .mentor import family_of
     board, soc = repo.load_board(conn, board_name)
     if board is None:
-        return ("I can't find that board. Pick one from the Boards list, then ask me again. "
-                "Try this: open the Boards tab and click a board to see what it can do. "
-                "Question: which board do you have?")
+        # No board selected or not found — fall back to the first seeded board purely as context.
+        # General questions (roadmaps, concepts, field questions) don't need a specific board; the
+        # prompt already tells the model to answer board-agnostically when the user didn't name one.
+        all_boards = repo.list_boards(conn)
+        if not all_boards:
+            return ("No boards are seeded yet. "
+                    "Question: what are you trying to build?")
+        board_name = all_boards[0]["name"]
+        board, soc = repo.load_board(conn, board_name)
+        if board is None:
+            return ("Something went wrong loading board data. "
+                    "Question: what are you trying to build?")
     caps = mentor.capability_map(conn, board_name)
     path = mentor.learning_path_for(conn, {c["capability"] for c in caps})
     fam = family_of(soc["name"])
@@ -1400,7 +1404,6 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     role = detect_mentor_role(last_user, {"page_type": page_type,
                                           "wokwi_flag": (not has_hardware),
                                           "current_code": current_code})
-    career = _is_career(last_user)                     # P3: career -> roadmap, suppress 'Try this'
     active_boards = _mentioned_boards(conn, messages, board_name)  # P4A: every board in the convo
     explicit_target = _explicit_board_target(conn, last_user, board_name)
 
@@ -1408,6 +1411,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     purpose = decide_purpose(conn, board_name, last_user,
                              {"page_type": page_type, "current_code": current_code or extra_context},
                              messages)
+    # P3: career / field-entry → clean _CAREER_SYSTEM prompt, no board context.
+    # _seeks_foundation covers "where to start in firmware/embedded" even without the word "career".
+    career = _is_career(last_user) or (_seeks_foundation(last_user) and not (
+        explicit_target is not None or bool(project)
+        or any(p in last_user.lower() for p in ("this board", "my board", "selected board"))))
 
     # Central Navigator (docs/32): classify the user's CONFUSION TYPE and route to the right KIND of
     # guidance. The five modes are first-class; adding a topic/pattern/map is DATA, not router code.
@@ -1427,26 +1435,37 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     board_anchored = (explicit_target is not None or bool(project)
                       or any(p in last_user.lower() for p in ("this board", "my board", "selected board")))
 
-    if route.mode == navigator.LEARNING_MAP:                  # learning-direction → a route, not a dump
-        if route.learning_map is not None:
-            # Conversational mentor (docs/34) — ONE path so far: the LLM teaches from the verified
-            # packet, multi-turn; offline / unsafe falls back to the deterministic render below.
-            if route.learning_map.name == "communication_systems" and use_llm:
-                return _teach_learning_map(conn, route.learning_map, messages, board_name, gateway)
-            return navigator.render_learning_map(conn, route.learning_map, board_name,
-                                                 explicit_target, last_user, board_anchored)
-        # foundation / career: board-less → a board-INDEPENDENT firmware direction (no selected board)
-        if not board_anchored:
-            return navigator.firmware_direction_map()
-        return render_purpose(conn, purpose, board_name, path, active_boards)   # board-anchored career
-    if route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
+    # With a LIVE model the model ANSWERS the question. The canned deflection routes below (learning-map
+    # orientation, broad-direction clarifiers) were the OFFLINE fallback — they must NOT preempt a
+    # working model. They were swallowing real questions: a Yocto/Wi-Fi structure question got a generic
+    # orientation page instead of the model's actual answer (which is excellent — same model in a plain
+    # terminal gives the full critical-points + folder tree). Grounding + the deterministic verifiers
+    # still wrap whatever the model produces.
+    gw = gateway or Gateway(provider=_mentor_provider())
+    note = _llm_or_note(use_llm, gw)
+    live_model = note is None
+
+    if route.mode == navigator.LEARNING_MAP:                  # learning-direction
+        # Curated conversational teach for communication systems keeps its bespoke LLM path.
+        if (route.learning_map is not None and route.learning_map.name == "communication_systems"
+                and use_llm):
+            return _teach_learning_map(conn, route.learning_map, messages, board_name, gateway)
+        if not live_model:                                   # offline → deterministic orientation map
+            if route.learning_map is not None:
+                return navigator.render_learning_map(conn, route.learning_map, board_name,
+                                                     explicit_target, last_user, board_anchored)
+            if not board_anchored:                           # foundation / career, board-less
+                return navigator.firmware_direction_map()
+            return render_purpose(conn, purpose, board_name, path, active_boards)
+        # live model → fall through and let it answer the actual question, grounded.
+    elif route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
         return render_purpose(conn, purpose, board_name, path, active_boards)
 
     # P2 — a board-LESS broad-direction question must NOT be answered as if it were about the selected
-    # board: a domain question gets honest scoped uncertainty; a bare 'where do I start?' asks for the
-    # direction instead of dumping the selected board's blink roadmap.
+    # board. Offline only: a domain question gets honest scoped uncertainty, a bare 'where do I start?'
+    # asks for the direction. With a live model we let it answer instead of deflecting.
     if (route.mode == navigator.TEACH and not board_anchored and concept is None
-            and navigator.is_broad_direction(last_user)):
+            and navigator.is_broad_direction(last_user) and not live_model):
         return navigator.scoped_uncertainty(last_user) if domain else navigator.direction_clarify()
     # DECISION_MAP (a seeded reasoning.Topic) and TEACH continue into the decision/teaching pipeline.
 
@@ -1462,7 +1481,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
 
     used = _used_try_this(messages)                    # P3: never repeat an experiment this session
     skill = detect_skill_level(messages)               # self-declared level: '', 'experienced', 'beginner'
-    try_this = _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
+    try_this = None if career else _select_try_this(last_user, fam, used)  # domain-aware, family-gated, may be None
     if try_this and not has_hardware and "wokwi" not in try_this.lower():
         try_this += " (run it in the Wokwi simulator — no hardware needed)."
     question = _followup_question(caps, path)
@@ -1496,8 +1515,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # Deterministic backbone — a real answer even with no model, always ending in an action.
     # An engineering decision teaches the reasoning FRAMEWORK (v2.6.0); a named project type reasons
     # about this board's peripherals (v2.4.1); both ahead of the generic "start with blink" default.
-    if career:                                           # P3/P4A: roadmap across all active boards
+    if career:                                           # P3/P4A: roadmap — offline backbone only
         head = _career_roadmap(board_name, path, active_boards)
+        # Fall through to the main LLM call below — board_anchored=False so _GENERAL_SYSTEM
+        # + clean prompt are used, giving the same quality as a plain terminal.
     elif topic:
         head = reasoning.render(topic, board_name, soc["arch"], fam, ram_kb, flash_kb, flash_base, ram_base)
         # The reasoning framework already ends with its own next step and reflective questions, so the
@@ -1547,10 +1568,7 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         head = f"For {board_name}, tell me what you want to do and I'll point you at the first step."
     backbone = f"{head}{_tt_block(try_this)}\n\n{question}"
 
-    # Default the mentor to the capable mentor model (llama3.1:8b), not the generic 3B default — a
-    # weak model recites the framework and ignores the question. EAEDK_MENTOR_MODEL overrides.
-    gw = gateway or Gateway(provider=_mentor_provider())
-    note = _llm_or_note(use_llm, gw)
+    # gw / note / live_model were computed above (before the deflection routes). Reuse them.
     if note is not None:
         # Offline: no model to compose a tailored answer. Return the grounded deterministic reference
         # and SAY SO honestly — placed AFTER the head (so the feasibility banner in `lead` still comes
@@ -1611,15 +1629,19 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     if sem_note:                                         # P2B: the cost data is already shown to the user
         sem_line = ("COST DATA (seeded estimates, already stated to the user above — reason WITHIN it, "
                     "do not contradict it or invent different numbers):\n" + sem_note + "\n")
-    prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n{boards_line}{sem_line}{feas_line}"
-              f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
-              f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
-              + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
-              + (f"When you suggest an experiment, use this 'Try this': {try_this}\n" if try_this
-                 else "Do NOT end with a 'Try this:' experiment — this is a career/learning question "
-                      "(or its experiment was already given). End with a short learning roadmap and a "
-                      "question instead.\n")
-              + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + a question):")
+    if not board_anchored:
+        # No board named — clean prompt, no board context that would anchor the answer.
+        prompt = (f"{sem_line}{feas_line}"
+                  f"CONVERSATION SO FAR:\n{history}\n\nAnswer the question above fully:")
+    else:
+        prompt = (f"CONTEXT\nBoard: {board_name} ({soc['arch']})\n{hw}\n"
+                  f"{boards_line}{sem_line}{feas_line}"
+                  f"This board HAS these peripherals: {have}\n{geo_line}{step_line}{prog_line}{dom_block}{extra_line}"
+                  f"Capabilities (reason from these, not generic):\n{cap_lines}\nLearning path:\n{path_lines}\n"
+                  + (f"Concept anchor (true; build on this): {concept['anchor']}\n" if concept else "")
+                  + (f"When you suggest an experiment, use this 'Try this': {try_this}\n" if try_this
+                     else "Do NOT end with a 'Try this:' experiment.\n")
+                  + f"\nCONVERSATION SO FAR:\n{history}\n\nReply now (answer + a question):")
     # The model receives a prompt that already IS the detected role (board context before examples).
     step = path[0]["title"] if path else None
     # System skill is chosen by the detected ANSWER SHAPE: focused deliverable skills for the
@@ -1637,7 +1659,11 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         system = _CONCRETE_SYSTEM
     elif shape == answer_contract.TEST_PLAN:
         system = _TEST_PLAN_SYSTEM
-    else:                                            # the teaching template for open / concept questions
+    elif not board_anchored:
+        # No board named — use the universal system prompt so the answer isn't anchored to the
+        # fallback board. The model answers the full field, same as it would in a plain terminal.
+        system = _GENERAL_SYSTEM
+    else:                                            # board-specific question → full teaching template
         system = _ROLE_BUILDERS.get(role, build_architect_prompt)(
             _role_ctx(board_name, soc, board, cap_set, project, step, current_code, fam, reasoning_block))
     # Skill-level calibration (tone/depth only — never strips safety content; the post-filter,

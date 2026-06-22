@@ -135,15 +135,44 @@
       const board = (sel === "__new__") ? ANALYZED_BOARD : sel;
       const question = document.getElementById("q").value.trim();
       const el = document.getElementById("answer");
-      if (!board) { el.innerHTML = `<div class="note">Analyze a datasheet first, then ask.</div>`; return; }
+      if (!board) { el.innerHTML = `<div class="note">Select a board or analyze a datasheet first, then ask.</div>`; return; }
       if (!question) return;
-      showCommand(`eaedk ask --board ${board} "${question}"`);
-      el.innerHTML = `<p class="kv">Thinking…</p>`;
-      const r = await api("/api/ask", { method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ board, question, use_llm: false }) });
-      if (r.error) { showError(el, r); return; }
-      el.innerHTML = `<div class="card" style="margin-top:10px">${confBadge(r.confidence)}
-        <pre class="code" style="border:none;background:transparent;padding:8px 0">${escapeHtml(r.answer)}</pre></div>`;
+      showCommand(`eaedk ask --board ${board} "${question}" --llm`);
+      el.innerHTML = `<div class="msg-text" style="margin-top:10px" id="ingest-ans-text">thinking…</div>`;
+      const out = document.getElementById("ingest-ans-text");
+      let fullText = "";
+      try {
+        const resp = await fetch("/api/chat/stream", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ board_name: board, page_type: "datasheet",
+            user_message: question, use_llm: true, conversation_history: [] })
+        });
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "", answered = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const blocks = buf.split("\n\n"); buf = blocks.pop() || "";
+          for (const block of blocks) {
+            const line = block.replace(/^data: /, "").trim();
+            if (!line) continue;
+            let evt; try { evt = JSON.parse(line); } catch { continue; }
+            if (evt.type === "thinking") {
+              out.textContent = `thinking… ${evt.elapsed}s`;
+            } else if (evt.type === "chunk") {
+              if (!answered) { out.textContent = ""; answered = true; }
+              fullText += evt.text;
+              out.innerHTML = renderMd(fullText);
+            } else if (evt.type === "error") {
+              out.textContent = evt.error || "Something went wrong.";
+            }
+          }
+        }
+      } catch (e) {
+        out.textContent = "Could not reach the EAEDK server.";
+      }
     }
 
     document.addEventListener("DOMContentLoaded", () => {

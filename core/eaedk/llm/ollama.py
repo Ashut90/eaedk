@@ -3,6 +3,9 @@
 Default model: qwen2.5-coder:3b. Host via EAEDK_OLLAMA_HOST (default localhost:11434),
 model via EAEDK_LLM_MODEL, generation timeout (seconds) via EAEDK_LLM_TIMEOUT (default 120) —
 raise it on a slow machine where a cold model load exceeds the default.
+EAEDK_LLM_NUM_PREDICT caps total output tokens (thinking + answer). For deepseek-r1:8b, the
+hidden <think> chain is the main latency source; capping at ~1200 keeps answers full but prevents
+runaway reasoning chains. Default 2000 (uncapped for most questions).
 """
 from __future__ import annotations
 
@@ -16,13 +19,18 @@ from .think import strip_think
 DEFAULT_MODEL = "qwen2.5-coder:3b"
 DEFAULT_HOST = "http://localhost:11434"
 DEFAULT_TIMEOUT = 120.0
+DEFAULT_NUM_PREDICT = 2000  # total tokens (think + answer); lower = faster but may truncate
+
+
+def _env_float(var: str, default: float) -> float:
+    try:
+        return float(os.environ.get(var, "") or default)
+    except ValueError:
+        return default
 
 
 def _env_timeout(default: float) -> float:
-    try:
-        return float(os.environ.get("EAEDK_LLM_TIMEOUT", "") or default)
-    except ValueError:
-        return default
+    return _env_float("EAEDK_LLM_TIMEOUT", default)
 
 
 class OllamaProvider:
@@ -45,9 +53,16 @@ class OllamaProvider:
         return self.model in names
 
     def generate(self, system: str, prompt: str) -> str:
+        num_predict = int(_env_float("EAEDK_LLM_NUM_PREDICT", DEFAULT_NUM_PREDICT))
         body = json.dumps({
             "model": self.model, "system": system, "prompt": prompt,
-            "stream": False, "options": {"temperature": 0.2},
+            "stream": False,
+            "options": {
+                "temperature": 0.2,
+                "num_predict": num_predict,
+                "num_gpu": 99,          # push all layers to GPU
+                "num_ctx": 2048,        # smaller KV cache → frees VRAM → more model layers on GPU
+            },
         }).encode("utf-8")
         req = urllib.request.Request(
             f"{self.host}/api/generate", data=body,

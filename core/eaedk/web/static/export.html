@@ -5,6 +5,7 @@
   <title>EAEDK — Export</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
 </head>
 <body>
   <nav class="top"></nav>
@@ -23,7 +24,8 @@
   </main>
 
   <script>
-    let CURRENT = null;
+    let CURRENT = null, CURRENT_BOARD = null;
+    const PROJ_BOARD = {};
 
     async function init() {
       showCommand("eaedk export <project>");
@@ -35,8 +37,15 @@
           `<div class="note">No projects yet. Create one on the <a href="setup.html">New Project</a> page.</div>`;
         return;
       }
+      ps.projects.forEach(p => { PROJ_BOARD[p.name] = p.board || null; });
       sel.innerHTML = ps.projects.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
-      sel.addEventListener("change", () => showCommand(`eaedk export ${sel.value}`));
+      const urlProject = new URLSearchParams(location.search).get("project");
+      if (urlProject && ps.projects.some(p => p.name === urlProject)) sel.value = urlProject;
+      CURRENT_BOARD = PROJ_BOARD[sel.value] || null;
+      sel.addEventListener("change", () => {
+        CURRENT_BOARD = PROJ_BOARD[sel.value] || null;
+        showCommand(`eaedk export ${sel.value}`);
+      });
       showCommand(`eaedk export ${sel.value}`);
     }
 
@@ -130,6 +139,12 @@
     document.addEventListener("DOMContentLoaded", () => {
       init();
       document.getElementById("run").addEventListener("click", run);
+      mountChat({ page_type: "export",
+        placeholder: "Ask why export failed, what a build file does, or what to do next…",
+        getContext: () => ({
+          board_name: CURRENT_BOARD,
+          project_name: document.getElementById("project").value || null
+        }) });
     });
   </script>
 </body>

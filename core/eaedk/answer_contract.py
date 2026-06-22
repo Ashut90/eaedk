@@ -41,7 +41,12 @@ _STRUCTURE_SIGNALS = (
     "how to organize", "how to structure", "how should i structure", "how do i structure",
     "where do i put", "where should i put", "project organization", "organize my project",
     "organize the project", "lay out my", "layout for", "structure for", "structure of my project",
-    "scaffold", "boilerplate", "skeleton for", "project skeleton")
+    "scaffold", "boilerplate", "skeleton for", "project skeleton",
+    # reversed word-order variants ("what is the structure of folder/project/…")
+    "structure of folder", "structure of the folder", "structure of a folder",
+    "structure of project", "structure of the project", "structure of a project",
+    "structure of directory", "structure of the directory",
+    "what is the folder", "what is the directory", "what does the folder")
 
 _TEST_SIGNALS = (
     "test plan", "test strategy", "testing strategy", "test-plan", "how do i test", "how to test",
@@ -202,9 +207,12 @@ class AnswerContract:
 
 _STRUCTURE_ADDENDUM = (
     "ANSWER SHAPE REQUIRED: output the actual directory TREE inside a ``` fenced block (folders end "
-    "in /), board-independent — put every chip-specific file behind ONE platform/ports/<chip>/ layer "
-    "with a shared/ contract. Then at most 4 lines on what the key folders are for. Do NOT write source "
-    "code, and do NOT suggest a flash/UART/GPIO experiment — the deliverable is the structure itself.")
+    "in /). Match the domain: Yocto/embedded-Linux → use Yocto-native layer structure (bblayers.conf, "
+    "local.conf, meta-<name>/, recipes-*/); bare-metal/MCU firmware → put chip-specific files behind "
+    "platform/ports/<chip>/ with a shared/ contract. After the tree, explain EACH top-level folder: "
+    "what it contains and why it exists. Be thorough — do not cut the explanation short. "
+    "Do NOT write source code, and do NOT suggest a flash/UART/GPIO experiment — the deliverable is "
+    "the structure itself.")
 _STRUCTURE_TRY_THIS = (
     "create the folders from the tree above and drop a one-line README in each, then move one real file "
     "into its place — if it still builds from the new layout, the structure is right")

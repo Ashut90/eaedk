@@ -75,7 +75,7 @@
         <h2>What this board can do</h2>${caps}
         <h2>Ask about this board</h2>
         <div class="card">
-          <input type="text" id="askq" placeholder="e.g. what is the flash size? / what are the boot pins?" autocomplete="off">
+          <input type="text" id="askq" placeholder="e.g. what project should I start? / how do I use UART on this board?" autocomplete="off">
           <button id="askbtn">Ask</button>
           <div id="askans"></div>
         </div>
@@ -91,13 +91,42 @@
       const question = document.getElementById("askq").value.trim();
       const ans = document.getElementById("askans");
       if (!question) return;
-      showCommand(`eaedk ask --board ${name} "${question}"`);
-      ans.innerHTML = `<p class="kv">Thinking…</p>`;
-      const r = await api("/api/ask", { method: "POST", headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ board: name, question, use_llm: false }) });
-      if (r.error) { showError(ans, r); return; }
-      ans.innerHTML = `<div style="margin-top:10px">${confBadge(r.confidence)}
-        <pre class="code" style="border:none;background:transparent;padding:8px 0">${escapeHtml(r.answer)}</pre></div>`;
+      showCommand(`eaedk mentor --board ${name} --ask "${question}" --llm`);
+      ans.innerHTML = `<div class="msg-text" style="margin-top:10px" id="board-ans-text">thinking…</div>`;
+      const out = document.getElementById("board-ans-text");
+      let fullText = "";
+      try {
+        const resp = await fetch("/api/chat/stream", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ board_name: name, page_type: "boards",
+            user_message: question, use_llm: true, conversation_history: [] })
+        });
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "", answered = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const blocks = buf.split("\n\n"); buf = blocks.pop() || "";
+          for (const block of blocks) {
+            const line = block.replace(/^data: /, "").trim();
+            if (!line) continue;
+            let evt; try { evt = JSON.parse(line); } catch { continue; }
+            if (evt.type === "thinking") {
+              out.textContent = `thinking… ${evt.elapsed}s`;
+            } else if (evt.type === "chunk") {
+              if (!answered) { out.textContent = ""; answered = true; }
+              fullText += evt.text;
+              out.innerHTML = renderMd(fullText);
+            } else if (evt.type === "error") {
+              out.textContent = evt.error || "Something went wrong.";
+            }
+          }
+        }
+      } catch (e) {
+        out.textContent = "Could not reach the EAEDK server.";
+      }
     }
 
     async function loadSimilar(name) {

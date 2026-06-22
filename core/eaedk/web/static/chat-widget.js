@@ -47,8 +47,9 @@ function mountChat(opts) {
   function bubble(role, text) {
     const d = document.createElement("div");
     d.className = "chat-msg " + role;
+    const body = role === "user" ? escapeHtml(text) : renderMd(text);
     d.innerHTML = `<div class="who">${role === "user" ? "you" : "EAEDK"}</div>` +
-                  `<pre>${escapeHtml(text)}</pre>`;
+                  `<div class="msg-text">${body}</div>`;
     msgs.appendChild(d);
     msgs.scrollTop = msgs.scrollHeight;
   }
@@ -58,23 +59,61 @@ function mountChat(opts) {
     if (!text) return;
     input.value = "";
     bubble("user", text);
-    think.style.display = "block";
     const ctx = (opts.getContext && opts.getContext()) || {};
-    if (!ctx.board_name) {
-      think.style.display = "none";
+    if (!ctx.board_name && opts.requireBoard !== false) {
       bubble("assistant", "Pick a board on this page first, then ask me again.");
       return;
     }
     const payload = { ...ctx, page_type: opts.page_type,
                       conversation_history: history.slice(), user_message: text };
     history.push({ role: "user", content: text });
-    const r = await api("/api/chat", { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    think.style.display = "none";
-    if (r.error) { bubble("assistant", r.error + (r.next ? " — " + r.next : "")); return; }
-    const ans = r.confidence ? `[${r.confidence}] ${r.answer}` : r.answer;
-    bubble("assistant", ans);
-    history.push({ role: "assistant", content: r.answer });
+
+    // SSE streaming: show a live elapsed timer while the model thinks, then render answer word-by-word.
+    const assistantDiv = document.createElement("div");
+    assistantDiv.className = "chat-msg assistant";
+    assistantDiv.innerHTML = `<div class="who">EAEDK</div><div class="msg-text" id="stream-out"></div>`;
+    msgs.appendChild(assistantDiv);
+    msgs.scrollTop = msgs.scrollHeight;
+    const out = assistantDiv.querySelector("#stream-out");
+    out.textContent = "thinking…";
+
+    let fullText = "";
+    try {
+      const resp = await fetch("/api/chat/stream", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let answered = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const blocks = buf.split("\n\n");
+        buf = blocks.pop() || "";
+        for (const block of blocks) {
+          const line = block.replace(/^data: /, "").trim();
+          if (!line) continue;
+          let evt;
+          try { evt = JSON.parse(line); } catch { continue; }
+          if (evt.type === "thinking") {
+            out.textContent = `thinking… ${evt.elapsed}s`;
+          } else if (evt.type === "chunk") {
+            if (!answered) { out.textContent = ""; answered = true; }
+            fullText += evt.text;
+            out.innerHTML = renderMd(fullText);
+            msgs.scrollTop = msgs.scrollHeight;
+          } else if (evt.type === "error") {
+            out.textContent = evt.error || "Something went wrong.";
+          }
+        }
+      }
+    } catch (e) {
+      out.textContent = "Could not reach the EAEDK server.";
+    }
+    // Fix the stream-out id so it doesn't collide if another message arrives.
+    out.removeAttribute("id");
+    history.push({ role: "assistant", content: fullText });
   }
   panel.querySelector("#chat-send").onclick = send;
   input.addEventListener("keydown", e => { if (e.key === "Enter") send(); });

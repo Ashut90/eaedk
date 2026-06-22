@@ -7,13 +7,17 @@ envelope, never a traceback or a bare HTTP code.
 """
 from __future__ import annotations
 
+import asyncio
 import io
+import json
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse, Response)
+from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse, Response,
+                                StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
 from .. import repo, mentor
@@ -25,6 +29,18 @@ from ..store.db import connect
 _STATIC = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="EAEDK Web UI")
+
+
+@app.middleware("http")
+async def no_cache_html(request, call_next):
+    """Prevent the browser from caching HTML and JS so code changes are picked up immediately."""
+    response = await call_next(request)
+    path = request.url.path
+    if path.endswith(".html") or path.endswith(".js"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 def _conn():
@@ -443,8 +459,10 @@ async def api_mentor_chat(request: Request):
     conn = _conn()
     if repo.load_board(conn, board)[0] is None:
         return _err(f"Board not found: {board!r}.", "Pick a board from the dropdown at the top.")
-    answer = mentor_chat(conn, board, messages, use_llm=use_llm,
-                         project=project, has_hardware=has_hardware)
+    loop = asyncio.get_running_loop()
+    answer = await loop.run_in_executor(
+        None, lambda: mentor_chat(_conn(), board, messages, use_llm=use_llm,
+                                  project=project, has_hardware=has_hardware))
     return {"board": board, "answer": answer}
 
 
@@ -503,10 +521,56 @@ async def api_chat(request: Request):
     wokwi = bool(body.get("wokwi_flag"))
     extra = _chat_extra_context(conn, page, board, body)
     messages = [m for m in history if isinstance(m, dict)] + [{"role": "user", "content": user_message}]
-    answer = mentor_chat(conn, board, messages, use_llm=use_llm, project=project,
-                         has_hardware=not wokwi, extra_context=extra,
-                         page_type=page, current_code=body.get("current_code") or "")
+    loop = asyncio.get_running_loop()
+    answer = await loop.run_in_executor(
+        None, lambda: mentor_chat(_conn(), board, messages, use_llm=use_llm, project=project,
+                                  has_hardware=not wokwi, extra_context=extra,
+                                  page_type=page, current_code=body.get("current_code") or ""))
     return {"page_type": page, "board": board, "answer": answer}
+
+
+@app.post("/api/chat/stream")
+async def api_chat_stream(request: Request):
+    """SSE variant of /api/chat. Sends elapsed-time ticks while mentor_chat runs, then streams
+    the answer word-by-word so the browser renders it as it arrives rather than all at once."""
+    from ..mentor_llm import mentor_chat
+    body = await request.json()
+    page = (body.get("page_type") or "").lower()
+    board = body.get("board_name") or ""
+    user_message = (body.get("user_message") or "").strip()
+    if not user_message:
+        async def _err_stream():
+            yield f"data: {json.dumps({'type':'error','error':'Type a message first.'})}\n\n"
+        return StreamingResponse(_err_stream(), media_type="text/event-stream")
+    conn = _conn()
+    use_llm = bool(body.get("use_llm", True))
+    history = body.get("conversation_history") or []
+    project = body.get("project_name") or None
+    wokwi = bool(body.get("wokwi_flag"))
+    extra = _chat_extra_context(conn, page, board, body)
+    messages = [m for m in history if isinstance(m, dict)] + [{"role": "user", "content": user_message}]
+
+    async def generate():
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(
+            None, lambda: mentor_chat(_conn(), board, messages, use_llm=use_llm, project=project,
+                                      has_hardware=not wokwi, extra_context=extra,
+                                      page_type=page, current_code=body.get("current_code") or ""))
+        start = time.monotonic()
+        while not future.done():
+            elapsed = int(time.monotonic() - start)
+            yield f"data: {json.dumps({'type':'thinking','elapsed':elapsed})}\n\n"
+            await asyncio.sleep(2)
+        answer = await future
+        words = answer.split(" ")
+        for i, word in enumerate(words):
+            chunk = word + (" " if i < len(words) - 1 else "")
+            yield f"data: {json.dumps({'type':'chunk','text':chunk})}\n\n"
+            await asyncio.sleep(0.018)
+        yield f"data: {json.dumps({'type':'done'})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # --- Page 7: Code Studio (surfaces the existing Actor-Critic loop) ----------

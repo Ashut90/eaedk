@@ -36,7 +36,7 @@
       <label for="q">Your message</label>
       <input type="text" id="q" placeholder="e.g. what is a clock? / how am I doing?" autocomplete="off">
       <label style="display:flex;align-items:center;gap:8px;margin-top:10px">
-        <input type="checkbox" id="ai" style="width:auto"> Use the AI model for chattier answers
+        <input type="checkbox" id="ai" style="width:auto" checked> Use the AI model for chattier answers
         (optional, needs the local model)</label>
       <button id="ask">Send</button>
     </div>
@@ -50,9 +50,9 @@
       const boards = await api("/api/boards");
       const sel = document.getElementById("board");
       sel.innerHTML = boards.error ? `<option value="">(couldn't load)</option>`
-        : boards.boards.map(b => `<option value="${escapeHtml(b.name)}"${b.name==="STM32F103-BluePill"?" selected":""}>${escapeHtml(b.name)}</option>`).join("");
+        : `<option value="">— Select a board —</option>` +
+          boards.boards.map(b => `<option value="${escapeHtml(b.name)}">${escapeHtml(b.name)}</option>`).join("");
       sel.addEventListener("change", loadBoard);
-      loadBoard();
       const ps = await api("/api/projects");
       if (!ps.error && ps.projects.length) {
         document.getElementById("project").innerHTML = `<option value="">No project</option>` +
@@ -63,7 +63,6 @@
     async function loadBoard() {
       const name = document.getElementById("board").value;
       if (!name) return;
-      showCommand(`eaedk mentor --board ${name}`);
       const el = document.getElementById("detail");
       el.innerHTML = `<p class="kv">Loading…</p>`;
       const d = await api("/api/boards/" + encodeURIComponent(name));
@@ -102,7 +101,7 @@
       document.getElementById("chat").innerHTML = HISTORY.map(m => `
         <div class="card" style="border-color:${m.role==='user'?'var(--line)':'var(--accent)'}">
           <b class="kv">${m.role === "user" ? "You" : "Mentor"}</b>
-          <pre class="code" style="border:none;background:transparent;padding:6px 0">${escapeHtml(m.content)}</pre>
+          <div class="msg-text">${m.role === "user" ? escapeHtml(m.content) : renderMd(m.content)}</div>
         </div>`).join("");
       const box = document.getElementById("chat"); box.scrollTop = box.scrollHeight;
     }
@@ -112,21 +111,59 @@
       const q = document.getElementById("q").value.trim();
       const use_llm = document.getElementById("ai").checked;
       if (!q) return;
-      showCommand(`eaedk${use_llm ? " --llm" : ""} mentor --board ${board} --chat`);
       HISTORY.push({ role: "user", content: q });
-      renderChat();
       document.getElementById("q").value = "";
-      HISTORY.push({ role: "assistant", content: "…thinking" });
-      renderChat();
       const project = document.getElementById("project").value || null;
       const has_hardware = document.getElementById("hw").checked;
-      const r = await api("/api/mentor/chat", { method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ board, messages: HISTORY.filter(m=>m.content!=="…thinking"),
-                               use_llm, project, has_hardware }) });
-      HISTORY.pop();   // remove the "thinking" placeholder
-      HISTORY.push({ role: "assistant", content: r.error ? `${r.error}\n→ ${r.next||""}` : r.answer });
+      // Add a live assistant entry that updates as SSE chunks arrive.
+      HISTORY.push({ role: "assistant", content: "" });
       renderChat();
+      const liveEl = document.getElementById("chat").lastElementChild
+                              .querySelector(".msg-text");
+      if (liveEl) liveEl.textContent = "thinking…";
+
+      let fullText = "";
+      try {
+        const resp = await fetch("/api/chat/stream", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            board_name: board, page_type: "mentor", user_message: q,
+            use_llm, project_name: project, wokwi_flag: !has_hardware,
+            conversation_history: HISTORY.slice(0, -1).filter(m => m.role !== "assistant" || m.content)
+          })
+        });
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let answered = false;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          const blocks = buf.split("\n\n");
+          buf = blocks.pop() || "";
+          for (const block of blocks) {
+            const line = block.replace(/^data: /, "").trim();
+            if (!line) continue;
+            let evt;
+            try { evt = JSON.parse(line); } catch { continue; }
+            if (evt.type === "thinking") {
+              if (liveEl) liveEl.textContent = `thinking… ${evt.elapsed}s`;
+            } else if (evt.type === "chunk") {
+              if (!answered) { if (liveEl) liveEl.textContent = ""; answered = true; }
+              fullText += evt.text;
+              if (liveEl) liveEl.innerHTML = renderMd(fullText);
+              const box = document.getElementById("chat");
+              box.scrollTop = box.scrollHeight;
+            } else if (evt.type === "error") {
+              if (liveEl) liveEl.textContent = evt.error || "Something went wrong.";
+            }
+          }
+        }
+      } catch (e) {
+        if (liveEl) liveEl.textContent = "Could not reach the EAEDK server.";
+      }
+      HISTORY[HISTORY.length - 1].content = fullText;
     }
 
     // start a fresh conversation when the board changes

@@ -5,6 +5,7 @@
   <title>EAEDK — Log Analyzer</title>
   <link rel="stylesheet" href="style.css">
   <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
   <style>
     #drop { border: 2px dashed var(--line); border-radius: 8px; padding: 4px; }
     #drop.over { border-color: var(--accent); background: var(--panel-2); }
@@ -36,12 +37,18 @@
   </main>
 
   <script>
+    let CURRENT_BOARD = null;
+    const PROJ_BOARD = {};
+
     async function init() {
       showCommand("eaedk log analyze --file your.log");
       const ps = await api("/api/projects");
       const sel = document.getElementById("project");
-      if (!ps.error && ps.projects.length)
+      if (!ps.error && ps.projects.length) {
+        ps.projects.forEach(p => { PROJ_BOARD[p.name] = p.board || null; });
         sel.innerHTML += ps.projects.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join("");
+        sel.addEventListener("change", () => { CURRENT_BOARD = PROJ_BOARD[sel.value] || null; });
+      }
 
       const drop = document.getElementById("drop"), ta = document.getElementById("log");
       ["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
@@ -95,6 +102,12 @@
     document.addEventListener("DOMContentLoaded", () => {
       init();
       document.getElementById("run").addEventListener("click", run);
+      mountChat({ page_type: "logs", requireBoard: false,
+        placeholder: "Ask what a log error means, how to debug a crash, or what to check next…",
+        getContext: () => ({
+          board_name: CURRENT_BOARD,
+          project_name: document.getElementById("project").value || null
+        }) });
     });
   </script>
 </body>

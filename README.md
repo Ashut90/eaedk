@@ -194,15 +194,14 @@ flowchart TB
     TOOL --> DB
     MENT --> DB
 
-    PURP{"Purpose Decision — GUARDRAIL<br/>answer · clarify · redirect · decline<br/>(first step of a mentor turn, no LLM)"}:::guard
+    PURP["Answer pipeline — ANSWER_NOW<br/>all embedded / firmware questions<br/>(board-anchored or general system prompt)"]:::core
     ORCH -->|mentor turn| PURP
-    PURP -.->|"clarify · redirect · decline<br/>(model never called)"| user
 
     subgraph OUT["LLM — OUTSIDE the boundary · explains only"]
         direction LR
         ACT["Actor<br/>propose"]:::llm --> CRIT["Critic<br/>self-review"]:::llm --> ARB["Arbiter — GUARDRAIL<br/>deterministic · final say"]:::guard --> PF["Post-Filter — GUARDRAIL<br/>strip uncited hardware numbers"]:::guard
     end
-    PURP -->|"ANSWER_NOW + grounding context"| ACT
+    PURP -->|"grounding context injected"| ACT
     DB -.->|cited allowlist| PF
     TRUTH -.->|feasibility + cost verdict| ARB
     PF -->|filtered, cited prose| user
@@ -262,90 +261,71 @@ flowchart TD
 
 ## Reasoning workflow — how the mentor actually thinks
 
-The mentor does **not** assume the job of every turn is to produce an answer. Before anything else, a
-deterministic **Purpose Decision** (no LLM) chooses *what the turn is for* — `ANSWER_NOW`,
-`ASK_CLARIFICATION`, `REDIRECT_TO_FOUNDATION`, or `DECLINE_OUT_OF_SCOPE`. `ANSWER_NOW` is **never the
-default**: it requires both a resolvable intent *and* grounding in EAEDK's curated knowledge. The
-user's question is the subject; the selected board is only context — so *"How do I use a Jetson?"* is
-declined honestly, never answered as a blink tutorial on whatever board happens to be selected.
+The mentor answers **any** embedded / firmware question. There is no topic gate that declines
+Jetson, Yocto, career, or anything else in the field. The board you selected is only *context* —
+it enriches the answer, never restricts the subject.
 
-Only on `ANSWER_NOW` does it proceed: deterministic detectors, an un-bypassable grounding (a
-feasibility banner and any semantic-cost reality check), a **reasoning backbone** — the board-agnostic
-framework *what → why → when → options → trade-off → how to decide → next*, board facts only
-*enriching* the trade-off — and then, if `--llm` is on, the model elaborates that backbone through
-Actor → Critic → **Arbiter** → Post-Filter. Offline, the backbone *is* the answer.
+Every turn goes through the same pipeline:
+
+1. **Deterministic detectors (no LLM)** — read role (PEER / ARCHITECT / SPONSOR), topic
+   (engineering decision), domain (robotics / sensor / IoT), concept (HardFault, vector table…).
+2. **System prompt selection** — board-specific prompt if the user named a board; otherwise a
+   universal senior-engineer prompt covering the full embedded field (Cortex-M, Linux-on-hardware,
+   Yocto, Nvidia Jetson, Raspberry Pi, RTOS, drivers, toolchains, career — everything).
+3. **Un-bypassable grounding** — feasibility banner + semantic-cost check injected before the model.
+4. **LLM call** (if enabled) → **Arbiter** (deterministic, final say) → **Post-Filter** (strips
+   uncited hardware numbers).
 
 ```mermaid
 flowchart TD
-    Q["User question / chat<br/>(Boards page or eaedk mentor)"]:::in
+    Q["Any embedded / firmware question<br/>(web chat · CLI · Mentor page)"]:::in
 
-    Q --> PURP{"PURPOSE DECISION — first step, no LLM<br/>what is this turn FOR?"}:::guard
-    PURP -->|DECLINE_OUT_OF_SCOPE| O1["Subject outside grounded knowledge<br/>('Nvidia Jetson', 'Yocto') — honest, never a board default"]:::out
-    PURP -->|ASK_CLARIFICATION| O2["Need context first<br/>('help'; a crash with no address / registers / logs)"]:::out
-    PURP -->|REDIRECT_TO_FOUNDATION| O3["Career / learning path<br/>(a sequence, not a board-bound answer)"]:::out
-    PURP -->|"ANSWER_NOW · only if grounded AND intent clear"| DET["Deterministic detectors — no LLM"]:::core
+    Q --> DET["Deterministic detectors — no LLM<br/>role · topic · domain · concept"]:::core
 
-    DET --> R1["role · SPONSOR / PEER / ARCHITECT / REVERSE"]:::detect
-    DET --> R2["topic · an engineering DECISION"]:::detect
-    DET --> R3["domain · robotics / sensor / IoT"]:::detect
-    DET --> R5["concept · HardFault, vector table, …"]:::detect
+    DET --> SYS{"Board named<br/>in the question?"}:::dec
+    SYS -->|"yes — board-anchored"| BP["Board-specific system prompt<br/>capabilities · flash/RAM · peripherals"]:::frame
+    SYS -->|"no — general"| GP["Universal senior-engineer prompt<br/>Cortex-M · Linux · Yocto · Jetson · RTOS<br/>drivers · toolchains · career · all platforms"]:::frame
 
-    DET --> LEAD["Deterministic prefix — always, un-bypassable"]:::guard
-    LEAD --> G1["Feasibility guard · NOT FEASIBLE banner"]:::guard
-    LEAD --> G2["Semantic cost note · gRPC ~500KB vs 64KB"]:::guard
+    BP --> LEAD
+    GP --> LEAD
+    LEAD["Deterministic prefix — always, un-bypassable<br/>feasibility guard · semantic-cost check"]:::guard
 
-    R1 --> BACK
-    R2 --> BACK
-    R3 --> BACK
-    R5 --> BACK
-    BACK["Reasoning backbone — priority-ordered"]:::core
-    BACK --> FW["The reasoning FRAMEWORK<br/>what → why → when → options →<br/>trade-off → how to decide → next"]:::frame
-    FW --> ENR["board facts ENRICH the trade-off<br/>(they never drive it)"]:::frame
-
-    ENR --> OFF{"Model on?"}:::dec
-    LEAD --> OFF
-    OFF -->|offline| AOFF["lead + backbone<br/>a real grounded answer, no model"]:::ok
-    OFF -->|--llm| ACT["Actor — elaborate the framework"]:::llm
-    ACT --> CRIT["Critic — review own answer"]:::llm
-    CRIT --> ARB["Arbiter — deterministic, final say<br/>discards LLM text on a hard fail"]:::guard
-    ARB --> PF["Post-Filter — strip uncited numbers"]:::guard
-    PF --> AON["lead + reviewed answer"]:::ok
+    LEAD --> OFF{"AI model on?"}:::dec
+    OFF -->|offline| AOFF["deterministic backbone answer<br/>(grounded, no hallucination)"]:::ok
+    OFF -->|"use_llm=true"| ACT["Actor — LLM elaborates the answer"]:::llm
+    ACT --> CRIT["Critic — self-review"]:::llm
+    CRIT --> ARB["Arbiter — GUARDRAIL · deterministic · final say<br/>discards LLM text on a hard fail"]:::guard
+    ARB --> PF["Post-Filter — strip uncited hardware numbers"]:::guard
+    PF --> ANS["Full answer — streamed to browser / CLI"]:::ok
 
     classDef in fill:#ede7f6,stroke:#5e35b1,color:#311b92;
     classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
-    classDef detect fill:#f1f8e9,stroke:#558b2f,color:#33691e;
     classDef frame fill:#e0f7fa,stroke:#00838f,color:#004d54;
     classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#7a3b00;
     classDef llm fill:#fce4ec,stroke:#c2185b,stroke-dasharray:6 4,color:#7a1438;
     classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b4d2e;
     classDef dec fill:#fffde7,stroke:#f9a825,color:#7a5b00;
-    classDef out fill:#ede7f6,stroke:#5e35b1,color:#311b92;
 ```
 
-The framework lives as curated Python data (`reasoning.py`), so the *thinking* holds fully offline —
-an air-gapped mentor still teaches the reasoning, not just a stored answer. See
+The reasoning framework lives as curated Python data (`reasoning.py`), so the *thinking* holds
+fully offline — an air-gapped mentor still teaches, not just plays back a stored answer. See
 [docs/27-reasoning-framework.md](docs/27-reasoning-framework.md).
 
 ## Sample interactions you can expect
 
-The Purpose Decision is what makes the mentor refuse to be a generic answer box. The board below is
-**STM32F103-BluePill** in every row — notice it is never forced onto a question that isn't about it.
-(Try them: Boards chat in `eaedk web`, or `eaedk mentor --board bluepill --ask "…" --llm`.)
+The selected board is always *context*, never a constraint on the subject. EAEDK answers the
+question you actually asked — whether it names a board or not.
+(Try them: Mentor page in `eaedk web`, or `eaedk mentor --board bluepill --ask "…" --llm`.)
 
-| You ask | Purpose | What you get |
-|---|---|---|
-| *"How can I use Nvidia Jetson?"* | `DECLINE_OUT_OF_SCOPE` | *"Jetson is outside the hardware EAEDK has verified facts for — I won't guess."* No blink, no board default. |
-| *"When should I use Yocto?"* | `DECLINE_OUT_OF_SCOPE` | Honest about the limitation, with **no** board-specific claims invented to fill the gap. |
-| *"Should I learn Zephyr or FreeRTOS?"* | `ANSWER_NOW` | The RTOS-vs-super-loop **decision criteria** — when each wins, the per-task RAM cost on this board, how to decide. Not "start with blink." |
-| *"I want to become a firmware engineer but don't know where to start."* | `REDIRECT_TO_FOUNDATION` | An ordered learning **path** (blink → UART → SPI → interrupts → bootloader → RTOS), each step with *why it comes first* — a sequence, not one experiment. |
-| *"Help"* | `ASK_CLARIFICATION` | *"Tell me what you're trying to do, and on which board, and I'll point you at the first real step."* |
-| *"My code crashed with HardFault_Handler"* | `ASK_CLARIFICATION` | Asks for the **evidence** — the faulting address, the fault status registers (CFSR/HFSR on Cortex-M), or the code. Naming the exception is the *symptom*, not the diagnosis. |
-| *"What is SPI?"* | `ANSWER_NOW` | Teaches with the **framework**: what it is, why it exists, the alternatives, the trade-off, how an engineer decides, and the next step. |
-
-The rule across all seven: **the user's question is the subject, the selected board is only context.**
-A subject EAEDK cannot ground is declined honestly; a question missing context is clarified; a learner
-asking too far ahead is redirected to the foundation; and only a grounded, clear-intent question is
-answered.
+| You ask | What you get |
+|---|---|
+| *"How do I start with Nvidia Jetson?"* | A complete Jetson-specific answer: JetPack SDK, GPIO via libgpiod, CUDA, camera pipeline — no board default substituted. |
+| *"When should I use Yocto vs Buildroot?"* | Decision criteria: project lifetime, team size, BSP complexity, CI footprint. Both compared side-by-side with trade-offs. |
+| *"Should I learn Zephyr or FreeRTOS?"* | The RTOS-vs-super-loop **decision criteria** — when each wins, per-task RAM cost, how to decide. Not "start with blink." |
+| *"I want to become a firmware engineer — where do I start?"* | An ordered learning **path**: blink → UART → SPI → interrupts → RTOS → bootloader → Linux drivers — each step with *why it comes before the next*. |
+| *"What is SPI?"* | Teaches with the **framework**: what it is, why it exists, when to use it vs I2C, how an engineer decides, and the next step to try. |
+| *"My code crashed with HardFault_Handler"* | Teaches what HardFault is, asks for CFSR/HFSR registers and the faulting address — diagnosis, not a generic "check your code" answer. |
+| *"What project should I build with the WIZnet-W5500?"* | Board-specific answer: the W5500 is an Ethernet controller — start with a TCP echo server, then HTTP, then MQTT. Guided by the board's actual peripherals. |
 
 ## The guardrails the LLM cannot bypass
 
@@ -451,14 +431,54 @@ packages/             templates, 14 seed boards, risk rules, cost table, log sig
 docs/                 architecture, truth-layer, mentor-framework, reasoning topics
 ```
 
+## Web UI — http://localhost:8080
+
+`pip install -e '.[web]'` → `eaedk web` → open **http://localhost:8080**
+
+Eight pages, one coherent workflow. Every page has a **"💬 Ask EAEDK"** floating button — ask why
+a check failed, what a build file does, or anything else about your board or project. Answers
+stream in word-by-word from the same mentor pipeline the CLI uses.
+
+| Page | What it does |
+|---|---|
+| **Boards** | Click any board → capabilities, learning path, architecture. Inline chat for project/getting-started questions (streams via mentor). |
+| **New Project** | Pick board + goal → instant feasibility check + risk list. Links directly to Validate and Export with the project pre-selected. |
+| **Validate** | Select a project → validation runs automatically. All 23 checks explained in plain English. One-click navigation to Export or Code Studio. |
+| **Code Studio** | Start from the generated template, edit, click Review. Engine confirms real bugs (RED); AI suggests improvements (YELLOW). Mark items done. |
+| **Export** | Generate real build files (CMake, linker script, START_HERE.md). Download as zip. Wokwi simulation files included for supported boards. |
+| **Log Analyzer** | Paste or drag a crash/boot log. Matches against 100+ known failure signatures. Optionally correlates with your project's open risks. |
+| **Datasheet** | Upload a datasheet PDF or paste text. EAEDK extracts cited facts, lists what's missing and where to find it, and shows risk warnings. |
+| **Mentor** | Full open-ended chat. Ask anything — Yocto, Jetson, career, RTOS, debugging, protocols — the model answers the actual question. |
+
+Pages are connected: creating a project on **New Project** takes you straight to **Validate** with
+it pre-selected. Validate links to **Export** and **Code Studio** with one click.
+
+---
+
+## Architecture diagrams
+
+### System architecture
+
+![Architecture flow](docs/architecture-flow.png)
+
+### Trust boundary
+
+![Trust boundary](docs/architecture-trust.png)
+
+### Datasheet ingestion flow
+
+![Datasheet flow](docs/datasheet-flow.png)
+
+---
+
 ## Status
 
-**380 pytests green, eval 20/20.** Tags `v0.1.0` → **`v3.1.1`**.
+**380 pytests green, eval 20/20.** Tags `v0.1.0` → **`v4.0.0`**.
 
 The deterministic core (validation, risk, signatures, toolchain, semantic intent), a unified truth
 layer, the offline LLM with post-filter and the Actor-Critic-Arbiter loop, project-aware triage, the
-interactive onboarding chain, and a feasibility-gated output engine that exports real build
-artifacts. Recent milestones:
+interactive onboarding chain, a feasibility-gated output engine that exports real build artifacts,
+and a full 8-page web UI with streaming mentor chat on every page. Recent milestones:
 
 | Tag | What shipped |
 |---|---|
@@ -466,6 +486,7 @@ artifacts. Recent milestones:
 | `v3.0.0` | **Beginner mentor layer** (capabilities / recommendation / roadmap), **semantic intent translation**, behavioural hazards (timing / power / ISR stack), Actor-Critic-Arbiter |
 | `v3.1.0` | ML/AI intent costing, **unified `validate --intent` + project**, **peripheral prerequisites**, board-name auto-coercion, quantified mitigations |
 | `v3.1.1` | Risk-engine resilience (a bad rule degrades, never 500s the assessment) |
+| `v4.0.0` | **Open-answer mentor** — answers every embedded/firmware question (Jetson, Yocto, career, RTOS, all platforms); **full web UI** with streaming chat on all 8 pages; connected page navigation |
 
 ```bash
 PYTHONPATH=core python3 -m pytest -q        # 380 passed
