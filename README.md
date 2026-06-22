@@ -5,7 +5,7 @@ optional local LLM only explains.** It tells a zero-experience engineer what a b
 to build first and in what order, catches architectural mistakes *before* they build them, and
 refuses — with the math — anything the hardware cannot do.
 
-> ## The LLM cannot assert a hardware fact. It can only reason from what the database has verified.
+> **The LLM cannot assert a hardware fact. It can only reason from what the database has verified.**
 
 Every other AI coding tool will happily tell you the STM32F407 runs at 168 MHz, invent a DDR
 timing, or guess a register address — confidently, and sometimes wrong. On embedded hardware a
@@ -16,151 +16,203 @@ stripped before you read it.
 
 ---
 
-## Getting started
+## System requirements
 
-EAEDK is pure Python (≥ 3.11) and runs the same on **Linux, macOS, and Windows** — one SQLite file,
-no per-token cost, fully offline. The only thing that differs per OS is how you get Python and
-activate the workspace.
+EAEDK runs on **Linux, macOS, and Windows**. The table below lists what you need before you install.
 
-### macOS / Linux
+| | Minimum | Recommended |
+|---|---|---|
+| **OS** | Ubuntu 20.04 · macOS 12 (Monterey) · Windows 10 | Ubuntu 22.04+ · macOS 14+ · Windows 11 |
+| **Python** | 3.11 | 3.12 |
+| **RAM** | 2 GB (CLI only) | 8 GB+ (for local LLM models) |
+| **Disk** | 200 MB (EAEDK + DB) | 6–10 GB (+ LLM model weights) |
+| **GPU** | Not required | CUDA GPU speeds up LLM inference |
+| **Ollama** | Not required (offline mode works) | [ollama.com](https://ollama.com) — for AI answers |
 
-```bash
-# 0. (once) get Python 3.11+ — macOS: `brew install python@3.11` (or python.org); most Linux has it.
-git clone https://github.com/Ashut90/eaedk        # 1. download
-cd eaedk                                            # 2. enter the folder
-python3 -m venv .venv && source .venv/bin/activate  # 3-4. private workspace
-pip install -e .                                    # 5. install the `eaedk` command
-eaedk db init && eaedk db seed                      # 6-7. create + load the local database
-eaedk board list                                    # 8. see the 14 built-in boards
-eaedk mentor --board STM32F103-BluePill             # 9. ask the mentor (add --chat --llm for AI answers)
-```
-
-`eaedk board capabilities --board bluepill` shows what a board can do (fuzzy names like `bluepill`
-are auto-coerced). For a back-and-forth AI conversation: `eaedk mentor --board <b> --chat --llm`.
-
-### Windows (PowerShell)
-
-Install **Python 3.11+** from [python.org](https://www.python.org/downloads/windows/) or the
-Microsoft Store (tick *"Add python.exe to PATH"*), then in PowerShell:
-
-```powershell
-git clone https://github.com/Ashut90/eaedk         # 1. download (needs Git for Windows)
-cd eaedk                                            # 2. enter the folder
-py -m venv .venv ; .venv\Scripts\Activate.ps1       # 3-4. private workspace
-pip install -e .                                    # 5. install the `eaedk` command
-eaedk db init ; eaedk db seed                       # 6-7. create + load the local database
-eaedk board capabilities --board bluepill           # 8. what can this board do?
-```
-
-> If PowerShell blocks the activate script, run once:
-> `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`. On Command Prompt (cmd.exe) the
-> activate line is `.venv\Scripts\activate.bat`.
-
-Typing `bluepill` instead of `STM32F103-BluePill` is fine — EAEDK auto-coerces and tells you.
-Coming back later? `cd eaedk`, re-activate the workspace, and you're ready — steps 1–7 are one-time.
-
-**Prefer a browser?** `pip install -e '.[web]'` then `eaedk web` → <http://localhost:8080> (all OSes).
-**On Ubuntu/Debian** you can instead build a native package — `packaging/build-deb.sh` →
-`sudo apt install ./dist/eaedk_*_all.deb` puts `eaedk` on your `$PATH` system-wide. (macOS and
-Windows use the pip flow above — there is no native installer for them yet.)
-
-### Pick your AI model (optional)
-
-The mentor answers **offline by default** (deterministic). For *AI* answers (`--llm`, or the web
-"Use the AI model" box) you choose the model with environment variables — no code change.
-
-**Local & free — [Ollama](https://ollama.com):**
-
-```bash
-ollama pull llama3.1:8b                                  # recommended local default
-EAEDK_MENTOR_MODEL=llama3.1:8b eaedk mentor --board STM32F103-BluePill --chat --llm
-```
-
-A 7–8B model is the sweet spot for a 6–8 GB GPU. **Avoid 3B models** — they recite templates instead
-of reasoning. Note: any local model caps out below a frontier model's reasoning.
-
-**Stronger reasoning — any OpenAI-compatible endpoint** (OpenCode Zen, Gemini's OpenAI API,
-OpenRouter, a hosted vLLM):
-
-```bash
-export EAEDK_LLM_BASE_URL=https://opencode.ai/zen/v1     # the endpoint
-export EAEDK_LLM_API_KEY=...                             # if it needs a key
-export EAEDK_MENTOR_MODEL=deepseek-v4                    # the model id there
-eaedk mentor --board STM32F103-BluePill --chat --llm
-```
-
-Either way EAEDK wraps the model with its deterministic grounding + verifier, so a stronger model
-gives sharper answers **without** losing the no-hallucinated-hardware-facts guarantee.
+> **Offline mode always works.** All 23 validation rules, the risk engine, log analysis, and
+> the beginner mentor run with zero network and zero GPU — pure Python + one SQLite file.
+> The LLM layer is strictly opt-in (`--llm` flag or the Web UI toggle).
 
 ---
 
-## What's new — the "LLM generates, deterministic verifies" pivot
+## Install — one command
 
-EAEDK used to **classify** your question and play back a stored template. Now the model **reads and
-answers your specific question**, and the deterministic engines **verify** it. Full write-up:
-[docs/35](docs/35-llm-generates-deterministic-verifies.md).
+```bash
+# 1. Clone the repo
+git clone https://github.com/Ashut90/eaedk && cd eaedk
 
-```
-Your question
-   │
-   ▼
-Intent router picks the answer mode
-   ├─ debugging fault → deterministic PROOF-PATH (a curated decision tree)
-   └─ open / concrete → the LLM reads the EXACT question
-                          │  ← verified board / project facts injected as grounding
-                          ▼
-                        LLM answers the specific question
-                          │
-                          ▼  deterministic verifier — final say:
-                             • invented a board fact?   → stripped   (allowlist post-filter)
-                             • out of scope?             → declined  (purpose gate)
-                             • unsafe / not feasible?    → overridden (feasibility arbiter)
-                             • conceptually wrong?       → blocked   (conceptual guards)
-                             • answered the question?    → bounded LLM relevance critic (advisory)
-                          ▼
-                        Final answer
+# 2. Install everything — web UI + datasheet ingestion + LLM-ready (stdlib only, no extra deps)
+pip install -e '.[full]'
+
+# 3. Initialise the local database
+eaedk db init && eaedk db seed
+
+# 4. Start the web interface (open http://localhost:8080)
+eaedk web
 ```
 
-**Major changes since v3.1:**
+`pip install -e '.[full]'` installs:
+- the `eaedk` CLI command
+- the **web UI** (FastAPI + Uvicorn → `eaedk web`)
+- the **datasheet ingestion** engine (PyMuPDF → `eaedk ingest`)
+- the **LLM layer** — built on Python's stdlib `urllib`, no extra package required
 
-- **The pivot above** — the LLM generates the answer; the deterministic layer verifies it (was the reverse).
-- **9 curated debugging proof-paths** across 5 project types — bare-metal (UART / I²C / SPI / power-reset / HardFault), RTOS, bootloader, Linux driver, edge-ML inference.
-- **Conceptual guards** — block advice that's literal-clean but wrong (e.g. "add pull-ups to your SPI bus").
-- **Skill-level calibration** — reads the user's self-described level; never hands an experienced engineer the beginner "blink an LED" path.
-- **Pluggable models** — local Ollama *or* any OpenAI-compatible endpoint (see *Pick your AI model*).
-- **Bounded "why" critic** for uncovered faults, and an honest offline fallback that never fakes a tailored answer.
+> **Windows users:** replace `pip install -e '.[full]'` with `pip install -e ".[full]"` (double
+> quotes). PowerShell squote handling differs.
+
+### Or install only what you need
+
+```bash
+pip install -e .              # CLI only (PyYAML — one dependency)
+pip install -e '.[web]'       # + web UI  (FastAPI, Uvicorn)
+pip install -e '.[ingest]'    # + datasheet PDF engine  (PyMuPDF)
+pip install -e '.[full]'      # everything above at once
+```
 
 ---
 
-## The three questions a beginner actually asks
+## Quick start (CLI)
 
 ```bash
-eaedk board capabilities --board bluepill           # "What can this board do?"
-eaedk mentor --board bluepill --level 0             # "What should I build first, and why?"
-eaedk roadmap --board bluepill --goal firmware-job  # "How do I get a job with this?"
+eaedk board list                                       # see the 14 built-in boards
+eaedk board capabilities --board bluepill              # what can a Blue Pill do?
+eaedk mentor --board bluepill --level 0                # first project + reason it comes first
+eaedk mentor --board bluepill --ask "explain HardFault"  # concept anchor
 ```
 
-- **`board capabilities`** — architecture in plain language (Cortex-M3 = no FPU, simple ISR model),
-  flash/RAM in human terms (*"64KB — fits a UART logger and a sensor driver, not a TFLite model"*),
-  confirmed peripherals, **what EAEDK can and cannot validate** (UNKNOWN facts listed, never
-  assumed), and the closest board by architecture + memory bracket.
-- **`mentor --level 0`** — the first project *with the reason it comes first*, what it teaches, the
-  next three in **dependency order**, and for each: which peripherals it exercises, the failure mode
-  to expect, and how to diagnose it. A project needing an unconfirmed peripheral is flagged, never
-  recommended on a guess.
-- **`roadmap`** — a dependency graph (not a flat list) where each step states *what it proves to an
-  interviewer*; pass several `--board` flags and it sequences across them (fundamentals on the
-  smaller board, RTOS/HAL on the larger).
+Fuzzy names work everywhere — `bluepill`, `stm32`, `pico`, `esp32` are all auto-resolved.
+
+---
+
+## Add the AI model (optional)
+
+EAEDK answers **fully offline by default** — all checks, learning paths, and concept anchors work
+with no model. For AI-generated, question-specific answers add `--llm` to any command, or flip the
+toggle in the web UI. You need **Ollama** running locally.
+
+### Install Ollama
+
+| OS | Command |
+|---|---|
+| Linux | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| macOS | Download the app from [ollama.com](https://ollama.com) |
+| Windows | Download the installer from [ollama.com](https://ollama.com) |
+
+### Pull a model
+
+```bash
+ollama pull deepseek-r1:8b          # default — best reasoning for embedded questions
+```
+
+`deepseek-r1:8b` is the recommended default: it uses a `<think>` reasoning chain that EAEDK strips
+before the answer reaches you (you only see the final answer, not the internal reasoning).
+
+**Model guide:**
+
+| Model | Size | GPU RAM needed | Good for |
+|---|---|---|---|
+| `deepseek-r1:8b` | 5 GB | 6 GB | Default — strong reasoning, fast on modern laptops |
+| `llama3.1:8b` | 5 GB | 6 GB | Alternative — if you prefer Llama |
+| `deepseek-r1:14b` | 9 GB | 10 GB | Better answers on complex bring-up questions |
+| `deepseek-r1:32b` | 20 GB | 22 GB+ | Best quality; needs a decent GPU |
+| any OpenAI-compatible | — | — | Cloud / hosted models (see below) |
+
+> **Avoid 3B models** — they recite templates instead of reasoning. Stick to 7B+.
+
+### Use a cloud or hosted model
+
+Any OpenAI-compatible endpoint works — OpenRouter, Gemini API, vLLM, OpenCode Zen, etc.:
+
+```bash
+export EAEDK_LLM_BASE_URL=https://openrouter.ai/api/v1
+export EAEDK_LLM_API_KEY=sk-...
+export EAEDK_MENTOR_MODEL=deepseek/deepseek-r1
+eaedk mentor --board bluepill --ask "explain DDR timing" --llm
+```
+
+A stronger cloud model gives sharper answers **without** losing the no-hallucinated-hardware-facts
+guarantee — EAEDK's deterministic grounding and post-filter always wrap the model.
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `EAEDK_MENTOR_MODEL` | `deepseek-r1:8b` | Model name for Ollama or the remote endpoint |
+| `EAEDK_OLLAMA_HOST` | `http://localhost:11434` | Ollama host URL |
+| `EAEDK_LLM_BASE_URL` | *(unset — uses Ollama)* | Set to switch to any OpenAI-compatible API |
+| `EAEDK_LLM_API_KEY` | *(unset)* | API key for the remote endpoint |
+
+---
+
+## Web UI — http://localhost:8080
+
+```bash
+eaedk web       # starts at http://localhost:8080
+```
+
+Eight pages, one coherent workflow. Every page has a floating **"Ask EAEDK"** chat button — ask why
+a check failed, what a build file does, or anything else about your board or project. Answers
+stream word-by-word from the same mentor pipeline the CLI uses.
+
+| Page | What it does |
+|---|---|
+| **Boards** | Click any board → capabilities, learning path, architecture. Inline chat for project/getting-started questions. |
+| **New Project** | Pick board + goal → instant feasibility check + risk list. Links to Validate and Export with the project pre-selected. |
+| **Validate** | Select a project → 23 checks run automatically, explained in plain English. One-click to Export or Code Studio. |
+| **Code Studio** | Edit the generated template, click Review. Engine confirms real bugs (RED); AI suggests improvements (YELLOW). |
+| **Export** | Generate real build files (CMake, linker script, START_HERE.md). Download as zip. Wokwi simulation files included. |
+| **Log Analyzer** | Paste or drag a crash/boot log. Matches 100+ known failure signatures. Correlates with your project's open risks. |
+| **Datasheet** | Upload a datasheet PDF. EAEDK extracts cited facts, lists what's missing, shows risk warnings. |
+| **Mentor** | Full open-ended chat. Ask anything — Yocto, Jetson, career, RTOS, debugging — the model answers your actual question. |
+
+Pages are connected: **New Project** → **Validate** → **Export** / **Code Studio** — each step
+passes the project name through the URL so you never lose context.
+
+---
+
+## What's new — v4.0.0
+
+### Answer-shape contracts (latest)
+
+The mentor now **detects the shape** the question demands and verifies the LLM's output
+deterministically against it. If the shape is wrong, the Actor **regenerates** (not rewrites — a
+critic rewriting a correct answer was found to corrupt it):
+
+| Shape detected | What the verifier checks |
+|---|---|
+| `concrete_structure` — "folder structure for X" | Answer must contain a real directory tree |
+| `open_decision` — "X vs Y / should I A or B" | Answer must weigh both sides + close with a question |
+| `concept` — "what is / explain X" | Short explanation + hardware consequence + next step |
+| `debug_proof_path` — fault report | Routes to a deterministic decision tree (no LLM needed) |
+| `test_plan` — "how do I test X" | Numbered, checkable plan |
+| `learning_path` — "where do I start / roadmap" | Sequenced steps in dependency order |
+| `fact_bound` — "how much flash / does this board have CAN" | Grounded fact from the DB |
+
+### Reasoning model support
+
+`deepseek-r1:8b` is now the default. EAEDK automatically:
+- strips `<think>…</think>` tokens — you read the answer, not the model's scratchpad
+- skips the Critic pass for reasoning models (the `<think>` chain replaces it)
+- skips the Critic for concrete deliverables (code blocks, commands) — no corruption risk
+
+### Front-door term normalization
+
+Common typos and shorthand are normalised before the question reaches the mentor — `stm32f1`,
+`blueplil`, `deepseekr1`, `freertos`, `yocoto` all ground correctly instead of being declined.
+
+### "LLM generates, deterministic verifies" pivot
+
+The model **reads and answers your specific question**; the deterministic engines **verify** it.
+There is no topic gate — Jetson, Yocto, career, RTOS, and every embedded platform are answered.
+The board you selected is *context* that enriches the answer, never a restriction on the subject.
 
 ---
 
 ## Architectural flow
 
 Two front doors call the same deterministic engine core; every fact flows through `repo.py` into
-local SQLite. The LLM sits **outside** the trust boundary and reaches you only through an
-Actor → Critic → **deterministic Arbiter** → Post-Filter pipeline. A mentor turn first passes a
-deterministic **Purpose Decision** — answer / clarify / redirect / decline — before any of this runs
-(see *[Reasoning workflow](#reasoning-workflow--how-the-mentor-actually-thinks)* below).
+local SQLite. The LLM sits **outside** the trust boundary and reaches you only through the
+Answer-Contract verifier → **Post-Filter** pipeline.
 
 ```mermaid
 flowchart TB
@@ -179,7 +231,6 @@ flowchart TB
         RISK["Risk Engine<br/>10 hazard rules · sandboxed mini-DSL"]:::core
         SEM["Semantic Intent<br/>cost table + peripheral prerequisites"]:::core
         TOOL["Toolchain Engine<br/>build-environment as a first-class check"]:::core
-        SIG[("Log Signature DB")]:::db
         MENT["Beginner Mentor<br/>capabilities · recommendation · roadmap"]:::core
         DB[("Truth DB<br/>facts · boards · citations / provenance")]:::db
     end
@@ -191,21 +242,17 @@ flowchart TB
     VAL --> DB
     RISK --> DB
     SEM --> DB
-    TOOL --> DB
     MENT --> DB
-
-    PURP["Answer pipeline — ANSWER_NOW<br/>all embedded / firmware questions<br/>(board-anchored or general system prompt)"]:::core
-    ORCH -->|mentor turn| PURP
 
     subgraph OUT["LLM — OUTSIDE the boundary · explains only"]
         direction LR
-        ACT["Actor<br/>propose"]:::llm --> CRIT["Critic<br/>self-review"]:::llm --> ARB["Arbiter — GUARDRAIL<br/>deterministic · final say"]:::guard --> PF["Post-Filter — GUARDRAIL<br/>strip uncited hardware numbers"]:::guard
+        ACT["Actor<br/>generate answer"]:::llm --> CON["Answer-Contract verifier<br/>deterministic · checks shape"]:::guard --> PF["Post-Filter — GUARDRAIL<br/>strip uncited hardware numbers"]:::guard
     end
-    PURP -->|"grounding context injected"| ACT
+    ORCH -->|"mentor turn · grounding injected"| ACT
     DB -.->|cited allowlist| PF
-    TRUTH -.->|feasibility + cost verdict| ARB
+    TRUTH -.->|feasibility + cost verdict| CON
     PF -->|filtered, cited prose| user
-    ARB -->|hard fail → discard LLM text| user
+    CON -->|shape wrong → Actor regenerates| ACT
 
     classDef door fill:#e3f2fd,stroke:#1565c0,color:#0d3b66;
     classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
@@ -214,17 +261,79 @@ flowchart TB
     classDef llm fill:#fce4ec,stroke:#c2185b,stroke-width:2px,stroke-dasharray:6 4,color:#7a1438;
 ```
 
-Full walk-through: **[docs/architecture.md](docs/architecture.md)** (includes *"What the Post-Filter
-Does and Does Not Do"*) and **[docs/architecture-flow.md](docs/architecture-flow.md)**.
+Full walk-through: **[docs/architecture.md](docs/architecture.md)** and
+**[docs/EAEDK-Technical-Documentation.pdf](docs/EAEDK-Technical-Documentation.pdf)**.
 
 ---
 
-## Validation logic — how a request becomes one verdict
+## Reasoning workflow — how the mentor actually thinks
 
-`eaedk validate <project> --intent "…"` runs **structural** checks and **behavioural intent**
-together, aggregating hardware failures and intent-feasibility into a single report. A hard failure
-anywhere — a rule FAIL, a memory overflow, or a missing peripheral — makes the whole project
-`NOT FEASIBLE`.
+The mentor answers **any** embedded / firmware question. There is no topic gate — Jetson, Yocto,
+career, RTOS, every platform. The board you selected is *context* only; it never restricts the
+subject.
+
+Every turn:
+
+1. **Term normalization** — typos and shorthand resolved before anything else.
+2. **Shape detection** — what does this question demand? (structure / decision / concept / debug / test / path / fact)
+3. **System prompt selection** — board-specific if a board is named; universal senior-engineer
+   prompt otherwise (covers Cortex-M, Linux-on-hardware, Yocto, Jetson, RTOS, drivers, career — everything).
+4. **Deterministic prefix** — feasibility banner + semantic-cost check injected, un-bypassable.
+5. **LLM call** (if enabled) → **Answer-Contract verifier** (checks shape, regenerates if wrong) → **Post-Filter** (strips uncited hardware numbers).
+
+```mermaid
+flowchart TD
+    Q["Any embedded / firmware question"]:::in
+
+    Q --> NORM["Term normalizer — no LLM<br/>typos + shorthand → canonical form"]:::core
+    NORM --> SHAPE["Shape detector — no LLM<br/>structure · decision · concept · debug · test · path · fact"]:::core
+
+    SHAPE --> SYS{"Board named<br/>in the question?"}:::dec
+    SYS -->|"yes — board-anchored"| BP["Board-specific system prompt<br/>capabilities · flash/RAM · peripherals"]:::frame
+    SYS -->|"no — general"| GP["Universal senior-engineer prompt<br/>Cortex-M · Linux · Yocto · Jetson · RTOS<br/>drivers · toolchains · career · all platforms"]:::frame
+
+    BP --> LEAD
+    GP --> LEAD
+    LEAD["Deterministic prefix — always, un-bypassable<br/>feasibility guard · semantic-cost check"]:::guard
+
+    LEAD --> OFF{"AI model on?"}:::dec
+    OFF -->|offline| AOFF["Grounded offline answer<br/>(deterministic backbone — no hallucination)"]:::ok
+    OFF -->|"use_llm=true"| ACT["Actor — LLM generates answer against shape"]:::llm
+    ACT --> CON["Answer-Contract verifier — deterministic<br/>checks shape · regenerates Actor on miss (max 2×)"]:::guard
+    CON --> PF["Post-Filter — strip uncited hardware numbers"]:::guard
+    PF --> ANS["Streamed answer → browser / CLI"]:::ok
+
+    classDef in fill:#ede7f6,stroke:#5e35b1,color:#311b92;
+    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
+    classDef frame fill:#e0f7fa,stroke:#00838f,color:#004d54;
+    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#7a3b00;
+    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-dasharray:6 4,color:#7a1438;
+    classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b4d2e;
+    classDef dec fill:#fffde7,stroke:#f9a825,color:#7a5b00;
+```
+
+---
+
+## Sample interactions
+
+| You ask | What you get |
+|---|---|
+| *"How do I start with Nvidia Jetson?"* | JetPack SDK, GPIO via libgpiod, CUDA, camera pipeline — no board default substituted. |
+| *"When should I use Yocto vs Buildroot?"* | Decision criteria: project lifetime, team size, BSP complexity, CI footprint. Both compared side-by-side. |
+| *"Should I learn Zephyr or FreeRTOS?"* | Decision criteria — when each wins, per-task RAM cost, how to decide. Not "start with blink." |
+| *"I want to become a firmware engineer — where do I start?"* | Ordered learning path: blink → UART → SPI → interrupts → RTOS → bootloader → Linux drivers. |
+| *"What is SPI?"* | Hardware consequence first (what breaks without it), then what to check next. |
+| *"My code crashed with HardFault_Handler"* | Asks for CFSR/HFSR registers + faulting address. Routes to a deterministic proof-path. |
+| *"Give me a folder structure for a Zephyr application"* | A real directory tree (detected as `concrete_structure` — verified by the Answer-Contract). |
+| *"What project should I build with the WIZnet-W5500?"* | Board-specific: TCP echo server → HTTP → MQTT. Guided by the board's actual peripherals. |
+
+---
+
+## Validation logic
+
+`eaedk validate <project>` runs **structural** checks and **behavioural intent** together,
+aggregating hardware failures and intent-feasibility into one report. A hard failure anywhere
+makes the whole project `NOT FEASIBLE`.
 
 ```mermaid
 flowchart TD
@@ -259,100 +368,23 @@ flowchart TD
 
 ---
 
-## Reasoning workflow — how the mentor actually thinks
-
-The mentor answers **any** embedded / firmware question. There is no topic gate that declines
-Jetson, Yocto, career, or anything else in the field. The board you selected is only *context* —
-it enriches the answer, never restricts the subject.
-
-Every turn goes through the same pipeline:
-
-1. **Deterministic detectors (no LLM)** — read role (PEER / ARCHITECT / SPONSOR), topic
-   (engineering decision), domain (robotics / sensor / IoT), concept (HardFault, vector table…).
-2. **System prompt selection** — board-specific prompt if the user named a board; otherwise a
-   universal senior-engineer prompt covering the full embedded field (Cortex-M, Linux-on-hardware,
-   Yocto, Nvidia Jetson, Raspberry Pi, RTOS, drivers, toolchains, career — everything).
-3. **Un-bypassable grounding** — feasibility banner + semantic-cost check injected before the model.
-4. **LLM call** (if enabled) → **Arbiter** (deterministic, final say) → **Post-Filter** (strips
-   uncited hardware numbers).
-
-```mermaid
-flowchart TD
-    Q["Any embedded / firmware question<br/>(web chat · CLI · Mentor page)"]:::in
-
-    Q --> DET["Deterministic detectors — no LLM<br/>role · topic · domain · concept"]:::core
-
-    DET --> SYS{"Board named<br/>in the question?"}:::dec
-    SYS -->|"yes — board-anchored"| BP["Board-specific system prompt<br/>capabilities · flash/RAM · peripherals"]:::frame
-    SYS -->|"no — general"| GP["Universal senior-engineer prompt<br/>Cortex-M · Linux · Yocto · Jetson · RTOS<br/>drivers · toolchains · career · all platforms"]:::frame
-
-    BP --> LEAD
-    GP --> LEAD
-    LEAD["Deterministic prefix — always, un-bypassable<br/>feasibility guard · semantic-cost check"]:::guard
-
-    LEAD --> OFF{"AI model on?"}:::dec
-    OFF -->|offline| AOFF["deterministic backbone answer<br/>(grounded, no hallucination)"]:::ok
-    OFF -->|"use_llm=true"| ACT["Actor — LLM elaborates the answer"]:::llm
-    ACT --> CRIT["Critic — self-review"]:::llm
-    CRIT --> ARB["Arbiter — GUARDRAIL · deterministic · final say<br/>discards LLM text on a hard fail"]:::guard
-    ARB --> PF["Post-Filter — strip uncited hardware numbers"]:::guard
-    PF --> ANS["Full answer — streamed to browser / CLI"]:::ok
-
-    classDef in fill:#ede7f6,stroke:#5e35b1,color:#311b92;
-    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
-    classDef frame fill:#e0f7fa,stroke:#00838f,color:#004d54;
-    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#7a3b00;
-    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-dasharray:6 4,color:#7a1438;
-    classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b4d2e;
-    classDef dec fill:#fffde7,stroke:#f9a825,color:#7a5b00;
-```
-
-The reasoning framework lives as curated Python data (`reasoning.py`), so the *thinking* holds
-fully offline — an air-gapped mentor still teaches, not just plays back a stored answer. See
-[docs/27-reasoning-framework.md](docs/27-reasoning-framework.md).
-
-## Sample interactions you can expect
-
-The selected board is always *context*, never a constraint on the subject. EAEDK answers the
-question you actually asked — whether it names a board or not.
-(Try them: Mentor page in `eaedk web`, or `eaedk mentor --board bluepill --ask "…" --llm`.)
-
-| You ask | What you get |
-|---|---|
-| *"How do I start with Nvidia Jetson?"* | A complete Jetson-specific answer: JetPack SDK, GPIO via libgpiod, CUDA, camera pipeline — no board default substituted. |
-| *"When should I use Yocto vs Buildroot?"* | Decision criteria: project lifetime, team size, BSP complexity, CI footprint. Both compared side-by-side with trade-offs. |
-| *"Should I learn Zephyr or FreeRTOS?"* | The RTOS-vs-super-loop **decision criteria** — when each wins, per-task RAM cost, how to decide. Not "start with blink." |
-| *"I want to become a firmware engineer — where do I start?"* | An ordered learning **path**: blink → UART → SPI → interrupts → RTOS → bootloader → Linux drivers — each step with *why it comes before the next*. |
-| *"What is SPI?"* | Teaches with the **framework**: what it is, why it exists, when to use it vs I2C, how an engineer decides, and the next step to try. |
-| *"My code crashed with HardFault_Handler"* | Teaches what HardFault is, asks for CFSR/HFSR registers and the faulting address — diagnosis, not a generic "check your code" answer. |
-| *"What project should I build with the WIZnet-W5500?"* | Board-specific answer: the W5500 is an Ethernet controller — start with a TCP echo server, then HTTP, then MQTT. Guided by the board's actual peripherals. |
-
 ## The guardrails the LLM cannot bypass
 
-1. **Validation Engine (input guard).** 23 pure-function rules return `PASS / FAIL / UNKNOWN` over
-   typed board data — flash/RAM capacity, VTOR placement, partition fitment, DDR timing, power
-   sequencing, pin-mux conflicts, secure-boot, **supply voltage vs the board minimum**, and more —
-   plus a **Toolchain Engine** that makes the build environment first-class. `UNKNOWN` is a hard
-   blocker, not a soft pass. Infeasible designs never get recommended.
-2. **Semantic Intent + behavioural hazards.** A curated, citation-backed cost table turns *"I want
-   gRPC / TLS / an AI gesture model"* into concrete flash/RAM ranges, checks them against the board,
-   **and verifies the board even has the required peripheral** (a network protocol on a board with
-   no NIC is a hard FAIL regardless of memory). Ten data-driven risk rules cover flash endurance,
-   ISR timing deadlines, power budget, and ISR-context stack — invisible to a pure capacity checker.
-3. **Actor-Critic-Arbiter + Post-Filter (output guard).** The LLM proposes (Actor) and reviews
-   itself (Critic), then a **deterministic Arbiter** with the Validation Engine and cost table has
-   the final say — it discards convincing-but-wrong answers ("you can run gRPC on a Blue Pill with
-   optimization" → overridden, with the math). The Post-Filter then strips any hex/size/clock/timing
-   not in the SQLite-cited allowlist.
-
-See **[docs/architecture.md](docs/architecture.md)** for the trust-boundary read-through.
+1. **Validation Engine (input guard).** 23 pure-function rules return `PASS / FAIL / UNKNOWN` —
+   flash/RAM capacity, VTOR placement, partition fitment, DDR timing, power sequencing, pin-mux
+   conflicts, secure-boot, supply voltage, and more. `UNKNOWN` is a hard blocker. Infeasible
+   designs never get recommended.
+2. **Semantic Intent + behavioural hazards.** A cost table turns *"I want gRPC / TLS / a TFLite
+   model"* into concrete flash/RAM ranges, checks them against the board, and verifies the board
+   has the required peripheral. Ten risk rules cover flash endurance, ISR timing deadlines, power
+   budget, and ISR-context stack.
+3. **Answer-Contract verifier + Post-Filter (output guard).** The LLM generates; the
+   deterministic verifier checks the answer's shape and regenerates if wrong. The Post-Filter
+   strips any hex/size/clock/timing not in the SQLite-cited allowlist.
 
 ---
 
 ## The bring-up chain
-
-A complete, auditable workflow — every step writes through one fact layer with structured
-provenance, no raw SQL:
 
 ```
 board add ─► project init ─► validate / risk ─► log analyze ─► risk resolve ─► export
@@ -360,98 +392,29 @@ board add ─► project init ─► validate / risk ─► log analyze ─► r
             assess @ min-0)    PASS/FAIL/UNK)     cited triage)   provenance)    when feasible)
 ```
 
-The standout capability: **project-aware log triage** — a vague U-Boot hang with no smoking gun is
-correlated against the project's *own* unverified gaps and triaged to a specific architectural
-assumption, then written back as a tracked risk with zero manual correlation. The LLM proposes; the
-deterministic layer decides and records.
-
-## Watch the demo
-
-[![asciicast](https://asciinema.org/a/w1gmp5g7DxaZMPnR.svg)](https://asciinema.org/a/w1gmp5g7DxaZMPnR)
-
-The **complete chain** on an STM32F103, in one run: onboard the board → ingest its datasheet (cited
-facts you confirm) → start a bare-metal project → check the build environment → validate
-deterministically → export real build files → feed a **HardFault crash log** and watch EAEDK match
-the fault and teach what to check — without ever guessing a hardware value.
-
 ## Commands
 
 ```bash
-# Beginner mentor layer
-eaedk board capabilities --board <name>          # plain-language capabilities + what can/can't be validated
-eaedk mentor --board <name> --level 0            # first project + next 3, in dependency order, with failure modes
-eaedk roadmap --board <name> [--board <b2>] --goal firmware-job   # job-focused dependency graph, multi-board
+# Mentor / learning
+eaedk board capabilities --board <name>              # plain-language capabilities
+eaedk mentor --board <name> --level 0                # first project + next 3, in dependency order
+eaedk roadmap --board <name> --goal firmware-job     # job-focused path, multi-board
+eaedk mentor --board <name> --ask "question" --llm   # AI answer for any embedded question
 
-# Validation (structural + behavioural intent, one report)
-eaedk validate <project>                         # cited PASS/FAIL/UNKNOWN + Facts/Assumptions/Unknowns
-eaedk validate <project> --intent "mqtt freertos"  # ALSO costs the intent + checks peripherals — one verdict
-eaedk validate --board <name> --intent "grpc tls"  # quick stand-alone intent feasibility (shows the math)
+# Validation
+eaedk validate <project>                             # cited PASS/FAIL/UNKNOWN
+eaedk validate <project> --intent "mqtt freertos"    # + intent costing + peripheral checks
+eaedk validate --board <name> --intent "grpc tls"    # quick stand-alone intent feasibility
 
-# Build environment, onboarding, triage, export
-eaedk toolchain detect | validate --project <p>  # inventory + cross-check tools vs board arch + goal
-eaedk board add --interactive                    # guided onboarding: live fitment + VTOR checks + cited facts
-eaedk ingest --file ds.pdf --board <b> [--review]  # cited fact candidates from a datasheet PDF (human-in-the-loop)
-eaedk project init                               # guided: name, board, goal -> auto-template + immediate assess
-eaedk log analyze --file <log> --project <p> --project-aware --llm
+# Build, triage, export
+eaedk toolchain detect | validate --project <p>      # inventory + cross-check tools vs board
+eaedk board add --interactive                        # guided onboarding with live checks
+eaedk ingest --file ds.pdf --board <b> [--review]    # cited facts from a datasheet PDF
+eaedk project init                                   # name, board, goal → template + assess
+eaedk log analyze --file <log> --project <p> --llm   # boot log / crash triage
 eaedk risk show <p> | risk resolve <id> --note "…"
-eaedk export <project> [--out DIR]               # checklist + CMake scaffold + flash steps as real files
-eaedk mentor --board <name> --explain HardFault  # explain a concept (anchor offline; LLM opt-in)
+eaedk export <project> [--out DIR]                   # real build files when feasible
 ```
-
-Goal types / templates: `bare_metal_app` (the beginner's first project), `bootloader`, `uboot`,
-`linux`, `ota`, `driver`, plus custom (template-less) projects.
-
-## Design decisions that matter
-
-- **Local-first, offline-only.** One SQLite file; no per-token cost; works air-gapped. A small
-  local model's quality ceiling is *fine* precisely because it isn't the source of truth.
-- **Deterministic core, replaceable LLM.** Engines decide feasibility and risk; the LLM is a thin
-  convenience layer the Arbiter can overrule at any time.
-- **Honest about uncertainty.** Cost estimates are flagged `UNVERIFIED` until a human confirms them;
-  a board with any UNKNOWN core field can never be marked HIGH confidence; unrecognised inputs are
-  warned, not silently ignored; one unparseable rule degrades to UNKNOWN instead of crashing.
-
-## Layout
-
-```
-core/eaedk/
-  store/              SQLite + forward-only migrations (17)
-  engines/
-    validation/       23 pure-function rules (the trust core)
-    risk/             10 data-driven hazard rules over a sandboxed mini-DSL (no eval())
-    toolchain/        host detection + build-environment validation (with teach layer)
-    ingest/  logs/    datasheet PDF -> cited facts; format detection, signature matching, triage
-  semantic_cost.py    intent -> flash/RAM cost + peripheral prerequisites
-  mentor_beginner.py  capabilities / recommendation / roadmap (the beginner mentor layer)
-  arbiter.py          Actor-Critic-Arbiter — Validation Engine has the final say
-  llm/                gateway (Ollama) + post-filter + constrained prompts
-  orchestrator/       deterministic-first assembly of the fixed response schema (+ unified intent)
-  repo.py             one place for DB access + record_fact() write-through
-packages/             templates, 14 seed boards, risk rules, cost table, log signatures, eval cases
-docs/                 architecture, truth-layer, mentor-framework, reasoning topics
-```
-
-## Web UI — http://localhost:8080
-
-`pip install -e '.[web]'` → `eaedk web` → open **http://localhost:8080**
-
-Eight pages, one coherent workflow. Every page has a **"💬 Ask EAEDK"** floating button — ask why
-a check failed, what a build file does, or anything else about your board or project. Answers
-stream in word-by-word from the same mentor pipeline the CLI uses.
-
-| Page | What it does |
-|---|---|
-| **Boards** | Click any board → capabilities, learning path, architecture. Inline chat for project/getting-started questions (streams via mentor). |
-| **New Project** | Pick board + goal → instant feasibility check + risk list. Links directly to Validate and Export with the project pre-selected. |
-| **Validate** | Select a project → validation runs automatically. All 23 checks explained in plain English. One-click navigation to Export or Code Studio. |
-| **Code Studio** | Start from the generated template, edit, click Review. Engine confirms real bugs (RED); AI suggests improvements (YELLOW). Mark items done. |
-| **Export** | Generate real build files (CMake, linker script, START_HERE.md). Download as zip. Wokwi simulation files included for supported boards. |
-| **Log Analyzer** | Paste or drag a crash/boot log. Matches against 100+ known failure signatures. Optionally correlates with your project's open risks. |
-| **Datasheet** | Upload a datasheet PDF or paste text. EAEDK extracts cited facts, lists what's missing and where to find it, and shows risk warnings. |
-| **Mentor** | Full open-ended chat. Ask anything — Yocto, Jetson, career, RTOS, debugging, protocols — the model answers the actual question. |
-
-Pages are connected: creating a project on **New Project** takes you straight to **Validate** with
-it pre-selected. Validate links to **Export** and **Code Studio** with one click.
 
 ---
 
@@ -471,22 +434,42 @@ it pre-selected. Validate links to **Export** and **Code Studio** with one click
 
 ---
 
+## Project layout
+
+```
+core/eaedk/
+  store/              SQLite + forward-only migrations
+  engines/
+    validation/       23 pure-function rules (the trust core)
+    risk/             10 data-driven hazard rules over a sandboxed mini-DSL (no eval())
+    toolchain/        host detection + build-environment validation
+    ingest/  logs/    datasheet PDF → cited facts; signature matching + triage
+  answer_contract.py  shape detection + deterministic contract verification
+  semantic_cost.py    intent → flash/RAM cost + peripheral prerequisites
+  normalize.py        front-door term normalization (typos → canonical form)
+  mentor_beginner.py  capabilities / recommendation / roadmap (beginner mentor)
+  arbiter.py          feasibility arbiter — deterministic final say over LLM output
+  llm/                gateway (Ollama / OpenAI-compat) + think-strip + post-filter + prompts
+  orchestrator/       deterministic-first response assembly
+  repo.py             the only DB access layer + record_fact() write-through
+packages/             templates, 14 seed boards, risk rules, cost table, log signatures, eval cases
+docs/                 architecture, truth-layer, EAEDK-Technical-Documentation.pdf
+```
+
+---
+
 ## Status
 
-**380 pytests green, eval 20/20.** Tags `v0.1.0` → **`v4.0.0`**.
-
-The deterministic core (validation, risk, signatures, toolchain, semantic intent), a unified truth
-layer, the offline LLM with post-filter and the Actor-Critic-Arbiter loop, project-aware triage, the
-interactive onboarding chain, a feasibility-gated output engine that exports real build artifacts,
-and a full 8-page web UI with streaming mentor chat on every page. Recent milestones:
+**380 pytests green, eval 20/20.**
 
 | Tag | What shipped |
 |---|---|
-| `v2.7.0` | Trust-hardening: un-bypassable NOT-FEASIBLE guard, flash-endurance hazard + DSL grammar, validation key transparency |
-| `v3.0.0` | **Beginner mentor layer** (capabilities / recommendation / roadmap), **semantic intent translation**, behavioural hazards (timing / power / ISR stack), Actor-Critic-Arbiter |
-| `v3.1.0` | ML/AI intent costing, **unified `validate --intent` + project**, **peripheral prerequisites**, board-name auto-coercion, quantified mitigations |
+| `v2.7.0` | Trust-hardening: un-bypassable NOT-FEASIBLE guard, flash-endurance hazard, validation key transparency |
+| `v3.0.0` | Beginner mentor (capabilities / recommendation / roadmap), semantic intent, behavioural hazards, Actor-Critic-Arbiter |
+| `v3.1.0` | ML/AI intent costing, unified `validate --intent`, peripheral prerequisites, board-name auto-coercion |
 | `v3.1.1` | Risk-engine resilience (a bad rule degrades, never 500s the assessment) |
-| `v4.0.0` | **Open-answer mentor** — answers every embedded/firmware question (Jetson, Yocto, career, RTOS, all platforms); **full web UI** with streaming chat on all 8 pages; connected page navigation |
+| `v4.0.0` | **Open-answer mentor** — answers every embedded/firmware question; **full 8-page web UI** with streaming chat; connected page navigation |
+| `v4.1.0` | **Answer-shape contracts** — shape detection + deterministic verification + Actor regeneration; `deepseek-r1:8b` default; reasoning-model `<think>` strip; concrete-deliverable fast path; front-door term normalization |
 
 ```bash
 PYTHONPATH=core python3 -m pytest -q        # 380 passed

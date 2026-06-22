@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eaedk"
-version = "4.0.0"
+version = "4.1.0"
 description = "Embedded AI Engineering Development Kit — local-first structured engineering reasoning for embedded bring-up"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,6 +18,10 @@ ingest = ["pymupdf>=1.23"]
 # Web UI (`eaedk web`) — a thin FastAPI skin over the same engine the CLI uses. Optional and
 # lazily imported; the CLI runs without it.
 web = ["fastapi>=0.100", "uvicorn>=0.23"]
+# Full install — web UI + datasheet ingestion. The LLM layer (Ollama / any OpenAI-compatible
+# endpoint) uses Python's stdlib urllib and adds no extra pip dependency; install Ollama
+# separately at https://ollama.com and pull a model (see README "Pick your model").
+full = ["fastapi>=0.100", "uvicorn>=0.23", "pymupdf>=1.23"]
 
 [project.scripts]
 eaedk = "eaedk.cli:main"
