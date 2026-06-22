@@ -1281,11 +1281,24 @@ def _voice_proof_path(state, board_name: str, use_llm: bool, gateway: Gateway | 
 # explanation from a verified fact packet, in the context of the whole conversation (multi-turn), and
 # offers follow-up moves. The verifier blocks invented board facts; offline / unsafe falls back to the
 # deterministic render so it never dead-ends. Teaching model is capable by default (the 3B can't teach).
-# CAVEAT (docs/35): the default 8B local model may DRIFT — the same concrete question can be answered
-# cleanly one run and slide into a trade-off discussion the next. The relevance critic nudges it but a
-# small model doesn't always comply. A stronger mentor model is recommended for production answers
-# (set EAEDK_MENTOR_MODEL). The deterministic guardrails hold regardless of model.
-_MENTOR_MODEL = os.environ.get("EAEDK_MENTOR_MODEL", "llama3.1:8b")
+# Default is the local reasoning model deepseek-r1:8b — it gives richer, better-reasoned answers than
+# llama3.1:8b and, being a reasoning model, skips the slow LLM critic chain below (see
+# _is_reasoning_model). Override with EAEDK_MENTOR_MODEL. The deterministic guardrails hold regardless
+# of model. If deepseek-r1:8b isn't pulled, available() is False and the mentor returns its grounded
+# offline reference (run `ollama pull deepseek-r1:8b`, or set EAEDK_MENTOR_MODEL to a model you have).
+_MENTOR_MODEL = os.environ.get("EAEDK_MENTOR_MODEL", "deepseek-r1:8b")
+
+
+# Reasoning models (DeepSeek-R1, QwQ, o1-style) think internally before answering, so the extra LLM
+# critic passes are both redundant and very slow — on this hardware the self-review pass alone took
+# ~90s. For these models we run a single Actor pass and rely on the deterministic verifiers
+# (post-filter, conceptual guards, arbiter) that run regardless of model.
+_REASONING_HINTS = ("r1", "reasoning", "qwq", "o1", "o3", "thinking", "-think")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    m = (model or "").lower()
+    return any(h in m for h in _REASONING_HINTS)
 
 
 def _mentor_provider():
@@ -1654,8 +1667,9 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     # "rewrite it to be correct" corrupts a good tree into prose (the exact "doesn't answer the
     # question" defect — see docs/35), so they ship the Actor's words unchanged. The post-filter,
     # conceptual guards and arbiter BELOW still verify every shape, so skipping the critics costs no
-    # safety.
-    if contract.soft_critics:
+    # safety. A REASONING model (R1/QwQ/o1) already self-reviews internally, and each extra pass thinks
+    # first (~90s here) — so we skip the critic chain for it entirely and keep only the Actor pass.
+    if contract.soft_critics and not _is_reasoning_model(getattr(gw.provider, "model", "")):
         # Critic pass — the model reviews its own answer (P4).
         critiqued = arbiter.critic_review(gw, system, raw, grounding)
         # Bounded why-critic (Step 4): for an UNCOVERED fault (no proof pattern matched — those return

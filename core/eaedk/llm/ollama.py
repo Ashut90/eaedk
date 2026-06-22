@@ -11,6 +11,8 @@ import os
 import urllib.error
 import urllib.request
 
+from .think import strip_think
+
 DEFAULT_MODEL = "qwen2.5-coder:3b"
 DEFAULT_HOST = "http://localhost:11434"
 DEFAULT_TIMEOUT = 120.0
@@ -52,4 +54,4 @@ class OllamaProvider:
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
-        return data.get("response", "").strip()
+        return strip_think(data.get("response", ""))
