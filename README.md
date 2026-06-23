@@ -216,23 +216,25 @@ Answer-Contract verifier → **Post-Filter** pipeline.
 
 ```mermaid
 flowchart TB
-    user([Engineer / Beginner])
-    CLI["CLI - eaedk ..."]:::door
-    WEB["Web UI - localhost:8080"]:::door
-    user --> CLI
-    user --> WEB
+    User[Engineer / Beginner]
+    CLI[CLI - eaedk commands]
+    WEB[Web UI - localhost 8080]
+    ORCH[Orchestrator]
+
+    User --> CLI
+    User --> WEB
     CLI --> ORCH
     WEB --> ORCH
-    ORCH["Orchestrator\ndeterministic-first assembly, one unified verdict"]:::core
 
-    subgraph TRUTH["DETERMINISTIC TRUTH BOUNDARY - offline, local SQLite"]
-        VAL["Validation Engine - GUARDRAIL\n23 pure rules: PASS / FAIL / UNKNOWN"]:::guard
-        RISK["Risk Engine\n10 hazard rules, sandboxed DSL"]:::core
-        SEM["Semantic Intent\ncost table + peripheral prerequisites"]:::core
-        TOOL["Toolchain Engine\nbuild-environment as a first-class check"]:::core
-        MENT["Beginner Mentor\ncapabilities, recommendation, roadmap"]:::core
-        DB[("Truth DB\nfacts, boards, citations, provenance")]:::db
+    subgraph Core[DETERMINISTIC CORE - offline SQLite]
+        VAL[Validation Engine - 23 pure rules - PASS FAIL UNKNOWN]
+        RISK[Risk Engine - 10 hazard rules]
+        SEM[Semantic Intent - cost + peripheral check]
+        TOOL[Toolchain Engine]
+        MENT[Beginner Mentor - capabilities and roadmap]
+        DB[(SQLite - facts boards citations)]
     end
+
     ORCH --> VAL
     ORCH --> RISK
     ORCH --> SEM
@@ -243,22 +245,17 @@ flowchart TB
     SEM --> DB
     MENT --> DB
 
-    subgraph OUT["LLM - OUTSIDE the boundary, explains only"]
-        ACT["Actor\nLLM generates answer"]:::llm
-        CON["Answer-Contract verifier\ndeterministic, checks shape\nregenerates Actor on miss"]:::guard
-        PF["Post-Filter - GUARDRAIL\nstrip uncited hardware numbers"]:::guard
+    subgraph LLM[LLM LAYER - outside the boundary]
+        ACT[Actor - LLM generates answer]
+        CON[Answer-Contract Verifier - checks shape]
+        PF[Post-Filter - strips uncited hardware numbers]
         ACT --> CON --> PF
     end
-    ORCH -->|mentor turn, grounding injected| ACT
-    DB -.->|cited allowlist| PF
-    TRUTH -.->|feasibility + cost verdict| CON
-    PF -->|filtered, cited prose| user
 
-    classDef door fill:#e3f2fd,stroke:#1565c0,color:#0d3b66;
-    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
-    classDef db fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
-    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:3px,color:#7a3b00;
-    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-width:2px,stroke-dasharray:6 4,color:#7a1438;
+    ORCH -->|mentor turn - grounding injected| ACT
+    DB -.->|cited allowlist| PF
+    Core -.->|feasibility verdict| CON
+    PF -->|cited answer| User
 ```
 
 Full walk-through: **[docs/architecture.md](docs/architecture.md)** and
@@ -283,33 +280,25 @@ Every turn:
 
 ```mermaid
 flowchart TD
-    Q["Any embedded / firmware question"]:::in
+    Q[Any embedded or firmware question]
 
-    Q --> NORM["Term normalizer - no LLM\ntypos and shorthand resolved"]:::core
-    NORM --> SHAPE["Shape detector - no LLM\nstructure / decision / concept / debug / test / path / fact"]:::core
+    Q --> NORM[Term normalizer - typos and shorthand resolved]
+    NORM --> SHAPE[Shape detector - structure / decision / concept / debug / test / path / fact]
 
-    SHAPE --> SYS{"Board named\nin the question?"}:::dec
-    SYS -->|yes - board-anchored| BP["Board-specific system prompt\ncapabilities, flash/RAM, peripherals"]:::frame
-    SYS -->|no - general| GP["Universal senior-engineer prompt\nCortex-M, Linux, Yocto, Jetson, RTOS\ndrivers, toolchains, career, all platforms"]:::frame
+    SHAPE --> SYS{Board named in the question?}
+    SYS -->|yes| BP[Board-specific prompt - capabilities and memory]
+    SYS -->|no| GP[Universal senior-engineer prompt - all platforms]
 
     BP --> LEAD
     GP --> LEAD
-    LEAD["Deterministic prefix - always injected\nfeasibility guard, semantic-cost check"]:::guard
+    LEAD[Deterministic prefix - feasibility guard always injected]
 
-    LEAD --> OFF{"AI model on?"}:::dec
-    OFF -->|offline| AOFF["Grounded offline answer\ndeterministic backbone, no hallucination"]:::ok
-    OFF -->|use_llm=true| ACT["Actor - LLM generates answer against shape"]:::llm
-    ACT --> CON["Answer-Contract verifier - deterministic\nchecks shape, regenerates Actor on miss"]:::guard
-    CON --> PF["Post-Filter - strip uncited hardware numbers"]:::guard
-    PF --> ANS["Streamed answer to browser or CLI"]:::ok
-
-    classDef in fill:#ede7f6,stroke:#5e35b1,color:#311b92;
-    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
-    classDef frame fill:#e0f7fa,stroke:#00838f,color:#004d54;
-    classDef guard fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#7a3b00;
-    classDef llm fill:#fce4ec,stroke:#c2185b,stroke-dasharray:6 4,color:#7a1438;
-    classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b4d2e;
-    classDef dec fill:#fffde7,stroke:#f9a825,color:#7a5b00;
+    LEAD --> OFF{AI model enabled?}
+    OFF -->|offline| AOFF[Grounded offline answer - no hallucination]
+    OFF -->|use_llm=true| ACT[Actor - LLM generates answer]
+    ACT --> CON[Answer-Contract Verifier - checks shape - regenerates on miss]
+    CON --> PF[Post-Filter - strips uncited hardware numbers]
+    PF --> ANS[Answer streamed to browser or CLI]
 ```
 
 ---
@@ -337,33 +326,27 @@ makes the whole project `NOT FEASIBLE`.
 
 ```mermaid
 flowchart TD
-    IN["Project inputs\n(+ optional intent flag)"]:::in --> CTX["build_context\nboard facts + inputs + goal defaults"]:::core
+    IN[Project inputs plus optional intent] --> CTX[Build context - board facts and inputs]
 
-    CTX --> VAL{"Validation rules\n23 pure functions"}:::core
-    VAL -->|any FAIL| FAIL["NOT FEASIBLE"]:::fail
-    VAL -->|engaged UNKNOWN| BLK["BLOCKED - needs info\nnames the missing keys"]:::warn
+    CTX --> VAL{23 Validation rules}
+    VAL -->|any FAIL| FAIL[NOT FEASIBLE]
+    VAL -->|engaged UNKNOWN| BLK[BLOCKED - names the missing keys]
     VAL -->|pass| RISK
 
-    CTX --> RISK{"Risk rules\ntiming, power, flash, ISR stack"}:::core
-    RISK -->|HIGH or MEDIUM| WARN["Hazards + quantified fixes"]:::warn
+    CTX --> RISK{Risk rules - timing power flash ISR}
+    RISK -->|HIGH or MEDIUM| WARN[Hazards with quantified fixes]
 
-    CTX --> SEM{"Semantic intent\nmqtt, grpc, tflite, etc"}:::core
-    SEM -->|min cost exceeds flash/RAM| FAIL
-    SEM -->|requires peripheral the board lacks| FAIL
-    SEM -->|fits + peripheral present| OK
-    RISK --> OK["FEASIBLE"]:::ok
+    CTX --> SEM{Semantic intent check}
+    SEM -->|cost exceeds flash or RAM| FAIL
+    SEM -->|required peripheral missing| FAIL
+    SEM -->|fits and peripheral present| OK
+
+    RISK --> OK[FEASIBLE]
     WARN --> OK
 
-    FAIL --> REP["Unified report\none aggregated verdict + next step"]:::rep
+    FAIL --> REP[Unified report - one verdict and next step]
     BLK --> REP
     OK --> REP
-
-    classDef in fill:#ede7f6,stroke:#5e35b1,color:#311b92;
-    classDef core fill:#e8f5e9,stroke:#2e7d32,color:#1b4d2e;
-    classDef ok fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b4d2e;
-    classDef warn fill:#fff8e1,stroke:#f9a825,color:#7a5b00;
-    classDef fail fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#7a1414;
-    classDef rep fill:#e1f5fe,stroke:#0277bd,color:#013a52;
 ```
 
 ---
