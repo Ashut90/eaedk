@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EAEDK — Bug Hunter</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+  <script src="chat-widget.js" defer></script>
+</head>
+<body>
+  <nav class="top"></nav>
+  <main>
+    <h1>Bug Hunter</h1>
+    <p class="sub">Point EAEDK at your firmware source directory and it will scan every
+      <code>.c</code> / <code>.h</code> / <code>.cpp</code> file for common embedded
+      pitfalls — ISR safety, HAL misuse, stack overflows, heap fragmentation, and more.
+      Fully offline, no AI required.</p>
+
+    <div class="card">
+      <label for="fwpath">Firmware source path</label>
+      <input id="fwpath" type="text" placeholder="/home/you/myproject/Core/Src" style="font-family:monospace">
+
+      <label for="maxfiles" style="margin-top:10px">Max files to scan</label>
+      <input id="maxfiles" type="number" value="500" min="1" max="5000" style="width:120px">
+
+      <button id="run" style="margin-top:12px">Hunt Bugs</button>
+    </div>
+
+    <div id="result"></div>
+  </main>
+
+  <script>
+    function sevBadge(s) {
+      const col = s === "HIGH" ? "RED" : s === "MEDIUM" ? "YELLOW" : "GREEN";
+      return badge(s, col);
+    }
+
+    function ruleLabel(key) {
+      return key.replace(/_/g, " ").toLowerCase()
+                .replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    async function run() {
+      const path = document.getElementById("fwpath").value.trim();
+      const maxFiles = parseInt(document.getElementById("maxfiles").value) || 500;
+      const el = document.getElementById("result");
+      if (!path) { el.innerHTML = `<p class="kv" style="color:var(--red)">Enter a path first.</p>`; return; }
+
+      showCommand(`eaedk bughunt ${path}`);
+      el.innerHTML = `<p class="kv">Scanning…</p>`;
+
+      const r = await api("/api/bughunt", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ path, max_files: maxFiles })
+      });
+
+      if (r.error) { showError(el, r); return; }
+
+      const { summary, findings, files_scanned } = r;
+      let html = `
+        <div class="card" style="margin-bottom:12px">
+          <div style="display:flex;gap:24px;flex-wrap:wrap;align-items:center">
+            <span><b>${files_scanned}</b> file(s) scanned</span>
+            <span>${badge(summary.total + " total", summary.total ? "RED" : "GREEN")}</span>
+            <span>${badge(summary.HIGH + " HIGH",   summary.HIGH   ? "RED"    : "GREEN")}</span>
+            <span>${badge(summary.MEDIUM + " MEDIUM", summary.MEDIUM ? "YELLOW" : "GREEN")}</span>
+            <span>${badge(summary.LOW + " LOW",    "GREY")}</span>
+            <span style="color:var(--muted);font-size:0.85em">${summary.code || 0} code safety · ${summary.behavioral || 0} silent behavior</span>
+          </div>
+        </div>`;
+
+      if (!findings || findings.length === 0) {
+        html += `<div class="note">No issues found. Good firmware hygiene!</div>`;
+        el.innerHTML = html;
+        return;
+      }
+
+      function renderGroup(title, subtitle, groupFindings) {
+        if (!groupFindings.length) return "";
+        let out = `<h2>${title} <span style="font-size:0.75em;font-weight:400;color:var(--muted)">${subtitle}</span></h2>`;
+        for (const sev of ["HIGH", "MEDIUM", "LOW"]) {
+          const sevGroup = groupFindings.filter(f => f.severity === sev);
+          if (!sevGroup.length) continue;
+          out += `<h3 style="margin:14px 0 6px">${sevBadge(sev)} ${sev}</h3>`;
+          for (const f of sevGroup) {
+            const relFile = f.file.replace(/\\/g, "/").split("/").slice(-3).join("/");
+            out += `
+              <div class="card" style="margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+                  <b>${escapeHtml(ruleLabel(f.rule_key))}</b>
+                  <code style="font-size:0.82em;color:var(--muted)">${escapeHtml(relFile)}:${f.line_no}</code>
+                </div>
+                <div style="margin:6px 0">${escapeHtml(f.description)}</div>
+                <div class="teach"><b>Fix:</b> ${escapeHtml(f.fix)}</div>
+                ${f.snippet ? `<details><summary style="cursor:pointer;color:var(--muted);font-size:0.85em">Show line</summary>
+                  <pre class="code" style="margin-top:6px">${escapeHtml(f.snippet)}</pre></details>` : ""}
+              </div>`;
+          }
+        }
+        return out;
+      }
+
+      const codeFindings       = findings.filter(f => f.category !== "behavioral");
+      const behavioralFindings = findings.filter(f => f.category === "behavioral");
+
+      html += renderGroup(
+        "⚠ Code Safety Issues",
+        "crashes · overflows · ISR violations",
+        codeFindings
+      );
+
+      if (behavioralFindings.length) {
+        html += `<div style="margin-top:28px;padding-top:18px;border-top:2px solid var(--line)"></div>`;
+        html += renderGroup(
+          "🔍 Silent Behavior Risks",
+          "device works but does the wrong thing — no error, no crash",
+          behavioralFindings
+        );
+      }
+
+      el.innerHTML = html;
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      showCommand("eaedk bughunt /path/to/firmware/src");
+      document.getElementById("run").addEventListener("click", run);
+      document.getElementById("fwpath").addEventListener("keydown", e => {
+        if (e.key === "Enter") run();
+      });
+
+      mountChat({
+        page_type: "bughunt",
+        requireBoard: false,
+        placeholder: "Ask about a warning, how to fix a bug, or what volatile means in embedded C…",
+        getContext: () => ({ board_name: null, project_name: null })
+      });
+    });
+  </script>
+</body>
+</html>

@@ -8,6 +8,7 @@ const PAGES = [
   ["studio.html",   "Code Studio"],
   ["ingest.html",   "Datasheet"],
   ["logs.html",     "Log Analyzer"],
+  ["bughunt.html",  "Bug Hunter"],
   ["mentor.html",   "Mentor"],
 ];
 

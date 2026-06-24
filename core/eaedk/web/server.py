@@ -654,5 +654,17 @@ async def api_studio_complete(request: Request):
             "complete": s["complete"], "total": s["total"]}
 
 
+@app.post("/api/bughunt")
+async def api_bughunt(request: Request):
+    from ..engines.bughunt import scan_directory
+    body = await request.json()
+    path = (body.get("path") or "").strip()
+    max_files = int(body.get("max_files") or 500)
+    if not path:
+        return _err("path is required.", "Enter the path to your firmware source directory.")
+    result = await asyncio.to_thread(scan_directory, path, max_files=max_files)
+    return result.to_dict()
+
+
 # --- static (mounted last so /api and / win) -------------------------------
 app.mount("/static", StaticFiles(directory=str(_STATIC), html=True), name="static")

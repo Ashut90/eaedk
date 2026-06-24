@@ -555,6 +555,18 @@ def cmd_explain(args):
 
 # --- eval ------------------------------------------------------------------
 
+def cmd_bughunt(args):
+    from .engines.bughunt import scan_directory
+    result = scan_directory(args.path, max_files=args.max_files)
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, default=str))
+        return
+    s = result.summary
+    print(result.to_markdown())
+    if s["total"] == 0:
+        print("No issues found.")
+
+
 def cmd_log_analyze(args):
     conn = _conn(args)
     from .engines.logs import analyze_log
@@ -1074,6 +1086,13 @@ def build_parser() -> argparse.ArgumentParser:
     la.add_argument("--project-aware", dest="project_aware", action="store_true",
                     help="enrich LLM triage with project validation gaps + unverified facts")
     _add_llm(la); la.set_defaults(func=cmd_log_analyze)
+
+    bh = sub.add_parser("bughunt",
+                         help="scan firmware C/C++ source for common embedded bug patterns")
+    bh.add_argument("path", help="path to a firmware source directory or single .c/.h file")
+    bh.add_argument("--max-files", type=int, default=500, dest="max_files",
+                    help="stop after scanning this many files (default 500)")
+    _add_json(bh); bh.set_defaults(func=cmd_bughunt)
 
     return p
 
