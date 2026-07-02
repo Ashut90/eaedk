@@ -213,6 +213,46 @@ async def api_ingest(request: Request):
     return {"board": board, "report": intelligence_report(conn, board)}
 
 
+@app.post("/api/ingest/digest")
+async def api_ingest_digest(request: Request):
+    """Read the WHOLE datasheet and return a grounded 'what to remember' digest (board-agnostic).
+    Deterministic scan of every page + one grounded model synthesis when use_llm is set."""
+    import base64
+    import tempfile
+    from ..engines.ingest.pdf import pdf_to_pages, PdfUnavailable
+    from ..engines.ingest.extract import Page
+    from ..engines.ingest.digest import analyze, render
+    body = await request.json()
+    use_llm = bool(body.get("use_llm"))
+    title = (body.get("title") or "datasheet").strip()
+    try:
+        if body.get("pdf_base64"):
+            raw = base64.b64decode(body["pdf_base64"])
+            with tempfile.NamedTemporaryFile("wb", suffix=".pdf", delete=False) as f:
+                f.write(raw); tmp = f.name
+            try:
+                pages = pdf_to_pages(tmp)
+            finally:
+                Path(tmp).unlink(missing_ok=True)
+        elif body.get("text"):
+            pages = [Page(1, body["text"])]
+        else:
+            return _err("No datasheet provided.", "Upload a PDF or paste datasheet text, then Analyze.")
+    except PdfUnavailable as e:
+        return _err(str(e), "Install PyMuPDF (`pip install pymupdf`) to read PDFs.")
+    except Exception as e:
+        return _err(f"Couldn't read that datasheet ({e}).", "Make sure it's a real PDF or text.")
+    gw = None
+    if use_llm:
+        from ..llm.gateway import Gateway
+        from ..mentor_llm import _mentor_provider
+        gw = Gateway(provider=_mentor_provider())
+    dg = analyze(pages, title, gw)
+    return {"title": dg.title, "pages": dg.pages, "scanned_pages": dg.scanned_pages,
+            "verified": dg.verified, "peripherals": dg.peripherals,
+            "summary": dg.summary, "markdown": render(dg)}
+
+
 # --- Page 2: Project Setup -------------------------------------------------
 
 # Feasibility (engine) -> UI traffic light + plain-English label/explanation.

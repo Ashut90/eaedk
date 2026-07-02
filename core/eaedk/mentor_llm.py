@@ -1435,37 +1435,26 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
     board_anchored = (explicit_target is not None or bool(project)
                       or any(p in last_user.lower() for p in ("this board", "my board", "selected board")))
 
-    # With a LIVE model the model ANSWERS the question. The canned deflection routes below (learning-map
-    # orientation, broad-direction clarifiers) were the OFFLINE fallback — they must NOT preempt a
-    # working model. They were swallowing real questions: a Yocto/Wi-Fi structure question got a generic
-    # orientation page instead of the model's actual answer (which is excellent — same model in a plain
-    # terminal gives the full critical-points + folder tree). Grounding + the deterministic verifiers
-    # still wrap whatever the model produces.
-    gw = gateway or Gateway(provider=_mentor_provider())
-    note = _llm_or_note(use_llm, gw)
-    live_model = note is None
-
-    if route.mode == navigator.LEARNING_MAP:                  # learning-direction
-        # Curated conversational teach for communication systems keeps its bespoke LLM path.
-        if (route.learning_map is not None and route.learning_map.name == "communication_systems"
-                and use_llm):
-            return _teach_learning_map(conn, route.learning_map, messages, board_name, gateway)
-        if not live_model:                                   # offline → deterministic orientation map
-            if route.learning_map is not None:
-                return navigator.render_learning_map(conn, route.learning_map, board_name,
-                                                     explicit_target, last_user, board_anchored)
-            if not board_anchored:                           # foundation / career, board-less
-                return navigator.firmware_direction_map()
-            return render_purpose(conn, purpose, board_name, path, active_boards)
-        # live model → fall through and let it answer the actual question, grounded.
-    elif route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
+    if route.mode == navigator.LEARNING_MAP:                  # learning-direction → a route, not a dump
+        if route.learning_map is not None:
+            # Conversational mentor (docs/34) — ONE path so far: the LLM teaches from the verified
+            # packet, multi-turn; offline / unsafe falls back to the deterministic render below.
+            if route.learning_map.name == "communication_systems" and use_llm:
+                return _teach_learning_map(conn, route.learning_map, messages, board_name, gateway)
+            return navigator.render_learning_map(conn, route.learning_map, board_name,
+                                                 explicit_target, last_user, board_anchored)
+        # foundation / career: board-less → a board-INDEPENDENT firmware direction (no selected board)
+        if not board_anchored:
+            return navigator.firmware_direction_map()
+        return render_purpose(conn, purpose, board_name, path, active_boards)   # board-anchored career
+    if route.mode in (navigator.DECLINE, navigator.CLARIFY):  # out-of-scope / too-vague
         return render_purpose(conn, purpose, board_name, path, active_boards)
 
     # P2 — a board-LESS broad-direction question must NOT be answered as if it were about the selected
-    # board. Offline only: a domain question gets honest scoped uncertainty, a bare 'where do I start?'
-    # asks for the direction. With a live model we let it answer instead of deflecting.
+    # board: a domain question gets honest scoped uncertainty; a bare 'where do I start?' asks for the
+    # direction instead of dumping the selected board's blink roadmap.
     if (route.mode == navigator.TEACH and not board_anchored and concept is None
-            and navigator.is_broad_direction(last_user) and not live_model):
+            and navigator.is_broad_direction(last_user)):
         return navigator.scoped_uncertainty(last_user) if domain else navigator.direction_clarify()
     # DECISION_MAP (a seeded reasoning.Topic) and TEACH continue into the decision/teaching pipeline.
 
@@ -1568,7 +1557,10 @@ def mentor_chat(conn: sqlite3.Connection, board_name: str, messages: list[dict],
         head = f"For {board_name}, tell me what you want to do and I'll point you at the first step."
     backbone = f"{head}{_tt_block(try_this)}\n\n{question}"
 
-    # gw / note / live_model were computed above (before the deflection routes). Reuse them.
+    # Default the mentor to the capable mentor model, not the generic 3B default — a weak model recites
+    # the framework and ignores the question. EAEDK_MENTOR_MODEL overrides.
+    gw = gateway or Gateway(provider=_mentor_provider())
+    note = _llm_or_note(use_llm, gw)
     if note is not None:
         # Offline: no model to compose a tailored answer. Return the grounded deterministic reference
         # and SAY SO honestly — placed AFTER the head (so the feasibility banner in `lead` still comes
