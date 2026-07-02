@@ -667,6 +667,27 @@ def cmd_ingest(args):
             if r["snippet"]:
                 print(f"        “{r['snippet']}”")
         return
+    # Full-datasheet digest: read the WHOLE PDF, extract salient facts from every page, and (with
+    # --llm) synthesise a grounded "what to remember" briefing. Needs only --file (board-agnostic).
+    if args.digest:
+        if not args.file:
+            print("error: --digest needs --file <pdf>", file=sys.stderr); sys.exit(2)
+        from pathlib import Path
+        from .engines.ingest.pdf import pdf_to_pages, PdfUnavailable
+        from .engines.ingest.digest import analyze, render
+        try:
+            pages = pdf_to_pages(args.file)
+        except PdfUnavailable as e:
+            print(f"error: {e}", file=sys.stderr); sys.exit(2)
+        gw = None
+        if args.llm:
+            from .llm.gateway import Gateway
+            from .mentor_llm import _mentor_provider
+            gw = Gateway(provider=_mentor_provider())
+        dg = analyze(pages, Path(args.file).name, gw)
+        print(render(dg))
+        return
+
     # default action: ingest a PDF
     if not args.file or not args.board:
         print("error: ingest needs --file <pdf> --board <name> (or --review/--confirm/--reject)",
@@ -1054,6 +1075,9 @@ def build_parser() -> argparse.ArgumentParser:
     ing.add_argument("--confidence", choices=["HIGH", "MEDIUM", "LOW"])
     ing.add_argument("--analyze", action="store_true",
                      help="after ingest, print the full datasheet intelligence report")
+    ing.add_argument("--digest", action="store_true",
+                     help="read the WHOLE PDF and print a grounded 'what to remember' digest "
+                          "(needs only --file; add --llm for the synthesised briefing)")
     ing.add_argument("--arch", help="architecture for a new (unknown) board, e.g. arm-cortex-m4")
     _add_llm(ing); ing.set_defaults(func=cmd_ingest)
 
