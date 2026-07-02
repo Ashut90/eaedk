@@ -33,6 +33,10 @@
       <textarea id="text" class="mono" placeholder="Paste a page or two of the datasheet here if you don't have the PDF handy…"></textarea>
 
       <button id="analyze">Analyze datasheet</button>
+      <button id="digest">📖 Full digest — what to remember</button>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:8px">
+        <input type="checkbox" id="digest_llm" style="width:auto"> add AI briefing (experimental — the
+        grounded facts are the truth; the local model may still err)</label>
     </div>
 
     <div class="card">
@@ -78,6 +82,38 @@
     }
 
     let ANALYZED_BOARD = null;
+
+    // Minimal, safe markdown → HTML for the digest (headings, bullets, bold, italics). Escapes first.
+    function mdToHtml(md) {
+      const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      const out = []; let inList = false;
+      for (let raw of esc(md).split("\n")) {
+        let line = raw.replace(/\*\*(.+?)\*\*/g,"<strong>$1</strong>").replace(/_(.+?)_/g,"<em>$1</em>");
+        if (/^# /.test(line))        { if(inList){out.push("</ul>");inList=false} out.push(`<h2>${line.slice(2)}</h2>`); }
+        else if (/^## /.test(line))  { if(inList){out.push("</ul>");inList=false} out.push(`<h3>${line.slice(3)}</h3>`); }
+        else if (/^- /.test(line))   { if(!inList){out.push("<ul>");inList=true} out.push(`<li>${line.slice(2)}</li>`); }
+        else { if(inList){out.push("</ul>");inList=false} if(line.trim()) out.push(`<p>${line}</p>`); }
+      }
+      if (inList) out.push("</ul>");
+      return out.join("\n");
+    }
+
+    async function digest() {
+      const file = document.getElementById("pdf").files[0];
+      const text = document.getElementById("text").value.trim();
+      const useLlm = document.getElementById("digest_llm").checked;
+      const el = document.getElementById("report");
+      showCommand(`eaedk ingest --file <datasheet>.pdf --digest${useLlm ? " --llm" : ""}`);
+      if (!file && !text) { el.innerHTML = `<div class="note">Upload a PDF or paste datasheet text first.</div>`; return; }
+      el.innerHTML = `<p class="kv">Reading every page of the datasheet…${useLlm ? " (AI briefing adds ~1 min)" : ""}</p>`;
+      const payload = { use_llm: useLlm, title: file ? file.name : "datasheet" };
+      if (file) payload.pdf_base64 = await fileToBase64(file);
+      else payload.text = text;
+      const r = await api("/api/ingest/digest", { method: "POST",
+        headers: {"Content-Type":"application/json"}, body: JSON.stringify(payload) });
+      if (r.error) { showError(el, r); return; }
+      el.innerHTML = `<div class="card">${mdToHtml(r.markdown)}</div>`;
+    }
 
     async function analyze() {
       const file = document.getElementById("pdf").files[0];
@@ -178,6 +214,7 @@
     document.addEventListener("DOMContentLoaded", () => {
       init();
       document.getElementById("analyze").addEventListener("click", analyze);
+      document.getElementById("digest").addEventListener("click", digest);
       document.getElementById("ask").addEventListener("click", ask);
       document.getElementById("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
       mountChat({ page_type: "datasheet",

@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from .extract import Page, _is_heading, extract_from_pages
+from .extract import Page, extract_from_pages
 
 # ── Salient-line detectors (deterministic) ───────────────────────────────────────────────────────
 _UNIT = re.compile(
@@ -52,6 +52,29 @@ _CATS: tuple[tuple[str, re.Pattern], ...] = (
 _PERIPH = re.compile(r"\b(USART|UART|SPI|I2C|I²C|CAN|USB|OTG|ADC|DAC|DMA|TIM\d+|TIMER|PWM|RTC|GPIO|"
                      r"Ethernet|SDIO|QSPI|I2S|WWDG|IWDG|CRC|RNG|comparator|op-?amp|DFSDM)\b",
                      re.IGNORECASE)
+
+# Noise that must NOT be treated as a fact: table-of-contents dot leaders, figure/table captions, and
+# mojibake (garbled PDF extraction from figure/diagram pages).
+_DOTS = re.compile(r"\.\s*\.\s*\.")                        # "... ... ..." → a TOC / list-of-figures line
+_TOC_TAIL = re.compile(r"\.{2,}\s*\d{1,3}\s*$")           # "…………… 61"
+_FIGTAB = re.compile(r"^\s*(Figure|Table)\s+\d+\b", re.I)
+# A real section heading: numbered ("6.3.2 Absolute maximum ratings"), NOT an all-caps diagram label.
+_HEAD = re.compile(r"^\d+(?:\.\d+){0,3}\s+[A-Z][A-Za-z]")
+# Cross-references to OTHER parts — the source of the "described the F407 instead of the F411"
+# hallucination. Dropped from the facts so they never reach the model.
+_XREF = re.compile(r"\bcompatib|\bdrop-?in\b|replacement|feature compatible|belongs to the|"
+                   r"can be used as", re.I)
+
+
+def _is_noise(line: str) -> bool:
+    if _DOTS.search(line) or _TOC_TAIL.search(line) or _FIGTAB.match(line):
+        return True
+    good = sum(c.isalnum() or c.isspace() or c in ".,:;%()/-+°µΩ" for c in line)
+    return bool(line) and good / len(line) < 0.7          # mostly symbols/mojibake → figure soup
+
+
+def _heading(line: str) -> bool:
+    return bool(_HEAD.match(line)) and len(line) <= 80 and not _DOTS.search(line)
 
 
 def _clean(text: str) -> str:
@@ -105,11 +128,13 @@ def scan(pages: list[Page]) -> DatasheetDigest:
             continue
         scanned += 1
         for ln in _lines(p.text):
-            if _is_heading(ln) and len(sections) < 200:
+            if _is_noise(ln):
+                continue
+            if _heading(ln) and len(sections) < 200:
                 sections.append((ln, p.number))
             for m in _PERIPH.findall(ln):
                 periph.add(m.upper().replace("I²C", "I2C"))
-            if _salient(ln):
+            if _salient(ln) and not _XREF.search(ln):
                 key = re.sub(r"\s+", " ", ln.lower())[:90]
                 if key in seen:
                     continue
@@ -150,13 +175,27 @@ _SYNTH_SYSTEM = (
     "extracted VERBATIM from the datasheet, grouped by category, each with its page number. Write a "
     "tight, practical 'What to remember about this part' briefing.\n"
     "RULES:\n"
-    "- Use ONLY the facts given. Do NOT invent numbers, registers, peripherals, or limits.\n"
-    "- State the core/architecture ONLY if it appears in the facts. If the core is not in the facts, "
-    "write 'core: not stated in extracted facts' — NEVER guess it (do not assume Cortex-M4, etc.).\n"
+    "- This datasheet is about ONE specific part (named under PART). Describe ONLY that part. Datasheets "
+    "mention OTHER compatible parts — IGNORE them; their specs are NOT this chip.\n"
+    "- The VERIFIED SPECS are ground truth measured from THIS datasheet. NEVER state a number that "
+    "contradicts them (e.g. if verified flash is 512KB, do NOT write 1MB; if max clock is 100 MHz, do "
+    "NOT write 168 MHz).\n"
+    "- Use ONLY the facts given. Do NOT invent numbers, registers, peripherals, or limits. Do NOT recall "
+    "specs of similar chips from memory.\n"
+    "- State the core ONLY if it appears in the facts; if not, write 'core: not stated' — never guess.\n"
     "- Lead with identity + the headline specs (core, memory, max clock, supply/temp).\n"
     "- Call out the CAUTIONS / absolute-maximum / must-not items explicitly — those bite people.\n"
     "- Group under short headings; use bullets; cite the page like (p.42) when you state a number.\n"
     "- Be concise. This is what to remember, not a re-print of the datasheet.")
+
+
+def _part_id(dg: "DatasheetDigest") -> str:
+    """The best single part/identity line to lock the briefing onto."""
+    ids = dg.facts.get("Identity & core", [])
+    for line, _ in ids:
+        if re.search(r"cortex|\bmcu\b|\d+\s*(kb|kbyte|mb|dmips|mhz)", line, re.I) and len(line) < 130:
+            return line
+    return ids[0][0] if ids else dg.title
 
 
 def synthesise(dg: DatasheetDigest, gw, per_cat: int = 40, budget: int = 9000) -> str:
@@ -167,9 +206,11 @@ def synthesise(dg: DatasheetDigest, gw, per_cat: int = 40, budget: int = 9000) -
     block = _facts_block(dg, per_cat, budget)
     if not block.strip():
         return ""
-    ident = ", ".join(f"{v['value']}" for v in dg.verified[:4]) or "(no geometry auto-extracted)"
-    prompt = (f"CHIP FACTS (verified geometry: {ident}; peripherals seen: "
-              f"{', '.join(dg.peripherals) or 'none detected'}).\n"
+    verified = "; ".join(f"{v['key']}={v['value']} (p.{v['page']})" for v in dg.verified) \
+        or "none auto-extracted"
+    prompt = (f"PART (this datasheet is ONLY about this — describe nothing else): {_part_id(dg)}\n"
+              f"VERIFIED SPECS — AUTHORITATIVE, never contradict these:\n  {verified}\n"
+              f"Peripherals seen: {', '.join(dg.peripherals) or 'none detected'}\n\n"
               f"EXTRACTED DATASHEET FACTS:\n{block}\n\nWrite the 'What to remember' briefing:")
     try:
         return gw.provider.generate(_SYNTH_SYSTEM, prompt).strip()
@@ -184,23 +225,68 @@ def analyze(pages: list[Page], title: str, gw=None) -> DatasheetDigest:
     return dg
 
 
+def _first(cat_rows, pat: str) -> tuple[str, int] | None:
+    rx = re.compile(pat, re.I)
+    for line, page in cat_rows:
+        if rx.search(line):
+            return (line, page)
+    return None
+
+
+def key_facts(dg: DatasheetDigest) -> list[str]:
+    """The deterministic 'what to remember' — curated from the grounded facts, no model. This is the
+    trustworthy summary: every line is verbatim from the datasheet with a page cite, so it cannot
+    hallucinate (the local model demonstrably invents a different chip's specs even when grounded)."""
+    L: list[str] = []
+    ident = dg.facts.get("Identity & core", [])
+    part = None                                   # a real part number: letters THEN digits (STM32F411…)
+    for line, _ in ident:
+        m = re.search(r"\b([A-Z][A-Za-z]{1,}\d{2,}[A-Za-z0-9/\-]*)\b", line)
+        if m:
+            part = m.group(1); break
+    L.append(f"- **Part:** {part or _part_id(dg)}")
+    core = _first(ident, r"cortex-[mar]\d")
+    if core:
+        c = re.search(r"cortex-[mar]\d\+?", core[0], re.I)
+        L.append(f"- **Core:** {c.group(0) if c else core[0][:60]}  _(p.{core[1]})_")
+    for v in dg.verified:                       # verified geometry = ground truth
+        L.append(f"- **{v['key'].replace('_', ' ')}:** {v['value']}  _(p.{v['page']})_")
+    supply = _first(dg.facts.get("Power & electrical", []), r"\d\.\d\s*V\s*(to|-|–|…)\s*\d\.\d\s*V")
+    if supply:
+        L.append(f"- **Supply:** {supply[0][:80]}  _(p.{supply[1]})_")
+    temp = _first(dg.facts.get("Power & electrical", []) + dg.facts.get("Other notable", []),
+                  r"-?\s*40\s*(to|°|-|–).{0,20}°?C")
+    if temp:
+        L.append(f"- **Temp range:** {temp[0][:80]}  _(p.{temp[1]})_")
+    if dg.peripherals:
+        L.append(f"- **Peripherals:** {', '.join(dg.peripherals)}")
+    return L
+
+
 def render(dg: DatasheetDigest, full: bool = True) -> str:
     L = [f"# Datasheet digest — {dg.title}",
          f"_{dg.pages} pages, {dg.scanned_pages} with text scanned; "
          f"{sum(len(v) for v in dg.facts.values())} salient facts extracted_", ""]
 
-    if dg.verified:
-        L.append("## Verified specs (deterministic — matched in the text)")
-        for v in dg.verified:
-            L.append(f"- **{v['key']}** = {v['value']}  _(p.{v['page']}, {v['confidence']})_")
+    L.append("## What to remember (grounded — every line is verbatim from the datasheet)")
+    L += key_facts(dg)
+    L.append("")
+
+    cautions = dg.facts.get("Cautions & limits", [])
+    hard = [(ln, pg) for ln, pg in cautions
+            if re.search(r"must not|should not|do not|permanent damage|absolute maximum rating", ln, re.I)
+            and len(ln) > 30]
+    if hard:
+        L.append("## ⚠ Cautions that bite (grounded)")
+        for ln, pg in hard[:8]:
+            L.append(f"- (p.{pg}) {ln}")
         L.append("")
 
     if dg.summary:
-        L.append("## What to remember"); L.append(dg.summary); L.append("")
-    else:
-        L.append("## What to remember"); L.append("_(no model available — run with --llm for the "
-                 "synthesised briefing; the grounded facts below were still extracted from every "
-                 "page.)_"); L.append("")
+        L.append("## AI briefing — ⚠ EXPERIMENTAL, may be wrong")
+        L.append("_The local model can hallucinate a different chip's specs. Trust the grounded "
+                 "sections above; treat this as a rough draft only._")
+        L.append(dg.summary); L.append("")
 
     if dg.peripherals:
         L.append("## Peripherals detected"); L.append(", ".join(dg.peripherals)); L.append("")

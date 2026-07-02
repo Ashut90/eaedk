@@ -30,8 +30,11 @@ def test_identity_is_captured_so_core_is_grounded_not_guessed():
     dg = digest.scan(_PAGES)
     ident = " ".join(line for line, _ in dg.facts.get("Identity & core", []))
     assert "Cortex-M3" in ident                              # the real core is in the extracted facts
-    # the synthesis prompt forbids guessing the core
-    assert "NEVER guess" in digest._SYNTH_SYSTEM
+    # the deterministic 'what to remember' reports the real core, never a guess
+    assert any("Cortex-M3" in line for line in digest.key_facts(dg))
+    # the synthesis prompt also forbids guessing / describing another part
+    assert "never guess" in digest._SYNTH_SYSTEM.lower()
+    assert "NOT this chip" in digest._SYNTH_SYSTEM
 
 
 def test_verified_geometry_has_page_cites():
@@ -41,9 +44,12 @@ def test_verified_geometry_has_page_cites():
     assert all(isinstance(v["page"], int) for v in dg.verified)
 
 
-def test_render_offline_is_grounded_and_says_no_model():
+def test_render_offline_is_grounded_no_model_needed():
     dg = digest.analyze(_PAGES, "stm32f103.pdf", gw=None)     # no model
     out = digest.render(dg)
     assert "Datasheet digest — stm32f103.pdf" in out
-    assert "Cortex-M3" in out and "0x08000000" in out and "(p.6)" in out
-    assert "no model available" in out                        # honest offline note, facts still shown
+    # the deterministic 'what to remember' stands on its own — grounded, page-cited, no model
+    assert "What to remember (grounded" in out
+    assert "Cortex-M3" in out and "0x08000000" in out
+    assert "permanent damage" in out                          # the caution was surfaced
+    assert dg.summary == ""                                   # no model → no AI briefing, no fabrication
